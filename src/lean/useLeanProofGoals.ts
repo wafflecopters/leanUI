@@ -41,6 +41,36 @@ export interface UseLeanProofGoalsArgs {
 
 const EMPTY: LeanProofGoals = { goalMap: new Map(), typedContext: null, cursorGoal: null, loading: false };
 
+/** Direct child proof nodes of any node tag. */
+function childNodes(n: ProofNode): ProofNode[] {
+  const out: ProofNode[] = [];
+  const rec = n as unknown as Record<string, unknown>;
+  for (const k of ['child', 'byProof', 'proofTree'] as const) {
+    const v = rec[k];
+    if (v && typeof v === 'object' && 'tag' in v) out.push(v as ProofNode);
+  }
+  for (const k of ['children', 'steps'] as const) {
+    const v = rec[k];
+    if (Array.isArray(v)) out.push(...(v as ProofNode[]));
+  }
+  if (n.tag === 'induction') for (const c of n.cases) out.push(c.body);
+  return out;
+}
+
+/**
+ * Demote "solved" holes that are only reachable through a failed tactic to an
+ * error state — Lean reports no goal at such a hole (the proof broke upstream),
+ * which would otherwise be misread as "Goal solved".
+ */
+function unsolveAfterErrors(node: ProofNode, goalMap: Map<ProofNodeId, NodeGoalInfo>, blocked: boolean): void {
+  const info = goalMap.get(node.id);
+  if (node.tag === 'hole' && blocked && info?.validation?.status === 'solved') {
+    goalMap.set(node.id, { goalLatex: '', hypotheses: info.hypotheses ?? [], validation: { status: 'error', message: 'a previous step failed' } });
+  }
+  const blockedBelow = blocked || !!info?.tacticError;
+  for (const child of childNodes(node)) unsolveAfterErrors(child, goalMap, blockedBelow);
+}
+
 export function useLeanProofGoals(args: UseLeanProofGoalsArgs): LeanProofGoals {
   const { source, declLine, nextDeclLine, proof, cursorId, mathlib, enabled = true } = args;
   const [state, setState] = useState<LeanProofGoals>(EMPTY);
@@ -81,6 +111,11 @@ export function useLeanProofGoals(args: UseLeanProofGoalsArgs): LeanProofGoals {
           goals: data.goals,
           messages: data.messages,
         });
+        // A hole reached only through a FAILED tactic isn't "solved" — Lean just
+        // didn't report a goal there because the proof broke upstream. Walk the
+        // tree; once an ancestor has a tacticError, demote any "solved" holes in
+        // its subtree to an error so the UI doesn't falsely claim Goal solved.
+        unsolveAfterErrors(proof, goalMap, false);
         const cursorInfo = goalMap.get(cursorId);
         const typedContext: TypedProofContext | null = cursorInfo
           ? {

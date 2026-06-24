@@ -60,7 +60,7 @@ export type ProseItemKind =
   | { tag: 'caseHeader'; labelLatex: string; isBaseCase: boolean; constructorParamNames?: readonly string[]; constructorName?: string; scrutinee?: string; isCases?: boolean }
   | { tag: 'exact'; exprLatex: string; solved: boolean; goalLatex?: string; error?: string; proofExprLatex?: string; isValueType?: boolean }
   | { tag: 'hole'; goalLatex?: string; isValueType?: boolean }
-  | { tag: 'simp'; lemmas: readonly string[]; stepCount: number; preGoalLatex?: string; goalLatex?: string }
+  | { tag: 'simp'; lemmas: readonly string[]; stepCount: number; preGoalLatex?: string; goalLatex?: string; error?: string }
   | { tag: 'have'; name: string; expr: string; typeLatex?: string; proofExprLatex?: string; preGoalLatex?: string; goalLatex?: string; error?: string; hasProofTree?: boolean }
   | { tag: 'suffices'; name: string; goalLatex?: string; byExprLatex?: string }
   | { tag: 'subgoalHeader'; label: string; goalLatex?: string; isValueType?: boolean }
@@ -519,6 +519,7 @@ export function generateProofProse(
           stepCount: node.steps.length,
           preGoalLatex: info?.goalLatex,
           goalLatex: childGoalLatex,
+          error: info?.tacticError,
         });
         // Steps are already replayed by the engine; just recurse into child
         walk(node.child, depth);

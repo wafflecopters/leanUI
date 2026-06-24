@@ -2949,7 +2949,9 @@ function SimpProseItem({
       {kind.stepCount > 0 && (
         <span style={prose}>{' '}({kind.stepCount} step{kind.stepCount !== 1 ? 's' : ''})</span>
       )}
-      {renderGoalSection(kind.goalLatex, ', we get')}
+      {kind.error
+        ? <span style={{ color: '#f85149', fontSize: '11px', marginLeft: '6px' }}>({kind.error.split('\n')[0]})</span>
+        : renderGoalSection(kind.goalLatex, ', we get')}
     </ProseRow>
   );
 }
@@ -3431,9 +3433,9 @@ function ProseItemView({
   const [hovered, setHovered] = useState(false);
   const { kind } = item;
 
-  // Check for error on unfold/rewrite/apply/exact/have items
+  // Check for error on unfold/rewrite/apply/exact/have/simp items
   const hasError = (kind.tag === 'unfold' || kind.tag === 'rewrite' || kind.tag === 'apply'
-    || kind.tag === 'exact' || kind.tag === 'have') && !!kind.error;
+    || kind.tag === 'exact' || kind.tag === 'have' || kind.tag === 'simp') && !!kind.error;
 
   const rowStyle: React.CSSProperties = {
     ...proseStyle,
