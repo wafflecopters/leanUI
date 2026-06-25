@@ -78,10 +78,13 @@ export interface ProofTreeManualTacticContext {
   readonly computeApplySubgoalCount?: (
     root: ProofTreeState['root'],
     cursorNodeId: number,
-    kernelType: import('../compiler/kernel').TTKTerm,
-    definitions: import('../compiler/term').DefinitionsMap,
+    kernelType: import('../compiler/kernel').TTKTerm | undefined,
+    definitions: import('../compiler/term').DefinitionsMap | undefined,
     name: string,
   ) => number;
+  /** Lean backend: `computeApplySubgoalCount` estimates from the lemma type and
+   *  needs no kernelType/definitions. */
+  readonly leanApply?: boolean;
 }
 
 export type ProofTreeBinderRenameTarget =
@@ -783,7 +786,10 @@ export function applyManualProofTreeTactic(
       const name = value.trim();
       if (!name) return null;
       let numChildren = 1;
-      if (ctx.kernelType && ctx.definitions && ctx.computeApplySubgoalCount) {
+      // The TT counter needs kernelType+definitions; a Lean-backed counter
+      // (which estimates from the lemma type) needs neither — so call whatever
+      // counter is provided, as long as the TT one has its kernel inputs.
+      if (ctx.computeApplySubgoalCount && (ctx.leanApply || (ctx.kernelType && ctx.definitions))) {
         numChildren = ctx.computeApplySubgoalCount(
           state.root,
           state.cursor.nodeId,

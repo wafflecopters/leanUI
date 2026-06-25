@@ -20,7 +20,7 @@ import { proofTreeToLean, proofTreeToSource } from '../lean/proofTreeToLean';
 import { useLeanProofGoals } from '../lean/useLeanProofGoals';
 import { useLeanSuggestions } from '../lean/useLeanSuggestions';
 import { useLeanValidatedSuggestions } from '../lean/useLeanValidatedSuggestions';
-import { equalityLemmas, rankByGoalOverlap, unfoldableDefs } from '../lean/rewriteCandidates';
+import { equalityLemmas, rankByGoalOverlap, unfoldableDefs, applySubgoalCount } from '../lean/rewriteCandidates';
 import { probeSimpFired } from '../lean/simpProbe';
 import { taggedToInteractiveGoal, subtermTextMap, taggedText, posForGoalId, subtermLatexAtPos } from '../lean/leanInteractiveGoal';
 import { targetedSuggestions, type LeanSuggestion } from '../lean/leanSuggestions';
@@ -528,6 +528,7 @@ function LeanProofEditor({
         interactiveGoalOverride={interactiveGoal}
         onGoalPathSelect={setSelectedPath}
         goalExtraSlot={suggestionSlot}
+        applySubgoalCount={(name) => applySubgoalCount(allDeclarations, name)}
       />
     </div>
   );

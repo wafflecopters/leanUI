@@ -54,6 +54,26 @@ function conclusionOf(prettyType: string): string {
   return rest.trim();
 }
 
+/**
+ * How many subgoals `apply <name>` is likely to produce — the count of top-level
+ * `→` antecedents in the lemma's type (after stripping ∀-bound implicits). An
+ * estimate (some antecedents may be unified away), but far better than assuming 1
+ * on the Lean backend where there's no kernel to ask. Returns 1 if unknown.
+ */
+export function applySubgoalCount(declarations: readonly LeanDeclaration[], name: string): number {
+  const d = declarations.find((x) => x.name === name);
+  if (!d) return 1;
+  let rest = stripForall(d.prettyType);
+  let count = 0;
+  for (;;) {
+    const split = splitTopLevel(rest, ' → ');
+    if (!split) break;
+    count++;
+    rest = stripForall(split[1]);
+  }
+  return Math.max(1, count);
+}
+
 /** Does the type take an equality as a hypothesis? (congruence/symm/trans-style
  *  combinators — useless as plain rewrites, they'd just ask for the eq back.) */
 function takesEqualityHypothesis(prettyType: string): boolean {

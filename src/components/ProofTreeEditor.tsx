@@ -145,6 +145,9 @@ export interface ProofTreeEditorProps {
   onGoalPathSelect?: (path: GoalPath | null) => void;
   /** Extra content rendered under the goal (Lean-backed suggestion pills). */
   goalExtraSlot?: React.ReactNode;
+  /** Lean-backed `apply` subgoal-count estimate (the TT kernel isn't available);
+   *  its presence also marks the Lean backend (hides TT-only buttons like Fold). */
+  applySubgoalCount?: (name: string) => number;
 }
 
 // ============================================================================
@@ -215,7 +218,7 @@ type TacticMode = null | ProofTreeManualTacticMode;
 // Main Component
 // ============================================================================
 
-export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelType, definitions, registry, inductiveMap, currentDeclName, tacticTrace, goalMapOverride, typedContextOverride, interactiveGoalOverride, onGoalPathSelect, goalExtraSlot }: ProofTreeEditorProps) {
+export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelType, definitions, registry, inductiveMap, currentDeclName, tacticTrace, goalMapOverride, typedContextOverride, interactiveGoalOverride, onGoalPathSelect, goalExtraSlot, applySubgoalCount }: ProofTreeEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const state = history.current;
 
@@ -546,6 +549,7 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
                 termBuilder={null}
                 onSetTermBuilder={() => {}}
                 holeExtraSlot={goalExtraSlot}
+                applySubgoalCount={applySubgoalCount}
               />
             )}
           </div>
@@ -1577,7 +1581,7 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
       kernelType,
       definitions,
       computeApplySubgoalCount: (root, cursorNodeId, rootKernelType, defs, name) =>
-        computeApplySubgoalCount(root, cursorNodeId, rootKernelType, defs, name),
+        rootKernelType && defs ? computeApplySubgoalCount(root, cursorNodeId, rootKernelType, defs, name) : 1,
     });
     if (result) onPushChange(result);
     onTacticMode(null);
@@ -2266,6 +2270,7 @@ interface ProseViewProps {
   // Extra content rendered inline above the active hole's tactic buttons
   // (Lean-backed suggestion pills); mirrors where the TT path showed them.
   holeExtraSlot?: React.ReactNode;
+  applySubgoalCount?: (name: string) => number;
 }
 
 function ProofProseView({
@@ -2275,7 +2280,7 @@ function ProofProseView({
   editingNames, onEditingNames, editingSuggestionId, onEditingSuggestionId,
   onApplySuggestion, onStartEditingSuggestion,
   rewriteProgress, selectedBinder, onSelectBinder,
-  termBuilder, onSetTermBuilder, holeExtraSlot,
+  termBuilder, onSetTermBuilder, holeExtraSlot, applySubgoalCount,
 }: ProseViewProps) {
   if (items.length === 0) {
     return <div style={{ padding: '8px 12px', color: '#484f58', fontStyle: 'italic' }}>No proof steps yet.</div>;
@@ -2338,6 +2343,7 @@ function ProofProseView({
             termBuilder={termBuilder}
             onSetTermBuilder={onSetTermBuilder}
             holeExtraSlot={holeExtraSlot}
+            applySubgoalCount={applySubgoalCount}
           />
         );
       })}
@@ -2390,6 +2396,7 @@ interface ProseItemViewProps {
   onSetTermBuilder?: (b: TermBuilderState | null) => void;
   // Extra content rendered inline above the active hole's tactic buttons.
   holeExtraSlot?: React.ReactNode;
+  applySubgoalCount?: (name: string) => number;
 }
 
 const proseStyle: React.CSSProperties = {
@@ -3428,7 +3435,7 @@ function ProseItemView({
   editingNames, onEditingNames, editingSuggestionId, onEditingSuggestionId,
   onApplySuggestion, onStartEditingSuggestion,
   rewriteProgress, selectedBinder, onSelectBinder,
-  termBuilder, onSetTermBuilder, holeExtraSlot,
+  termBuilder, onSetTermBuilder, holeExtraSlot, applySubgoalCount,
 }: ProseItemViewProps) {
   const [hovered, setHovered] = useState(false);
   const { kind } = item;
@@ -3770,6 +3777,7 @@ function ProseItemView({
           termBuilder={termBuilder}
           onSetTermBuilder={onSetTermBuilder}
           holeExtraSlot={holeExtraSlot}
+          applySubgoalCount={applySubgoalCount}
         />
       );
     }
@@ -3823,6 +3831,7 @@ interface HoleProseViewProps {
   onSetTermBuilder?: (b: TermBuilderState | null) => void;
   /** Extra content rendered above the tactic buttons (Lean suggestion pills). */
   holeExtraSlot?: React.ReactNode;
+  applySubgoalCount?: (name: string) => number;
 }
 
 function HoleProseView({
@@ -3832,7 +3841,7 @@ function HoleProseView({
   editingNames, onEditingNames, editingSuggestionId, onEditingSuggestionId,
   onApplySuggestion, onStartEditingSuggestion,
   rewriteProgress,
-  termBuilder: inlineTermBuilder, onSetTermBuilder, holeExtraSlot,
+  termBuilder: inlineTermBuilder, onSetTermBuilder, holeExtraSlot, applySubgoalCount,
 }: HoleProseViewProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const activeTactic = tacticMode?.tactic ?? null;
@@ -3852,12 +3861,15 @@ function HoleProseView({
       registry,
       kernelType,
       definitions,
+      leanApply: !!applySubgoalCount,
       computeApplySubgoalCount: (root, cursorNodeId, rootKernelType, defs, name) =>
-        computeApplySubgoalCount(root, cursorNodeId, rootKernelType, defs, name),
+        // Lean backend has no kernel — estimate apply's subgoals from the
+        // lemma's type instead of defaulting to 1.
+        applySubgoalCount ? applySubgoalCount(name) : (rootKernelType && defs ? computeApplySubgoalCount(root, cursorNodeId, rootKernelType, defs, name) : 1),
     });
     if (result) onPushChange(result);
     onTacticMode(null);
-  }, [tacticMode, state, onPushChange, onTacticMode, typedContext, inductiveMap, registry, kernelType, definitions]);
+  }, [tacticMode, state, onPushChange, onTacticMode, typedContext, inductiveMap, registry, kernelType, definitions, applySubgoalCount]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
@@ -3955,7 +3967,11 @@ function HoleProseView({
             { tactic: 'apply' as const, label: 'Apply' },
             { tactic: 'simp' as const, label: 'Simp' },
             { tactic: 'have' as const, label: 'Have' },
-          ].map(({ tactic, label }) => (
+          ].filter(({ tactic }) =>
+            // `fold` isn't a core Lean tactic (it'd emit a lost `-- fold`
+            // comment); hide it on the Lean backend (applySubgoalCount present).
+            !(tactic === 'fold' && applySubgoalCount)
+          ).map(({ tactic, label }) => (
             <button
               key={tactic}
               style={proseBtnStyle}
