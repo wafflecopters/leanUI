@@ -134,8 +134,8 @@ function parseTactic(lines: Line[], pos: { i: number }, level: number, text: str
     return mkSimp(lemmas, [], continuation(lines, pos, level), only);
   }
 
-  // unfold <name>
-  m = text.match(/^unfold\s+(\S+)/);
+  // unfold <name…>  (Lean allows several space-separated names)
+  m = text.match(/^unfold\s+(.+?)\s*$/);
   if (m) return mkUnfold(m[1], continuation(lines, pos, level));
 
   // apply <name>  (children = subsequent deeper lines as one continuation)
