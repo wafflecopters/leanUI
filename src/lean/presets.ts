@@ -307,6 +307,12 @@ def summationSplit (i n : MyNat) (l : Leq i n) (f : MyNat → MyNat) :
     (eqCong (fun k => sumStartCount i k f) (minusSucc (leqSuccRight l)))
     (congPlusRight (sum i n f) (eqCong f (plusMinusSucc l)))
 
+-- Bridge the successor constructor to +1 (they're equal but not definitionally,
+-- since plus recurses on its first arg). Lets you rewrite n.succ to n + 1
+-- so the arithmetic lemmas can normalize it.
+def succAddOne (n : MyNat) : (MyNat.succ n) = (plus n 1) :=
+  eqSym (eqTrans (plusComm n 1) rfl)
+
 -- Triangle sum: 2 * (0 + 1 + ... + n) = (n + 1) * n.
 -- Left as sorry, exactly as the original TT preset left it (?TODO).
 -- (def, not theorem: this custom lives = in Type, not Prop.)
