@@ -259,11 +259,19 @@ function LeanProofEditor({
   mathlib?: boolean;
   onProofChange?: (newBlock: string) => void;
 }) {
-  // Seed the proof tree from the user's actual Lean proof. Re-seed if the source
-  // proof changes (keyed by the block text).
+  // Seed the proof tree from the user's actual Lean proof. Re-seed only on
+  // EXTERNAL source edits — NOT on our own write-back. Re-seeding mints fresh
+  // node ids, so the goal map (keyed by id) would match nothing and the whole
+  // view would blank/flicker until the next round-trip. When the incoming
+  // tacticBlock is just what the current tree already prints to (our write-back),
+  // keep the existing tree (and its ids).
   const [history, setHistory] = useState<ProofTreeHistory>(() => seedHistory(tacticBlock));
   useEffect(() => {
+    const currentPrinted = proofTreeToLean(history.current.root, 1, 1).source;
+    const incomingPrinted = proofTreeToLean(leanTacticsToTree(tacticBlock), 1, 1).source;
+    if (currentPrinted === incomingPrinted) return;
     setHistory(seedHistory(tacticBlock));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tacticBlock]);
 
   // Write-back: when a structural edit changes the printed proof, splice it into
