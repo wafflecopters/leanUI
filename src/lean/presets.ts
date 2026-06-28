@@ -313,6 +313,11 @@ def summationSplit (i n : MyNat) (l : Leq i n) (f : MyNat → MyNat) :
 def succAddOne (n : MyNat) : (MyNat.succ n) = (plus n 1) :=
   eqSym (eqTrans (plusComm n 1) rfl)
 
+-- 2 = 1 + 1 (definitionally). With succAddOne this lets the arithmetic lemmas
+-- expand the numeral 2 the same way successors expand, so ring-style goals like
+-- the triangle-sum step normalize to a common form and close.
+def twoEqAddOne : (2 : MyNat) = (plus 1 1) := rfl
+
 -- Triangle sum: 2 * (0 + 1 + ... + n) = (n + 1) * n.
 -- Left as sorry, exactly as the original TT preset left it (?TODO).
 -- (def, not theorem: this custom lives = in Type, not Prop.)
