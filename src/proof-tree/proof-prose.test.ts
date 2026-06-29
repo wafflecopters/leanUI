@@ -456,4 +456,30 @@ describe('generateProofProse', () => {
     // rather than subgoalHeader — verify no crash and no error.
     expect(items.length).toBeGreaterThan(0);
   });
+
+  test('conditional rewrite renders side goal as a labeled branch', () => {
+    // rw [summationSplit] leaves `0 ≤ a` as a side goal (still an open hole).
+    const mainHole: ProofNode = { tag: 'hole', id: 21 };
+    const sideHole: ProofNode = { tag: 'hole', id: 22 };
+    const rw: ProofNode = {
+      tag: 'rewrite', id: 20, name: 'summationSplit', reverse: false,
+      child: mainHole, sideGoals: [sideHole],
+    };
+    const goalMap = mkGoalMap([
+      [20, { goalLatex: '2 \\cdot S = T' }],
+      [21, { goalLatex: 'rewritten' }],
+      [22, { goalLatex: '0 \\leq a' }],
+    ]);
+    const items = generateProofProse(rw, 22, goalMap);
+    // The rewrite step renders, then the main hole, then a "Side goal" header
+    // carrying the side-goal LaTeX, then the side-goal hole itself.
+    expect(items.find(i => i.kind.tag === 'rewrite')).toBeTruthy();
+    const header = items.find(i => i.kind.tag === 'subgoalHeader');
+    expect(header).toBeTruthy();
+    expect((header!.kind as any).label).toBe('Side goal');
+    expect((header!.kind as any).goalLatex).toBe('0 \\leq a');
+    const sideHoleItem = items.find(i => i.kind.tag === 'hole' && (i.kind as any).goalLatex === '0 \\leq a');
+    expect(sideHoleItem).toBeTruthy();
+    expect(sideHoleItem!.isCursor).toBe(true);
+  });
 });

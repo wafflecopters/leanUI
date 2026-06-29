@@ -74,6 +74,29 @@ export function applySubgoalCount(declarations: readonly LeanDeclaration[], name
   return Math.max(1, count);
 }
 
+/**
+ * How many SIDE GOALS `rw [name]` is likely to leave — the count of top-level
+ * `→` antecedents (the lemma's premises) after stripping ∀-bound binders. The
+ * equality conclusion is unified with the goal by `rw`; each remaining premise
+ * becomes a side goal (e.g. `summationSplit : ∀ i n, i ≤ n → ∀ f, … = …` leaves
+ * the one `i ≤ n` premise). Unlike `applySubgoalCount` this is NOT floored at 1:
+ * a premise-free lemma like `plusComm` leaves 0 side goals. An estimate (some
+ * premises may unify away), matching the apply-counter's philosophy.
+ */
+export function rewriteSideGoalCount(declarations: readonly LeanDeclaration[], name: string): number {
+  const d = declarations.find((x) => x.name === name);
+  if (!d) return 0;
+  let rest = stripForall(d.prettyType);
+  let count = 0;
+  for (;;) {
+    const split = splitTopLevel(rest, ' → ');
+    if (!split) break;
+    count++;
+    rest = stripForall(split[1]);
+  }
+  return count;
+}
+
 /** Does the type take an equality as a hypothesis? (congruence/symm/trans-style
  *  combinators — useless as plain rewrites, they'd just ask for the eq back.) */
 function takesEqualityHypothesis(prettyType: string): boolean {

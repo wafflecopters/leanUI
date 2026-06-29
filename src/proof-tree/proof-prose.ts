@@ -190,6 +190,9 @@ function isSyntheticNestedInduction(node: ProofNode): boolean {
 // ============================================================================
 
 function isChainNode(node: ProofNode): node is (ProofNode & { tag: 'unfold' | 'fold' | 'rewrite' }) {
+  // A conditional rewrite (with side goals) is NOT a plain chain step — it
+  // renders as its own item with branches, so it must terminate the chain.
+  if (node.tag === 'rewrite' && node.sideGoals && node.sideGoals.length > 0) return false;
   return node.tag === 'unfold' || node.tag === 'fold' || node.tag === 'rewrite';
 }
 
@@ -288,6 +291,31 @@ export function generateProofProse(
       case 'unfold':
       case 'fold':
       case 'rewrite': {
+        // A CONDITIONAL rewrite leaves side goals (the lemma's premises). Render
+        // it as a single step, then the rewritten goal continues inline, and
+        // each side goal becomes a labeled branch — so the obligation (e.g.
+        // `0 ≤ a` from summationSplit's `i ≤ n`) is visible right here rather
+        // than surfacing later. (Not flattened into a calc chain.)
+        if (node.tag === 'rewrite' && node.sideGoals && node.sideGoals.length > 0) {
+          const childInfo = goalMap.get(node.child.id);
+          emit(node.id, depth, {
+            tag: 'rewrite',
+            name: node.name,
+            reverse: node.reverse,
+            occurrences: node.occurrences,
+            equationLatex: info?.unifiedEquationLatex,
+            preGoalLatex: info?.goalLatex,
+            goalLatex: childInfo?.goalLatex,
+            error: info?.tacticError,
+          });
+          walk(node.child, depth); // rewritten (main) goal continues inline
+          const many = node.sideGoals.length > 1;
+          node.sideGoals.forEach((sg, i) => {
+            const sgInfo = goalMap.get(sg.id);
+            walkBranch(node.id, many ? `Side goal ${i + 1}` : 'Side goal', sgInfo?.goalLatex, sg, depth, sgInfo?.isValueType);
+          });
+          break;
+        }
         const { steps, tail } = collectChain(node, goalMap);
         const tailInfo = goalMap.get(tail.id);
 

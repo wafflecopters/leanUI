@@ -22,6 +22,7 @@ import {
   isCursorInSubtree,
   mkHave,
   mkHole,
+  mkRewrite,
   mkSimp,
   replaceNode,
   toggleInductionCollapse,
@@ -85,6 +86,10 @@ export interface ProofTreeManualTacticContext {
   /** Lean backend: `computeApplySubgoalCount` estimates from the lemma type and
    *  needs no kernelType/definitions. */
   readonly leanApply?: boolean;
+  /** Lean backend: how many SIDE GOALS `rw [name]` leaves (the lemma's
+   *  premises). When > 0, the rewrite is created with that many side-goal holes
+   *  so a conditional rewrite's obligations are visible immediately. */
+  readonly computeRewriteSideGoalCount?: (name: string) => number;
 }
 
 export type ProofTreeBinderRenameTarget =
@@ -726,6 +731,31 @@ export function applySuggestionToProofTreeState(
   return applyTacticCommandsAtCursor(state, [{ name: introName, args: names.map(mkConstTT) }]);
 }
 
+/**
+ * Lean-backend rewrite: build the rewrite node directly so a CONDITIONAL lemma's
+ * side goals (its premises) appear as visible bullet branches immediately.
+ * Returns null when not applicable (no Lean side-goal counter, the lemma leaves
+ * no side goals, or the cursor isn't a hole) — the caller then uses the normal
+ * single-child rewrite path.
+ */
+function applyLeanRewriteWithSideGoals(
+  state: ProofTreeState,
+  name: string,
+  reverse: boolean,
+  ctx: ProofTreeManualTacticContext,
+): ProofTreeState | null {
+  if (!ctx.computeRewriteSideGoalCount) return null;
+  const count = ctx.computeRewriteSideGoalCount(name);
+  if (count <= 0) return null;
+  const node = findNode(state.root, state.cursor.nodeId);
+  if (!node || node.tag !== 'hole') return null;
+  const mainHole = mkHole();
+  const sideGoals = Array.from({ length: count }, () => mkHole());
+  const rw = mkRewrite(name, mainHole, reverse, undefined, undefined, undefined, undefined, sideGoals);
+  const newRoot = replaceNode(state.root, state.cursor.nodeId, rw);
+  return { root: newRoot, cursor: { nodeId: mainHole.id } };
+}
+
 export function applyManualProofTreeTactic(
   state: ProofTreeState,
   tacticMode: ProofTreeManualTacticMode | null,
@@ -769,12 +799,16 @@ export function applyManualProofTreeTactic(
     case 'rewrite': {
       const name = value.trim();
       if (!name) return null;
+      const leanRw = applyLeanRewriteWithSideGoals(state, name, false, ctx);
+      if (leanRw) return leanRw;
       return applyTacticCommandsAtCursor(state, [{ name: 'rewrite', args: [mkConstTT(name)] }]);
     }
 
     case 'rewrite_rev': {
       const name = value.trim();
       if (!name) return null;
+      const leanRw = applyLeanRewriteWithSideGoals(state, name, true, ctx);
+      if (leanRw) return leanRw;
       return applyTacticCommandsAtCursor(state, [{
         name: 'rewrite',
         args: [mkConstTT(name)],

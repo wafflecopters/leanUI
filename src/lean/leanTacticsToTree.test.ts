@@ -92,6 +92,26 @@ describe('leanTacticsToTree', () => {
     expect((tree as any).expr).toBe('omega');
   });
 
+  test('conditional rewrite parses into main child + side goals', () => {
+    resetProofIds();
+    const tree = leanTacticsToTree(
+      ['  rw [summationSplit]', '  ·', '    simp', '  ·', '    exact .LeqZero'].join('\n'),
+    ) as any;
+    expect(tree.tag).toBe('rewrite');
+    expect(tree.name).toBe('summationSplit');
+    expect(tree.child.tag).toBe('simp'); // first bullet = rewritten (main) goal
+    expect(tree.sideGoals).toHaveLength(1); // second bullet = side goal
+    expect(tree.sideGoals[0].tag).toBe('exact');
+  });
+
+  test('single bullet after rw is NOT treated as a side-goal branch', () => {
+    resetProofIds();
+    // Only ≥2 bullets form the conditional shape; a lone bullet stays a plain rw.
+    const tree = leanTacticsToTree('  rw [foo]\n  sorry') as any;
+    expect(tree.tag).toBe('rewrite');
+    expect(tree.sideGoals).toBeUndefined();
+  });
+
   // Round-trip stability: printing a parsed tree reproduces the canonical form.
   describe('parse → print round-trip is stable', () => {
     const cases: Array<[string, string]> = [
@@ -108,6 +128,14 @@ describe('leanTacticsToTree', () => {
       ['terminal tactic (omega)', '  omega'],
       ['terminal tactic (rfl)', '  rfl'],
       ['unrecognized tactic prints verbatim (not exact)', '  refine leqAntisym ?_ ?_'],
+      [
+        'conditional rewrite (side goal as bullet branches)',
+        ['  rw [summationSplit]', '  ·', '    rw [foo]', '    simp', '  ·', '    exact .LeqZero'].join('\n'),
+      ],
+      [
+        'conditional rewrite with two side goals',
+        ['  rw [lem]', '  ·', '    sorry', '  ·', '    exact h1', '  ·', '    exact h2'].join('\n'),
+      ],
     ];
     for (const [name, src] of cases) {
       test(name, () => {

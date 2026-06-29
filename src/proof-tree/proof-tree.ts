@@ -104,7 +104,15 @@ export interface RewriteNode {
   /** When set, scope the rewrite to this subterm via `conv in (pat) => rw [...]`
    *  (Lean-backend subterm-targeted rewrite). */
   readonly convPattern?: string;
+  /** Main continuation — proves the rewritten (focused) goal. */
   readonly child: ProofNode;
+  /** Side goals introduced by a conditional rewrite — the lemma's hypotheses
+   *  (e.g. `rw [summationSplit]` leaves `0 ≤ a` from its `i ≤ n` premise). Lean
+   *  focuses the rewritten goal first, then these in order. Absent/empty for a
+   *  plain rewrite (the common case), which keeps the single-child form. When
+   *  present, the printer/parser use `·` bullet branches so the side goals are
+   *  visible immediately rather than surfacing later. */
+  readonly sideGoals?: readonly ProofNode[];
 }
 
 export interface ApplyNode {
@@ -255,13 +263,28 @@ export function mkFold(name: string, child: ProofNode, occurrence?: number): Fol
   return { tag: 'fold', id: freshProofId(), name, child, occurrence };
 }
 
-export function mkRewrite(name: string, child: ProofNode, reverse = false, occurrences?: readonly number[], targetHead?: string, enhanced?: boolean, convPattern?: string): RewriteNode {
+export function mkRewrite(name: string, child: ProofNode, reverse = false, occurrences?: readonly number[], targetHead?: string, enhanced?: boolean, convPattern?: string, sideGoals?: readonly ProofNode[]): RewriteNode {
   const node: RewriteNode = { tag: 'rewrite', id: freshProofId(), name, reverse, child };
   if (occurrences !== undefined) (node as any).occurrences = occurrences;
   if (targetHead !== undefined) (node as any).targetHead = targetHead;
   if (enhanced) (node as any).enhanced = true;
   if (convPattern !== undefined) (node as any).convPattern = convPattern;
+  if (sideGoals !== undefined && sideGoals.length > 0) (node as any).sideGoals = sideGoals;
   return node;
+}
+
+/** A rewrite's side-goal subproofs (empty for a plain rewrite). */
+export function rewriteSideGoals(node: RewriteNode): readonly ProofNode[] {
+  return node.sideGoals ?? [];
+}
+
+/** Attach `count` fresh side-goal holes to a rewrite node (for a conditional
+ *  rewrite). No-op if count ≤ 0 or it already has side goals. Preserves the
+ *  node's id (so cursor/ranges stay stable). */
+export function withRewriteSideGoals(node: RewriteNode, count: number): RewriteNode {
+  if (count <= 0 || node.sideGoals) return node;
+  const sideGoals = Array.from({ length: count }, () => mkHole());
+  return { ...node, sideGoals };
 }
 
 export function mkApply(name: string, children: readonly ProofNode[]): ApplyNode {
@@ -328,8 +351,16 @@ export function findNode(root: ProofNode, id: ProofNodeId): ProofNode | null {
     case 'intros':
     case 'unfold':
     case 'fold':
-    case 'rewrite':
       return findNode(root.child, id);
+    case 'rewrite': {
+      const found = findNode(root.child, id);
+      if (found) return found;
+      for (const sg of rewriteSideGoals(root)) {
+        const f = findNode(sg, id);
+        if (f) return f;
+      }
+      return null;
+    }
     case 'have': {
       if (root.proofTree) {
         const found = findNode(root.proofTree, id);
@@ -375,8 +406,16 @@ export function findCase(root: ProofNode, id: ProofNodeId): CaseNode | null {
     case 'intros':
     case 'unfold':
     case 'fold':
-    case 'rewrite':
       return findCase(root.child, id);
+    case 'rewrite': {
+      const found = findCase(root.child, id);
+      if (found) return found;
+      for (const sg of rewriteSideGoals(root)) {
+        const f = findCase(sg, id);
+        if (f) return f;
+      }
+      return null;
+    }
     case 'have': {
       if (root.proofTree) {
         const found = findCase(root.proofTree, id);
@@ -424,8 +463,10 @@ export function isCursorInSubtree(node: ProofNode, cursorId: ProofNodeId): boole
     case 'intros':
     case 'unfold':
     case 'fold':
-    case 'rewrite':
       return isCursorInSubtree(node.child, cursorId);
+    case 'rewrite':
+      return isCursorInSubtree(node.child, cursorId) ||
+        rewriteSideGoals(node).some(sg => isCursorInSubtree(sg, cursorId));
     case 'have':
       return (!!node.proofTree && isCursorInSubtree(node.proofTree, cursorId)) || isCursorInSubtree(node.child, cursorId);
     case 'suffices':
@@ -467,8 +508,11 @@ function linearizeImpl(node: ProofNode, depth: number, out: LinearEntry[]): void
     case 'intros':
     case 'unfold':
     case 'fold':
+      linearizeImpl(node.child, depth + 1, out);
+      break;
     case 'rewrite':
       linearizeImpl(node.child, depth + 1, out);
+      for (const sg of rewriteSideGoals(node)) linearizeImpl(sg, depth + 1, out);
       break;
     case 'have':
       if (node.proofTree) linearizeImpl(node.proofTree, depth + 1, out);
@@ -517,10 +561,20 @@ export function replaceNode(root: ProofNode, targetId: ProofNodeId, replacement:
       return root;
     case 'intros':
     case 'unfold':
-    case 'fold':
-    case 'rewrite': {
+    case 'fold': {
       const newChild = replaceNode(root.child, targetId, replacement);
       return newChild === root.child ? root : { ...root, child: newChild };
+    }
+    case 'rewrite': {
+      const newChild = replaceNode(root.child, targetId, replacement);
+      let sgChanged = false;
+      const newSideGoals = rewriteSideGoals(root).map(sg => {
+        const r = replaceNode(sg, targetId, replacement);
+        if (r !== sg) sgChanged = true;
+        return r;
+      });
+      if (newChild === root.child && !sgChanged) return root;
+      return { ...root, child: newChild, ...(root.sideGoals ? { sideGoals: newSideGoals } : {}) };
     }
     case 'have': {
       const newProof = root.proofTree ? replaceNode(root.proofTree, targetId, replacement) : undefined;
@@ -576,10 +630,20 @@ export function updateCase(
       return root;
     case 'intros':
     case 'unfold':
-    case 'fold':
-    case 'rewrite': {
+    case 'fold': {
       const newChild = updateCase(root.child, caseId, updater);
       return newChild === root.child ? root : { ...root, child: newChild };
+    }
+    case 'rewrite': {
+      const newChild = updateCase(root.child, caseId, updater);
+      let sgChanged = false;
+      const newSideGoals = rewriteSideGoals(root).map(sg => {
+        const r = updateCase(sg, caseId, updater);
+        if (r !== sg) sgChanged = true;
+        return r;
+      });
+      if (newChild === root.child && !sgChanged) return root;
+      return { ...root, child: newChild, ...(root.sideGoals ? { sideGoals: newSideGoals } : {}) };
     }
     case 'have': {
       const newProof = root.proofTree ? updateCase(root.proofTree, caseId, updater) : undefined;
@@ -827,8 +891,16 @@ export function editCaseParamName(
       case 'intros':
       case 'unfold':
       case 'fold':
-      case 'rewrite':
         return findInductionParent(root.child, targetCaseId);
+      case 'rewrite': {
+        const r = findInductionParent(root.child, targetCaseId);
+        if (r) return r;
+        for (const sg of rewriteSideGoals(root)) {
+          const rr = findInductionParent(sg, targetCaseId);
+          if (rr) return rr;
+        }
+        return null;
+      }
       case 'have': {
         if (root.proofTree) {
           const r = findInductionParent(root.proofTree, targetCaseId);
@@ -946,8 +1018,18 @@ function computeContextImpl(
 
     case 'unfold':
     case 'fold':
-    case 'rewrite':
       return computeContextImpl(node.child, cursorId, hypotheses);
+
+    case 'rewrite': {
+      const r = computeContextImpl(node.child, cursorId, hypotheses);
+      if (r) return r;
+      // Side goals share the rewrite's hypothesis context (no new binders).
+      for (const sg of rewriteSideGoals(node)) {
+        const rr = computeContextImpl(sg, cursorId, hypotheses);
+        if (rr) return rr;
+      }
+      return null;
+    }
 
     case 'have': {
       // proofTree proves the have's type — h is NOT in scope yet

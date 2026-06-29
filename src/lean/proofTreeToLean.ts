@@ -135,7 +135,19 @@ function emitNode(em: Emitter, node: ProofNode, depth: number): void {
     case 'rewrite': {
       // Subterm-scoped rewrite → `conv in (pat) => rw [...]`; else plain `rw`.
       const rw = `rw [${rewriteTerm(node)}]`;
-      em.emit(depth, node.convPattern ? `conv in (${node.convPattern}) => ${rw}` : rw, node.id);
+      const head = node.convPattern ? `conv in (${node.convPattern}) => ${rw}` : rw;
+      const sides = node.sideGoals ?? [];
+      // A conditional rewrite leaves side goals (the lemma's premises). Lean
+      // focuses the rewritten goal first, then the side goals — emit `·` bullet
+      // branches so each is a visible, separately-provable obligation. (conv
+      // rewrites don't take this path; they never leave side goals.)
+      if (sides.length > 0 && !node.convPattern) {
+        em.emit(depth, head, node.id);
+        emitBullet(em, node.child, depth); // main (rewritten) goal first
+        for (const sg of sides) emitBullet(em, sg, depth);
+        return;
+      }
+      em.emit(depth, head, node.id);
       emitChild(em, node.child, depth);
       return;
     }
@@ -214,6 +226,15 @@ function emitBulletCase(em: Emitter, c: CaseNode, depth: number): void {
   // `·` focuses the next goal; the body goes on following indented lines.
   em.emit(depth, '·', c.id);
   emitNode(em, c.body, depth + 1);
+}
+
+/** Emit a `·`-bulleted branch (focuses the next goal). Used for a conditional
+ *  rewrite's main + side-goal branches. Bodies always render their holes as
+ *  `sorry` — even in write-back — since an un-bulleted side goal would be an
+ *  unsolved obligation Lean rejects. */
+function emitBullet(em: Emitter, body: ProofNode, depth: number): void {
+  em.emit(depth, '·');
+  emitNode(em, body, depth + 1);
 }
 
 /**

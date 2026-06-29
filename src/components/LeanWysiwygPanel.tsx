@@ -10,6 +10,7 @@ import {
   pushState,
   findNode,
   replaceNode,
+  withRewriteSideGoals,
   type ProofTreeHistory,
 } from '../proof-tree/proof-tree';
 import { findFirstHole } from '../proof-tree/tactic-to-tree';
@@ -20,7 +21,7 @@ import { proofTreeToLean, proofTreeToSource } from '../lean/proofTreeToLean';
 import { useLeanProofGoals } from '../lean/useLeanProofGoals';
 import { useLeanSuggestions } from '../lean/useLeanSuggestions';
 import { useLeanValidatedSuggestions } from '../lean/useLeanValidatedSuggestions';
-import { equalityLemmas, rankByGoalOverlap, unfoldableDefs, applySubgoalCount } from '../lean/rewriteCandidates';
+import { equalityLemmas, rankByGoalOverlap, unfoldableDefs, applySubgoalCount, rewriteSideGoalCount } from '../lean/rewriteCandidates';
 import { probeSimpFired } from '../lean/simpProbe';
 import { taggedToInteractiveGoal, subtermTextMap, taggedText, posForGoalId, subtermLatexAtPos } from '../lean/leanInteractiveGoal';
 import { targetedSuggestions, type LeanSuggestion } from '../lean/leanSuggestions';
@@ -330,7 +331,14 @@ function LeanProofEditor({
   });
 
   const insertTactic = (tactic: string) => {
-    const replacement = leanTacticsToTree(tactic);
+    let replacement = leanTacticsToTree(tactic);
+    // A conditional rewrite (`rw [lemma]` whose lemma has premises) leaves side
+    // goals — attach holes for them so they're visible as bullet branches
+    // immediately, rather than surfacing later when the main goal closes.
+    if (replacement.tag === 'rewrite' && !replacement.convPattern && !replacement.sideGoals) {
+      const count = rewriteSideGoalCount(allDeclarations, replacement.name);
+      if (count > 0) replacement = withRewriteSideGoals(replacement, count);
+    }
     const newRoot = replaceNode(state.root, state.cursor.nodeId, replacement);
     const firstHole = findFirstHole(newRoot);
     handleHistoryChange(
@@ -537,6 +545,7 @@ function LeanProofEditor({
         onGoalPathSelect={setSelectedPath}
         goalExtraSlot={suggestionSlot}
         applySubgoalCount={(name) => applySubgoalCount(allDeclarations, name)}
+        rewriteSideGoalCount={(name) => rewriteSideGoalCount(allDeclarations, name)}
       />
     </div>
   );

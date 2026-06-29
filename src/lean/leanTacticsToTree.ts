@@ -113,9 +113,22 @@ function parseTactic(lines: Line[], pos: { i: number }, level: number, text: str
   // rw [..]  /  rw [← ..]
   m = text.match(/^rw\s*\[\s*(.*?)\s*\]\s*$/);
   if (m) {
+    const rules = splitRwRules(m[1]);
+    // A single-lemma `rw` followed by `·` bullets is a CONDITIONAL rewrite: the
+    // first bullet proves the rewritten goal, the rest its side goals (premises).
+    if (rules.length === 1) {
+      const saved = pos.i;
+      const branches = parseRewriteBullets(lines, pos, level);
+      if (branches.length >= 2) {
+        const reverse = rules[0].startsWith('←') || rules[0].startsWith('<-');
+        const name = rules[0].replace(/^(←|<-)\s*/, '').trim();
+        const [main, ...sides] = branches;
+        return mkRewrite(name, main, reverse, undefined, undefined, undefined, undefined, sides);
+      }
+      pos.i = saved; // not the bulleted form — fall through to plain handling
+    }
     // `rw [a, ← b, c]` is multiple rewrites; model as a chain of RewriteNodes so
     // each lemma is an editable step and the whole list round-trips.
-    const rules = splitRwRules(m[1]);
     const cont = continuation(lines, pos, level);
     let chain = cont;
     for (let r = rules.length - 1; r >= 0; r--) {
@@ -250,6 +263,33 @@ function parseBulletCase(lines: Line[], pos: { i: number }): CaseNode {
   }
   // No constructor name (bullet form) — label is a display placeholder only.
   return mkCase('case', body);
+}
+
+/** Is this line a `·`/`.` bullet at the given indent? */
+function isBulletLine(line: Line, level: number): boolean {
+  return line.indent === level &&
+    (line.text === '·' || line.text === '.' ||
+      line.text.startsWith('· ') || line.text.startsWith('. '));
+}
+
+/** Collect consecutive `·` bullet branch bodies at `level` (their bodies live on
+ *  following lines indented deeper, or inline after the bullet). Used for a
+ *  conditional rewrite's main + side-goal branches. */
+function parseRewriteBullets(lines: Line[], pos: { i: number }, level: number): ProofNode[] {
+  const branches: ProofNode[] = [];
+  while (pos.i < lines.length && isBulletLine(lines[pos.i], level)) {
+    const line = lines[pos.i];
+    pos.i++;
+    const bulletLevel = line.indent;
+    const inline = line.text.replace(/^[·.]\s*/, '').trim();
+    if (inline.length > 0) {
+      const innerPos = { i: 0 };
+      branches.push(parseChainAt([{ indent: bulletLevel + 2, text: inline }], innerPos, bulletLevel + 2));
+    } else {
+      branches.push(parseSeq(lines, pos, bulletLevel + 1));
+    }
+  }
+  return branches;
 }
 
 /**
