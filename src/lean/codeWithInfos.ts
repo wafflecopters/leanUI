@@ -251,7 +251,36 @@ function restructure(nodes: MathNode[]): MathNode[] {
     return [mkBigOp(op, null, null, mkRow(body))];
   }
 
+  // Function application: a run of value atoms with no infix operator between
+  // them is `head arg₁ arg₂ …` (juxtaposition = application in Lean). Render it
+  // the mathematical way, `head(arg₁, arg₂, …)` — so `f x` shows as `f(x)`.
+  if (nodes.length >= 2 && nodes.every(isAppAtom)) {
+    const [head, ...args] = nodes;
+    const inner: MathNode[] = [];
+    args.forEach((a, i) => {
+      if (i > 0) inner.push(mkSymbol(','));
+      inner.push(a);
+    });
+    return [head, mkSymbol('('), ...inner, mkSymbol(')')];
+  }
+
   return nodes;
+}
+
+/** Symbols that are operators/punctuation (NOT application operands). */
+const APP_STOP = new Set([
+  '+', '-', '=', '<', '>', '/', '*', ':', '|', ',', '(', ')', '[', ']', '{', '}', '^', '_', "'",
+  '\\to', '\\cdot', '\\leq', '\\geq', '\\neq', '\\in', '\\notin', '\\wedge', '\\vee',
+  '\\forall', '\\exists', '\\neg', '\\mapsto', '\\iff', '\\times', '\\circ', '\\equiv',
+  '\\approx', '\\sim', '\\subseteq', '\\subset', '\\cup', '\\cap', '\\vdash', '\\longrightarrow',
+]);
+
+/** A node that can be a function-application operand (a value, not an operator). */
+function isAppAtom(n: MathNode): boolean {
+  if (n.tag === 'Symbol') return !APP_STOP.has((n as SymbolNode).value);
+  return n.tag === 'Group' || n.tag === 'Frac' || n.tag === 'Sup' ||
+    n.tag === 'Sub' || n.tag === 'SubSup' || n.tag === 'BigOp' ||
+    n.tag === 'Delimiter' || n.tag === 'Accent';
 }
 
 /**

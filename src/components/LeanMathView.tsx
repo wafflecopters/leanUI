@@ -19,7 +19,10 @@ export function LeanMathView({ tagged, fallback }: { tagged?: TaggedText; fallba
     if (!tagged) return null;
     try {
       const row = codeWithInfosToMathRow(tagged);
-      const latex = renderStaticLatex(row);
+      // `\displaystyle` gives display-math STYLE (limits below `\lim`/`\sum`,
+      // full-size fractions) while staying inline — so `lim_{x→x0}` stacks the
+      // subscript under `lim` instead of trailing it.
+      const latex = `\\displaystyle ${renderStaticLatex(row)}`;
       return katex.renderToString(latex, {
         throwOnError: false,
         displayMode: false,

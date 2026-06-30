@@ -121,6 +121,47 @@ describe('codeWithInfosToMathRow', () => {
     expect(ids.size).toBeGreaterThan(0);
   });
 
+  test('function application f x renders as f(x)', () => {
+    const app: TaggedJson = {
+      t: 'append',
+      kids: [
+        { t: 'tag', pos: '/0', child: { t: 'text', s: 'f' } },
+        { t: 'text', s: ' ' },
+        { t: 'tag', pos: '/1', child: { t: 'text', s: 'x' } },
+      ],
+    };
+    const latex = renderStaticLatex(codeWithInfosToMathRow(app, { wrapSubterms: false }));
+    expect(latex.replace(/\s/g, '')).toBe('f(x)');
+  });
+
+  test('multi-arg application g a b renders as g(a, b) (spine flattened)', () => {
+    const app: TaggedJson = {
+      t: 'append',
+      kids: [
+        { t: 'tag', pos: '/0', child: { t: 'text', s: 'g' } },
+        { t: 'text', s: ' ' },
+        { t: 'tag', pos: '/1', child: { t: 'text', s: 'a' } },
+        { t: 'text', s: ' ' },
+        { t: 'tag', pos: '/2', child: { t: 'text', s: 'b' } },
+      ],
+    };
+    const latex = renderStaticLatex(codeWithInfosToMathRow(app, { wrapSubterms: false }));
+    expect(latex.replace(/\s/g, '')).toBe('g(a,b)');
+  });
+
+  test('a + b stays infix (application rule does not fire across operators)', () => {
+    const sum: TaggedJson = {
+      t: 'append',
+      kids: [
+        { t: 'tag', pos: '/0', child: { t: 'text', s: 'a' } },
+        { t: 'text', s: ' + ' },
+        { t: 'tag', pos: '/1', child: { t: 'text', s: 'b' } },
+      ],
+    };
+    const latex = renderStaticLatex(codeWithInfosToMathRow(sum, { wrapSubterms: false }));
+    expect(latex.replace(/\s/g, '')).toBe('a+b');
+  });
+
   test('limit notation lim⟦x0⟧ f = L renders as \\lim_{… → x0} … = L', () => {
     const variableF: TaggedJson = {
       t: 'append',
