@@ -6,6 +6,7 @@ import {
   type TaggedJson,
 } from './codeWithInfos';
 import type { GroupNode, MathNode, SymbolNode } from '../math-editor/types';
+import { renderStaticLatex } from '../math-editor/render';
 
 const sym = (n: MathNode): string => (n as SymbolNode).value;
 
@@ -118,6 +119,46 @@ describe('codeWithInfosToMathRow', () => {
     };
     walk(row.children);
     expect(ids.size).toBeGreaterThan(0);
+  });
+
+  test('limit notation lim⟦x0⟧ f = L renders as \\lim_{… → x0} … = L', () => {
+    const variableF: TaggedJson = {
+      t: 'append',
+      kids: [
+        { t: 'text', s: 'lim⟦' },
+        { t: 'tag', pos: '/0', child: { t: 'text', s: 'x0' } },
+        { t: 'text', s: '⟧ ' },
+        { t: 'tag', pos: '/1', child: { t: 'text', s: 'f' } },
+        { t: 'text', s: ' = ' },
+        { t: 'tag', pos: '/2', child: { t: 'text', s: 'L' } },
+      ],
+    };
+    const latex = renderStaticLatex(codeWithInfosToMathRow(variableF, { wrapSubterms: false }));
+    expect(latex).toContain('\\lim');
+    expect(latex).toContain('\\to'); // the x → x0 arrow
+    expect(latex).not.toContain('lim⟦'); // marker consumed, not shown raw
+  });
+
+  test('limit with a lambda f shows the binder body, not "fun"', () => {
+    const lambdaF: TaggedJson = {
+      t: 'append',
+      kids: [
+        { t: 'text', s: 'lim⟦' },
+        { t: 'tag', pos: '/0', child: { t: 'text', s: 'x0' } },
+        { t: 'text', s: '⟧ ' },
+        { t: 'tag', pos: '/1', child: { t: 'append', kids: [
+          { t: 'text', s: 'fun ' },
+          { t: 'tag', pos: '/1/0', child: { t: 'text', s: 'x' } },
+          { t: 'text', s: ' => ' },
+          { t: 'tag', pos: '/1/1', child: { t: 'text', s: 'k' } },
+        ] } },
+        { t: 'text', s: ' = ' },
+        { t: 'tag', pos: '/2', child: { t: 'text', s: 'k' } },
+      ],
+    };
+    const latex = renderStaticLatex(codeWithInfosToMathRow(lambdaF, { wrapSubterms: false }));
+    expect(latex).toContain('\\lim');
+    expect(latex).not.toContain('fun'); // lambda unfolded into bound var + body
   });
 });
 

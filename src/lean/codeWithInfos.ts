@@ -284,6 +284,54 @@ function recognizeSum(kids: TaggedJson[], wrap: boolean): MathNode[] | null {
   return [mkBigOp('sum', below, above, bodyRow)];
 }
 
+/** If a tagged operand is a lambda `fun bv => body`, return its bound-variable
+ *  and body node-lists; else null. Lets the limit renderer show
+ *  `\lim_{x → x0} (f x + g x)` from `Limit (fun x => f x + g x) x0 L`. */
+function asLambda(tt: TaggedJson, wrap: boolean): { bv: MathNode[]; body: MathNode[] } | null {
+  let node: TaggedJson = tt;
+  if (node.t === 'tag') node = node.child;
+  if (node.t !== 'append') return null;
+  const kids = node.kids;
+  if (!(kids[0]?.t === 'text' && /^\s*fun\b/.test(kids[0].s))) return null;
+  const arrow = kids.findIndex((k) => k.t === 'text' && k.s.includes('=>'));
+  if (arrow < 0) return null;
+  // Drop the leading "fun " from the first text kid; bv = tags before `=>`.
+  const bvKids = kids.slice(1, arrow);
+  const bodyKids = kids.slice(arrow + 1);
+  return {
+    bv: restructure(bvKids.flatMap((k) => nodesOf(k, false))),
+    body: restructure(bodyKids.flatMap((k) => nodesOf(k, wrap))),
+  };
+}
+
+/**
+ * Recognize the limit notation `lim⟦x0⟧ f = L` (from the Real-analysis preset's
+ * `notation` for `Limit`) and render it as `\lim_{x → x0} f(x) = L`. Mirrors
+ * `recognizeSum`: keys on the notation MARKER (`lim⟦`), not the `Limit`
+ * definition name, so the generic renderer stays domain-agnostic. A lambda `f`
+ * contributes its own bound variable + body; any other `f` is applied to a
+ * fresh `x`. Null if the shape doesn't match.
+ */
+function recognizeLimit(kids: TaggedJson[], wrap: boolean): MathNode[] | null {
+  const firstText = kids.find((k) => k.t === 'text');
+  if (!firstText || firstText.t !== 'text' || !firstText.s.includes('lim⟦')) return null;
+  const operands = kids.filter((k) => k.t === 'tag');
+  if (operands.length < 3) return null;
+  const x0 = operands[0];
+  const f = operands[1];
+  const L = operands[operands.length - 1];
+
+  const lam = asLambda(f, wrap);
+  const bvNodes = lam ? lam.bv : [mkSymbol('x')];
+  const bodyNodes = lam
+    ? lam.body
+    : [...nodesOf(f, wrap), mkSymbol('('), mkSymbol('x'), mkSymbol(')')];
+
+  const subscript = mkRow([...bvNodes, mkSymbol('\\to'), ...nodesOf(x0, wrap)]);
+  const limNode = mkSub(mkRow([mkSymbol('\\lim')]), subscript);
+  return [limNode, ...bodyNodes, mkSymbol('='), ...nodesOf(L, wrap)];
+}
+
 /**
  * Convert a tagged-text node into MathNodes (structurally enriched).
  *
@@ -297,6 +345,8 @@ function nodesOf(tt: TaggedJson, wrap: boolean): MathNode[] {
     case 'text':
       return restructure(tokenizeText(tt.s));
     case 'append': {
+      const lim = recognizeLimit(tt.kids, wrap);
+      if (lim) return lim;
       const sum = recognizeSum(tt.kids, wrap);
       if (sum) return sum;
       return restructure(tt.kids.flatMap((k) => nodesOf(k, wrap)));

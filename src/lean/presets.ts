@@ -820,6 +820,11 @@ structure Limit {R : Real} (f : Carrier R → Carrier R) (x0 L : Carrier R) wher
               DPair (Carrier R)
                 (fun delta => EpsDeltaWitness f x0 L epsilon delta)
 
+-- Display notation: the math renderer recognizes the lim marker and shows
+-- Limit f x0 L as the limit  lim_{x → x0} f(x) = L  (a lambda f shows its bound
+-- variable / body). Pure display + parse sugar; Limit f x0 L still works directly.
+notation:50 "lim⟦" x0 "⟧ " f " = " L => Limit f x0 L
+
 -- NOTE: leanUI used a dependent-pair existential (δ : Carrier R ** EpsDeltaWitness ...).
 -- In core Lean we model it with DPair; the first component family is the carrier itself.
 -- (See uses of DPair.fst / DPair.snd below.)

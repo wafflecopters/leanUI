@@ -30,6 +30,23 @@ describe('renderStaticLatex', () => {
     expect(renderStaticLatex(row)).toBe(HOLE);
   });
 
+  test('spelled-out Greek names render as Greek symbols', () => {
+    expect(renderStaticLatex(mkRow([mkSymbol('epsilon')])).trim()).toBe('\\varepsilon');
+    expect(renderStaticLatex(mkRow([mkSymbol('delta')])).trim()).toBe('\\delta');
+    expect(renderStaticLatex(mkRow([mkSymbol('pi')])).trim()).toBe('\\pi');
+    expect(renderStaticLatex(mkRow([mkSymbol('Delta')])).trim()).toBe('\\Delta');
+  });
+
+  test('Greek name with a subscript suffix (deltaF, epsilon0)', () => {
+    expect(renderStaticLatex(mkRow([mkSymbol('deltaF')])).trim()).toBe('\\delta_{F}');
+    expect(renderStaticLatex(mkRow([mkSymbol('epsilon0')])).trim()).toBe('\\varepsilon_{0}');
+  });
+
+  test('non-Greek multi-letter names stay upright (no false Greek match)', () => {
+    expect(renderStaticLatex(mkRow([mkSymbol('etale')])).trim()).toBe('\\operatorname{etale}');
+    expect(renderStaticLatex(mkRow([mkSymbol('le')])).trim()).toBe('\\operatorname{le}');
+  });
+
   test('renders fraction', () => {
     const row = mkRow([mkFrac(mkRow([mkSymbol('a')]), mkRow([mkSymbol('b')]))]);
     expect(renderStaticLatex(row)).toBe('\\frac{a}{b}');
