@@ -3743,6 +3743,16 @@ function ProseItemView({
       return <QedProseItem rowStyle={rowStyle} rowHandlers={rowHandlers} />;
 
     case 'hole': {
+      // A hole Lean already considers closed (e.g. the continuation after a
+      // goal-closing `simp`) is DONE — show a ✓, never a stray `?`, whether or
+      // not the cursor is on it.
+      if ((item.kind as { solved?: boolean }).solved) {
+        return (
+          <div style={rowStyle} {...rowHandlers}>
+            <span style={{ color: '#3fb950', fontSize: '13px' }}>✓ solved</span>
+          </div>
+        );
+      }
       if (!item.isCursor) {
         return (
           <div style={rowStyle} {...rowHandlers}>

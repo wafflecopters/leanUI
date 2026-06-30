@@ -457,6 +457,22 @@ describe('generateProofProse', () => {
     expect(items.length).toBeGreaterThan(0);
   });
 
+  test('a hole Lean reports as solved is flagged (renders ✓, not ?)', () => {
+    const hole: ProofNode = { tag: 'hole', id: 1 };
+    const goalMap = mkGoalMap([[1, { goalLatex: '', validation: { status: 'solved' } }]]);
+    const items = generateProofProse(hole, 999, goalMap); // not at cursor
+    expect(items).toHaveLength(1);
+    expect(items[0].kind.tag).toBe('hole');
+    expect((items[0].kind as any).solved).toBe(true);
+  });
+
+  test('an open hole is not flagged solved', () => {
+    const hole: ProofNode = { tag: 'hole', id: 1 };
+    const goalMap = mkGoalMap([[1, { goalLatex: '0 \\leq a' }]]);
+    const items = generateProofProse(hole, 999, goalMap);
+    expect((items[0].kind as any).solved).toBeFalsy();
+  });
+
   test('conditional rewrite renders side goal as a labeled branch', () => {
     // rw [summationSplit] leaves `0 ≤ a` as a side goal (still an open hole).
     const mainHole: ProofNode = { tag: 'hole', id: 21 };

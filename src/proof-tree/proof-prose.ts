@@ -59,7 +59,7 @@ export type ProseItemKind =
   | { tag: 'inductionHeader'; scrutinee: string; scrutineeLatex?: string; isCases?: boolean }
   | { tag: 'caseHeader'; labelLatex: string; isBaseCase: boolean; constructorParamNames?: readonly string[]; constructorName?: string; scrutinee?: string; isCases?: boolean }
   | { tag: 'exact'; exprLatex: string; solved: boolean; goalLatex?: string; error?: string; proofExprLatex?: string; isValueType?: boolean }
-  | { tag: 'hole'; goalLatex?: string; isValueType?: boolean }
+  | { tag: 'hole'; goalLatex?: string; isValueType?: boolean; solved?: boolean }
   | { tag: 'simp'; lemmas: readonly string[]; stepCount: number; preGoalLatex?: string; goalLatex?: string; error?: string }
   | { tag: 'have'; name: string; expr: string; typeLatex?: string; proofExprLatex?: string; preGoalLatex?: string; goalLatex?: string; error?: string; hasProofTree?: boolean }
   | { tag: 'suffices'; name: string; goalLatex?: string; byExprLatex?: string }
@@ -254,7 +254,10 @@ export function generateProofProse(
 
     switch (node.tag) {
       case 'hole': {
-        emit(node.id, depth, { tag: 'hole', goalLatex: info?.goalLatex, isValueType: info?.isValueType });
+        // A hole whose goal Lean reports as already closed (e.g. the
+        // continuation after a `simp` that solved the goal) is DONE, not an open
+        // obligation — flag it so the view shows ✓ rather than a stray `?`.
+        emit(node.id, depth, { tag: 'hole', goalLatex: info?.goalLatex, isValueType: info?.isValueType, solved: info?.validation?.status === 'solved' });
         break;
       }
 

@@ -439,9 +439,17 @@ function LeanProofEditor({
     const names = equalityLemmas(allDeclarations, decl.name).map((c) => c.name);
     return names.length ? [{ id: 'lean-simp-ring', label: 'simp [ring lemmas]', tactic: `simp [${names.join(', ')}]`, kind: 'simp' as const }] : [];
   }, [allDeclarations, decl.name]);
+  // Always try `constructor` — it unifies the goal with its inductive type's
+  // constructors (e.g. `0 ≤ a` ↦ `Leq.LeqZero`). Generic (no domain names);
+  // validated, and only kept when it CLOSES the goal (see allSuggestions filter),
+  // so it never leaves a constructor's premises lurking.
+  const constructorCandidate = useMemo(
+    () => [{ id: 'lean-constructor', label: 'constructor', tactic: 'constructor', kind: 'apply' as const }],
+    [],
+  );
   // Dedup the combined candidate list by id.
   const candSeen = new Set<string>();
-  const validateCandidates = [...heuristicCandidates, ...rewriteCandidates, ...unfoldCandidates, ...ringCandidate].filter((s) =>
+  const validateCandidates = [...heuristicCandidates, ...rewriteCandidates, ...unfoldCandidates, ...ringCandidate, ...constructorCandidate].filter((s) =>
     candSeen.has(s.id) ? false : (candSeen.add(s.id), true),
   );
   const validated = useLeanValidatedSuggestions({
@@ -468,6 +476,9 @@ function LeanProofEditor({
   // InfoTree, so only the whole-goal trial produces a usable preview).
   const byLabel = new Map<string, LeanSuggestion>();
   for (const s of [...validated.suggestions, ...suggest.suggestions]) {
+    // `constructor` is only useful as a closer here (applying it doesn't carry a
+    // multi-premise constructor's subgoals into the tree) — drop it otherwise.
+    if (s.id === 'lean-constructor' && !s.closes) continue;
     const existing = byLabel.get(s.label);
     if (!existing) byLabel.set(s.label, s);
     else if (!existing.preview && s.preview) byLabel.set(s.label, { ...existing, preview: s.preview });

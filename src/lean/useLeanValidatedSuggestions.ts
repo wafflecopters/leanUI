@@ -115,7 +115,14 @@ export function useLeanValidatedSuggestions(args: UseLeanValidatedSuggestionsArg
         let closes = false;
         let postTarget;
         if (!firstHole) {
-          closes = true;
+          // Terminal tactic (rfl/omega/constructor/exact …) with no continuation
+          // hole: it CLOSES only if Lean reports no leftover "unsolved goals". A
+          // tactic that applies but leaves subgoals (e.g. `constructor` on a
+          // multi-premise constructor) reports them at the enclosing `by`, not at
+          // the tactic line — so checking the tactic line alone would wrongly call
+          // it a closer. (All other holes are `sorry`, which absorb their goals as
+          // warnings, so an "unsolved goals" ERROR can only come from this tactic.)
+          closes = !data.messages.some((m) => m.severity === 'error' && /unsolved goals/i.test(m.text));
         } else {
           const range = assembled.lean.nodeRanges.get(firstHole.id);
           const g = range ? data.goals.find((x) => x.startLine === range.startLine && x.startCol === range.startCol) : undefined;
