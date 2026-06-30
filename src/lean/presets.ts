@@ -319,10 +319,24 @@ def succAddOne (n : MyNat) : (MyNat.succ n) = (plus n 1) :=
 def twoEqAddOne : (2 : MyNat) = (plus 1 1) := rfl
 
 -- Triangle sum: 2 * (0 + 1 + ... + n) = (n + 1) * n.
--- Left as sorry, exactly as the original TT preset left it (?TODO).
+-- Proven by induction: the zero case holds by rfl; the succ case peels the last
+-- term off the sum via summationSplit (whose i <= n premise is the trivial side
+-- goal 0 <= a, closed by the LeqZero constructor), folds in the induction
+-- hypothesis, and normalizes both sides with the arithmetic lemmas.
 -- (def, not theorem: this custom lives = in Type, not Prop.)
 def triangleSum (n : MyNat) :
-    (mul 2 (∑[i,0,n] i)) = (mul (plus n 1) n) := sorry
+    (mul 2 (∑[i,0,n] i)) = (mul (plus n 1) n) := by
+  induction n with
+  | zero =>
+    rfl
+  | succ a a_ih =>
+    rw [summationSplit]
+    ·
+      rw [mulDistribLeft]
+      rw [a_ih]
+      simp [mulComm, mulDistribLeft, twoEqAddOne, succAddOne, plusLeftComm, plusComm]
+    ·
+      constructor
 
 #check natSemiring
 #check leqAntisym
