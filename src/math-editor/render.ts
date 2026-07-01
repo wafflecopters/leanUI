@@ -129,7 +129,7 @@ function renderNodeInner(node: MathNode, cursor: CursorState, currentPath: RowPa
     case 'Sub': {
       const base = renderRow(node.base, cursor, [...currentPath, { nodeId: node.id, slot: 'base' }]);
       const sub = renderRow(node.sub, cursor, [...currentPath, { nodeId: node.id, slot: 'sub' }]);
-      return `{${base}}_{${sub}}`;
+      return subLatex(base, sub);
     }
 
     case 'Sup': {
@@ -230,6 +230,22 @@ function greekWord(value: string): string | null {
   return null;
 }
 
+/** Operators that take their subscript BELOW (limits style), like `\lim_{x→a}`.
+ *  KaTeX only does this when the subscript attaches directly to the operator
+ *  (`\lim_{…}`), not to a braced group (`{\lim}_{…}` trails it). So for these we
+ *  emit `op\limits_{sub}`, which forces the subscript below in any mode. */
+const LIMITS_OPS = new Set([
+  '\\lim', '\\sup', '\\inf', '\\max', '\\min', '\\limsup', '\\liminf',
+  '\\gcd', '\\det', '\\Pr', '\\arg', '\\bigcup', '\\bigcap',
+]);
+
+/** Render a subscript node, using `\limits` for limit-style operators so the
+ *  subscript sits UNDER the operator instead of trailing it. */
+function subLatex(base: string, sub: string): string {
+  if (LIMITS_OPS.has(base.trim())) return `${base.trim()}\\limits_{${sub}}`;
+  return `{${base}}_{${sub}}`;
+}
+
 /** Render a symbol value — most are passed through as-is. */
 function renderSymbol(value: string): string {
   // Unicode Greek letters → LaTeX commands (δ → \delta, ε → \varepsilon)
@@ -311,7 +327,7 @@ function renderNodeStatic(node: MathNode): string {
     case 'Frac':
       return `\\frac{${renderRowStatic(node.numer)}}{${renderRowStatic(node.denom)}}`;
     case 'Sub':
-      return `{${renderRowStatic(node.base)}}_{${renderRowStatic(node.sub)}}`;
+      return subLatex(renderRowStatic(node.base), renderRowStatic(node.sub));
     case 'Sup':
       return `{${renderRowStatic(node.base)}}^{${renderRowStatic(node.sup)}}`;
     case 'SubSup':

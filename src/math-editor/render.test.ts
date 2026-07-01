@@ -57,6 +57,17 @@ describe('renderStaticLatex', () => {
     expect(renderStaticLatex(row)).toBe('{x}_{2}');
   });
 
+  test('limit-style operators put the subscript BELOW via \\limits', () => {
+    // `\lim_{x → a}` needs the subscript on the bare operator, not a braced
+    // group — else KaTeX trails it. We emit `\lim\limits_{…}`.
+    const sub = mkRow([mkSymbol('x'), mkSymbol('\\to'), mkSymbol('a')]);
+    expect(renderStaticLatex(mkRow([mkSub(mkRow([mkSymbol('\\lim')]), sub)])))
+      .toBe('\\lim\\limits_{x \\to a}');
+    // A normal (non-limits) base still braces the subscript.
+    expect(renderStaticLatex(mkRow([mkSub(mkRow([mkSymbol('x')]), mkRow([mkSymbol('0')]))])))
+      .toBe('{x}_{0}');
+  });
+
   test('renders superscript', () => {
     const row = mkRow([mkSup(mkRow([mkSymbol('x')]), mkRow([mkSymbol('2')]))]);
     expect(renderStaticLatex(row)).toBe('{x}^{2}');
