@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import type { editor } from 'monaco-editor';
 import type { AnalyzeResult, LeanDeclaration, LeanGoal, LeanGoalState, LeanMessage, LeanSeverity } from '../lean/types';
 import { pickGoalAtCursor } from '../lean/goalAtCursor';
 import { LEAN_PRESETS, DEFAULT_LEAN_SOURCE } from '../lean/presets';
+import { parseEditorUrlParams, presetSlug, resolveSymbolName } from '../lean/presetLookup';
 import { LeanMathView } from './LeanMathView';
 import { LeanMathEditor } from './LeanMathEditor';
 import { LeanWysiwygPanel } from './LeanWysiwygPanel';
@@ -78,8 +80,15 @@ const sectionHeader: React.CSSProperties = {
 };
 
 export function LeanEditorPage() {
-  const [source, setSource] = useState(DEFAULT_LEAN_SOURCE);
-  const [mathlib, setMathlib] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+  // Deep-link params (`?preset=real-analysis&symbol=limitAdd`), parsed ONCE at
+  // mount: the preset seeds the initial source (so the very first analyze runs
+  // on it, not on the default source), and the symbol is held pending until the
+  // async analyze produces declarations to resolve it against.
+  const [initialParams] = useState(() => parseEditorUrlParams(searchParams, LEAN_PRESETS));
+  const [source, setSource] = useState(initialParams.preset?.code ?? DEFAULT_LEAN_SOURCE);
+  const [mathlib, setMathlib] = useState(initialParams.preset?.mathlib ?? false);
+  const [pendingSymbol, setPendingSymbol] = useState<string | null>(initialParams.symbol);
   const [wysiwyg, setWysiwyg] = useState(true);
   const [result, setResult] = useState<AnalyzeResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -110,9 +119,13 @@ export function LeanEditorPage() {
       const p = LEAN_PRESETS.find((x) => x.name === name);
       if (!p) return;
       if (p.mathlib) setMathlib(true);
+      // A deep-linked symbol belongs to the deep-linked preset; drop it and
+      // keep the URL shareable for the newly chosen preset.
+      setPendingSymbol(null);
+      setSearchParams({ preset: presetSlug(p.name) }, { replace: true });
       loadSource(p.code);
     },
-    [loadSource],
+    [loadSource, setSearchParams],
   );
 
   // Debounced analyze on source / mathlib change.
@@ -171,6 +184,21 @@ export function LeanEditorPage() {
   const goals = result?.goals ?? [];
   const declarations = result?.declarations ?? [];
   const errorCount = messages.filter((m) => m.severity === 'error').length;
+
+  // Deep-linked `?symbol=` → the canonical declaration name to auto-expand,
+  // resolvable only once the async analyze has produced declarations.
+  const autoExpandName = useMemo(
+    () => (pendingSymbol && declarations.length > 0 ? resolveSymbolName(declarations, pendingSymbol) : null),
+    [pendingSymbol, declarations],
+  );
+  // Declarations arrived but the symbol isn't among them → it never will be
+  // (same source re-analyzes to the same list); drop it with a warning.
+  useEffect(() => {
+    if (pendingSymbol && declarations.length > 0 && autoExpandName === null) {
+      console.warn(`?symbol=${pendingSymbol}: no declaration with that name in this preset`);
+      setPendingSymbol(null);
+    }
+  }, [pendingSymbol, declarations, autoExpandName]);
 
   const activeGoal: LeanGoal | null = useMemo(
     () => pickGoalAtCursor(goals, cursor.line, cursor.col),
@@ -264,6 +292,8 @@ export function LeanEditorPage() {
                   source={source}
                   mathlib={mathlib}
                   onSourceChange={loadSource}
+                  autoExpandSymbol={autoExpandName}
+                  onAutoExpandConsumed={() => setPendingSymbol(null)}
                 />
               </div>
               <MessagesPanel messages={messages} bridgeError={result?.bridgeError} loading={loading} />

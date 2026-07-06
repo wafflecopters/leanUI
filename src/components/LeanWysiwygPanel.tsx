@@ -73,6 +73,8 @@ export function LeanWysiwygPanel({
   source,
   mathlib,
   onSourceChange,
+  autoExpandSymbol,
+  onAutoExpandConsumed,
 }: {
   declarations: LeanDeclaration[];
   goals: LeanGoal[];
@@ -80,6 +82,11 @@ export function LeanWysiwygPanel({
   mathlib?: boolean;
   /** Write-back: structural proof edits reprint + splice into the source. */
   onSourceChange?: (next: string) => void;
+  /** Deep link (`?symbol=…`): declaration name whose card opens EXPANDED when
+   *  it first renders. Resolved by the page once the async analyze delivers
+   *  declarations; consumed one-shot via `onAutoExpandConsumed`. */
+  autoExpandSymbol?: string | null;
+  onAutoExpandConsumed?: () => void;
 }) {
   // Declaration start lines (sorted) to bound each declaration's source slice.
   const sortedLines = useMemo(
@@ -113,6 +120,8 @@ export function LeanWysiwygPanel({
             nextDeclLine={nextLineOf(d.line)}
             tacticBlock={proofSeedBlock(source, d, nextLineOf(d.line))}
             mathlib={mathlib}
+            autoExpand={autoExpandSymbol != null && d.name === autoExpandSymbol}
+            onAutoExpandConsumed={onAutoExpandConsumed}
             onProofChange={
               onSourceChange
                 ? (newBlock) => onSourceChange(spliceTacticBlock(source, d, nextLineOf(d.line), newBlock))
@@ -132,6 +141,8 @@ function DeclCard({
   nextDeclLine,
   tacticBlock,
   mathlib,
+  autoExpand,
+  onAutoExpandConsumed,
   onProofChange,
 }: {
   decl: LeanDeclaration;
@@ -140,10 +151,24 @@ function DeclCard({
   nextDeclLine?: number;
   tacticBlock: string | null;
   mathlib?: boolean;
+  /** Deep link: open this card expanded. One-shot — consumed on arrival, so a
+   *  later user collapse sticks (no re-expansion tug-of-war). */
+  autoExpand?: boolean;
+  onAutoExpandConsumed?: () => void;
   onProofChange?: (newBlock: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
-  const [expanded, setExpanded] = useState(false);
+  // Cards usually mount only after the async analyze delivers declarations, so
+  // a deep-linked card starts expanded via the initializer; the effect covers
+  // the late-arrival path (autoExpand turning on after mount) and consumption.
+  const [expanded, setExpanded] = useState(autoExpand ?? false);
+  useEffect(() => {
+    if (autoExpand) {
+      setExpanded(true);
+      onAutoExpandConsumed?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoExpand]);
   // Any provable decl (theorem or def/example with a term/sorry body) gets the
   // structured proof-tree editor — select the sorry and build a proof.
   const isProof = tacticBlock !== null;
