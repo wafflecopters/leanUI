@@ -26,6 +26,8 @@ import {
   mkSup,
   mkSub,
   mkBigOp,
+  mkText,
+  type GroupNode,
   type MathNode,
   type MathRow,
   type SymbolNode,
@@ -158,12 +160,15 @@ function isOpSymbol(n: MathNode, op: string): boolean {
 }
 
 /**
- * Rewrite leading dependent-Pi binders `( x : T ) → …` into `∀ x, …`, the
- * mathematical convention (Lean prints `(n : Nat) → P n`; mathematicians read
- * `∀ n, P n`). Consumes consecutive binders. The flat node sequence for one
- * binder is: `(`  <var…>  `:`  <type…>  `)`  `\to`  <rest>. We render
- * `\forall <var> ,` and recurse on <rest>. Only fires on a leading `(` that is
- * actually a binder (has a top-level `:` before the matching `)` then `\to`).
+ * Rewrite leading dependent-Pi binders `( x y : T ) → …` into the mathematical
+ * reading `∀ x, y ∈ T, …` (Lean prints `(n : Nat) → P n`; mathematicians read
+ * `∀ n ∈ ℕ, P n` — the same convention the TT math editor used). The flat node
+ * sequence for one binder is: `(`  <var…>  `:`  <type…>  `)`  `\to`  <rest>.
+ * Variables are comma-separated and the binder TYPE is kept after `∈`.
+ * Consecutive binder groups merge under ONE ∀, joined by "and":
+ * `∀ f, g ∈ Carrier(R) → Carrier(R) and x0, L, M ∈ Carrier(R), <body>`.
+ * Only fires on a leading `(` that is actually a binder (top-level `:` before
+ * the matching `)` then `\to`).
  */
 function recognizeForall(nodes: MathNode[]): MathNode[] | null {
   if (nodes.length === 0 || !isOpSymbol(nodes[0], '(')) return null;
@@ -185,12 +190,34 @@ function recognizeForall(nodes: MathNode[]): MathNode[] | null {
   if (close + 1 >= nodes.length || !isOpSymbol(nodes[close + 1], '\\to')) return null;
 
   const varNodes = nodes.slice(1, colon); // between `(` and `:`
+  const typeNodes = nodes.slice(colon + 1, close); // between `:` and `)`
   const rest = nodes.slice(close + 2); // after `) \to`
   if (varNodes.length === 0) return null;
 
-  // ∀ <var> , <rest>   (rest may itself begin with another binder → recurse)
+  // f, g ∈ <type>
+  const group: MathNode[] = [];
+  varNodes.forEach((v, i) => {
+    if (i > 0) group.push(mkSymbol(','));
+    group.push(v);
+  });
+  group.push(mkSymbol('\\in'), ...typeNodes);
+
   const restConverted = recognizeForall(rest) ?? rest;
-  return [mkSymbol('\\forall'), ...varNodes, mkSymbol(','), ...restConverted];
+
+  // Merge a directly-following binder group into this ∀, joined by "and".
+  // Inline case (no subterm wrappers): rest converted to [∀, …] right here.
+  if (restConverted.length > 0 && isOpSymbol(restConverted[0], '\\forall')) {
+    return [mkSymbol('\\forall'), ...group, mkText('and'), ...restConverted.slice(1)];
+  }
+  // Wrapped case: rest is one Group whose nested level already produced [∀, …]
+  // bottom-up inside its tag — strip that ∀ but keep the Group (htmlId).
+  if (restConverted.length === 1 && restConverted[0].tag === 'Group') {
+    const g = restConverted[0] as GroupNode;
+    if (g.children.length > 0 && isOpSymbol(g.children[0], '\\forall')) {
+      return [mkSymbol('\\forall'), ...group, mkText('and'), mkGroup(g.htmlId, g.children.slice(1))];
+    }
+  }
+  return [mkSymbol('\\forall'), ...group, mkSymbol(','), ...restConverted];
 }
 
 /**
@@ -313,6 +340,76 @@ function recognizeSum(kids: TaggedJson[], wrap: boolean): MathNode[] | null {
   return [mkBigOp('sum', below, above, bodyRow)];
 }
 
+// ── implication chains: `H₁ → H₂ → C` between PROPS reads `H₁ and H₂ ⟹ C` ──
+
+/** Flatten a tagged subtree to its plain pretty-printed text. */
+function plainText(tt: TaggedJson): string {
+  switch (tt.t) {
+    case 'text':
+      return tt.s;
+    case 'append':
+      return tt.kids.map(plainText).join('');
+    case 'tag':
+      return plainText(tt.child);
+  }
+}
+
+/** Generic proposition-shape test: the segment mentions a relation symbol
+ *  (`=`, `≤`, `<`, `∈`, …). Distinguishes hypothesis chains (`lim… = L → …`)
+ *  from FUNCTION types (`Carrier R → Carrier R`), which must keep their arrows
+ *  — without any domain-specific names (kernel-purity rule). Lambda arrows
+ *  (`=>`) are stripped first so `fun x => k` alone doesn't read as a prop. */
+const RELATION_CHARS = /[=≠≤≥<>∈∉⊆⊂∣⊢]/u;
+function isPropLike(seg: readonly TaggedJson[]): boolean {
+  const text = seg.map(plainText).join('').replace(/=>/g, '');
+  return RELATION_CHARS.test(text);
+}
+
+/** A text kid that is EXACTLY a top-level arrow separator (` → `). Binder
+ *  levels print `) → ` / `} → ` and are deliberately not matched, so this
+ *  only fires between whole antecedents/consequent. */
+function isPureArrowText(k: TaggedJson): boolean {
+  return k.t === 'text' && k.s.trim() === '→';
+}
+
+/**
+ * Recognize a top-level implication chain `H₁ → H₂ → … → C` where EVERY
+ * segment is proposition-like, and render it as `H₁ and H₂ and … ⟹ C` — the
+ * mathematical reading of curried hypotheses. Lean pp nests the chain to the
+ * right (`H₁ → (H₂ → C)` across tags), so we walk into lone tag/append RHSs to
+ * collect all segments. Null when there's no pure arrow or any segment looks
+ * like a type (function arrows stay arrows).
+ */
+function recognizeImplicationChain(kids: TaggedJson[], wrap: boolean): MathNode[] | null {
+  const segs: TaggedJson[][] = [];
+  let current: TaggedJson[] = kids;
+  for (;;) {
+    const i = current.findIndex(isPureArrowText);
+    if (i === -1) {
+      segs.push(current);
+      break;
+    }
+    segs.push(current.slice(0, i));
+    let rhs = current.slice(i + 1);
+    // Descend across the right-nested pp structure (lone tag → its child;
+    // lone append → its kids) so the whole chain flattens into segments.
+    while (rhs.length === 1 && rhs[0].t === 'tag') rhs = [rhs[0].child];
+    if (rhs.length === 1 && rhs[0].t === 'append') rhs = rhs[0].kids;
+    current = rhs;
+  }
+  if (segs.length < 2) return null;
+  if (segs.some((s) => s.length === 0) || !segs.every(isPropLike)) return null;
+
+  const out: MathNode[] = [];
+  segs.forEach((seg, i) => {
+    if (i > 0) out.push(i === segs.length - 1 ? mkSymbol('\\implies') : mkText('and'));
+    // Render each segment through nodesOf's append path so notation recognizers
+    // (limit, ∑) still fire on segments the chain walk unwrapped from their tag.
+    out.push(...nodesOf(seg.length === 1 ? seg[0] : { t: 'append', kids: seg }, wrap));
+  });
+  return out;
+}
+
 /** If a tagged operand is a lambda `fun bv => body`, return its bound-variable
  *  and body node-lists; else null. Lets the limit renderer show
  *  `\lim_{x → x0} (f x + g x)` from `Limit (fun x => f x + g x) x0 L`. */
@@ -374,6 +471,8 @@ function nodesOf(tt: TaggedJson, wrap: boolean): MathNode[] {
     case 'text':
       return restructure(tokenizeText(tt.s));
     case 'append': {
+      const chain = recognizeImplicationChain(tt.kids, wrap);
+      if (chain) return chain;
       const lim = recognizeLimit(tt.kids, wrap);
       if (lim) return lim;
       const sum = recognizeSum(tt.kids, wrap);

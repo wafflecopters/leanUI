@@ -244,7 +244,7 @@ describe('structural restructuring', () => {
     expect(f.operator).toBe('sum');
   });
 
-  test('dependent Pi binder (x : T) → body renders as ∀ x, body', () => {
+  test('dependent Pi binder (x : T) → body renders as ∀ x ∈ T, body', () => {
     const tagged: TaggedJson = {
       t: 'append',
       kids: [
@@ -260,8 +260,89 @@ describe('structural restructuring', () => {
       (n) => (n.tag === 'Symbol' ? (n as SymbolNode).value : n.tag),
     );
     expect(syms[0]).toBe('\\forall');
-    expect(syms).toContain(','); // ∀ n , …
-    expect(syms).not.toContain(':'); // type dropped
+    expect(syms).toContain('\\in'); // binder TYPE kept: ∀ n ∈ MyNat
+    expect(syms).toContain('MyNat');
+    expect(syms).toContain(','); // …, body
+    expect(syms).not.toContain(':'); // the raw `:` is rewritten away
+  });
+
+  test('multi-var binder groups: one ∀, commas between vars, "and" between groups', () => {
+    // (f g : T) → (x0 L M : S) → body   (inline form, no subterm wrappers)
+    const tagged: TaggedJson = {
+      t: 'append',
+      kids: [
+        { t: 'text', s: '(' },
+        { t: 'tag', pos: '/f', child: { t: 'text', s: 'f ' } },
+        { t: 'tag', pos: '/g', child: { t: 'text', s: 'g' } },
+        { t: 'text', s: ' : ' },
+        { t: 'tag', pos: '/T', child: { t: 'text', s: 'T' } },
+        { t: 'text', s: ') → ' },
+        {
+          t: 'tag',
+          pos: '/rest',
+          child: {
+            t: 'append',
+            kids: [
+              { t: 'text', s: '(' },
+              { t: 'tag', pos: '/x0', child: { t: 'text', s: 'x0 ' } },
+              { t: 'tag', pos: '/L', child: { t: 'text', s: 'L' } },
+              { t: 'text', s: ' : ' },
+              { t: 'tag', pos: '/S', child: { t: 'text', s: 'S' } },
+              { t: 'text', s: ') → ' },
+              { t: 'tag', pos: '/b', child: { t: 'text', s: 'P' } },
+            ],
+          },
+        },
+      ],
+    };
+    const latex = renderStaticLatex(codeWithInfosToMathRow(tagged, { wrapSubterms: false }));
+    // ONE ∀ covering both groups, joined by "and".
+    expect(latex.match(/\\forall/g)?.length).toBe(1);
+    expect(latex).toContain('\\text{and}');
+    expect(latex.match(/\\in/g)?.length).toBe(2);
+  });
+
+  test('prop implication chain renders hypotheses with "and" and final ⟹', () => {
+    // (a = b) → (c = d) → e = f   — every segment prop-like.
+    const tagged: TaggedJson = {
+      t: 'append',
+      kids: [
+        { t: 'tag', pos: '/h1', child: { t: 'text', s: 'a = b' } },
+        { t: 'text', s: ' → ' },
+        {
+          t: 'tag',
+          pos: '/rest',
+          child: {
+            t: 'append',
+            kids: [
+              { t: 'tag', pos: '/h2', child: { t: 'text', s: 'c = d' } },
+              { t: 'text', s: ' → ' },
+              { t: 'tag', pos: '/c', child: { t: 'text', s: 'e = f' } },
+            ],
+          },
+        },
+      ],
+    };
+    const latex = renderStaticLatex(codeWithInfosToMathRow(tagged, { wrapSubterms: false }));
+    expect(latex).toContain('\\text{and}');
+    expect(latex).toContain('\\implies');
+    expect(latex).not.toContain('\\to');
+  });
+
+  test('function-type arrows are NOT rewritten to and/⟹', () => {
+    // Carrier R → Carrier R: no relation symbols → keeps its arrow.
+    const tagged: TaggedJson = {
+      t: 'append',
+      kids: [
+        { t: 'tag', pos: '/0', child: { t: 'text', s: 'Carrier R' } },
+        { t: 'text', s: ' → ' },
+        { t: 'tag', pos: '/1', child: { t: 'text', s: 'Carrier R' } },
+      ],
+    };
+    const latex = renderStaticLatex(codeWithInfosToMathRow(tagged, { wrapSubterms: false }));
+    expect(latex).toContain('\\to');
+    expect(latex).not.toContain('\\implies');
+    expect(latex).not.toContain('\\text{and}');
   });
 
   test('non-dependent A → B stays an arrow (not ∀)', () => {
