@@ -188,10 +188,10 @@ function DeclCard({
   // instance. Re-seeds from source on toggle (the proof itself is persisted).
   const body = (
     <>
-      {/* Type (+ value for defs) */}
+      {/* Type (+ value for defs) — no leading ":" label; the type sits on its
+          own line under the name, so a colon would just dangle. */}
       <div style={{ padding: '8px 10px', borderBottom: isProof ? `1px solid ${C.border}` : 'none' }}>
         <div style={{ fontSize: 15, lineHeight: 1.6 }}>
-          <span style={{ color: C.label }}>: </span>
           {editing ? (
             <LeanMathEditor tagged={decl.typeTagged} active />
           ) : (

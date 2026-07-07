@@ -160,6 +160,35 @@ function isOpSymbol(n: MathNode, op: string): boolean {
 }
 
 /**
+ * Drop a leading IMPLICIT binder `{ x : T } → rest`, returning the restructured
+ * rest (which may strip further implicits / recognize ∀ in turn). Null when the
+ * nodes don't start with an implicit-binder-then-arrow shape. Without this the
+ * braces reach KaTeX as grouping and `{R : Real} → …` displays as the baffling
+ * `R : Real → …`.
+ */
+function stripImplicitBinder(nodes: MathNode[]): MathNode[] | null {
+  if (nodes.length === 0 || !isOpSymbol(nodes[0], '{')) return null;
+  let depth = 0;
+  let close = -1;
+  let colon = -1;
+  for (let i = 0; i < nodes.length; i++) {
+    if (isOpSymbol(nodes[i], '{')) depth++;
+    else if (isOpSymbol(nodes[i], '}')) {
+      depth--;
+      if (depth === 0) { close = i; break; }
+    } else if (depth === 1 && colon === -1 && isOpSymbol(nodes[i], ':')) {
+      colon = i;
+    }
+  }
+  // Must be `{ var : type }` immediately followed by `\to` and a nonempty rest.
+  if (close === -1 || colon === -1) return null;
+  if (close + 1 >= nodes.length || !isOpSymbol(nodes[close + 1], '\\to')) return null;
+  const rest = nodes.slice(close + 2);
+  if (rest.length === 0) return null;
+  return restructure(rest);
+}
+
+/**
  * Rewrite leading dependent-Pi binders `( x y : T ) → …` into the mathematical
  * reading `∀ x, y ∈ T, …` (Lean prints `(n : Nat) → P n`; mathematicians read
  * `∀ n ∈ ℕ, P n` — the same convention the TT math editor used). The flat node
@@ -236,6 +265,12 @@ function recognizeForall(nodes: MathNode[]): MathNode[] | null {
  */
 function restructure(nodes: MathNode[]): MathNode[] {
   if (nodes.length <= 1) return nodes;
+
+  // Implicit binders `{x : T} → …` are elided — mathematicians don't write
+  // implicit arguments (they're `{}`-implicit precisely because the reader
+  // infers them). The source keeps them; this is display only.
+  const stripped = stripImplicitBinder(nodes);
+  if (stripped) return stripped;
 
   // Dependent Pi binders → ∀ (outermost; do before infix splits).
   const forall = recognizeForall(nodes);

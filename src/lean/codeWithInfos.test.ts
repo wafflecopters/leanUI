@@ -266,6 +266,31 @@ describe('structural restructuring', () => {
     expect(syms).not.toContain(':'); // the raw `:` is rewritten away
   });
 
+  test('leading implicit binder {R : Real} → … is elided from display', () => {
+    const tagged: TaggedJson = {
+      t: 'append',
+      kids: [
+        { t: 'text', s: '{' },
+        { t: 'tag', pos: '/R', child: { t: 'text', s: 'R' } },
+        { t: 'text', s: ' : ' },
+        { t: 'tag', pos: '/Real', child: { t: 'text', s: 'Real' } },
+        { t: 'text', s: '} → ' },
+        { t: 'tag', pos: '/b', child: { t: 'text', s: 'P' } },
+      ],
+    };
+    const latex = renderStaticLatex(codeWithInfosToMathRow(tagged, { wrapSubterms: false }));
+    expect(latex).not.toContain('Real');
+    expect(latex).not.toContain('\\to');
+    expect(latex.trim()).toBe('P');
+  });
+
+  test('a set-like brace without binder shape is NOT stripped', () => {
+    // `{n}` alone (no `: T} →`) stays literal.
+    const tagged: TaggedJson = { t: 'text', s: '{ n }' };
+    const latex = renderStaticLatex(codeWithInfosToMathRow(tagged, { wrapSubterms: false }));
+    expect(latex).toContain('n');
+  });
+
   test('multi-var binder groups: one ∀, commas between vars, "and" between groups', () => {
     // (f g : T) → (x0 L M : S) → body   (inline form, no subterm wrappers)
     const tagged: TaggedJson = {
