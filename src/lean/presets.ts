@@ -658,6 +658,14 @@ structure CompleteOrderedField (A : Type) : Type 1 extends OrderedField A where
 
 @[reducible] def fieldOf (R : Real) : CompleteOrderedField (Carrier R) := DPair.snd R
 
+-- Display the carrier as ℝ (display only, like rzero/rone's 0/1 unexpanders).
+-- Every signature in this preset is parametric over the ONE bundled R, so
+-- eliding it is unambiguous; the math renderer maps ℝ to \\mathbb{R}.
+-- mkIdent (not a quoted ident) keeps it hygiene-free — no ✝ dagger in the pp.
+@[app_unexpander Carrier] def unexpCarrier : Lean.PrettyPrinter.Unexpander
+  | \`($_ $_) => pure (Lean.mkIdent \`ℝ)
+  | _ => throw ()
+
 ------------------------------------------------------------
 -- Field operations, parametric over any Real
 ------------------------------------------------------------

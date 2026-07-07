@@ -374,8 +374,8 @@ function isPureArrowText(k: TaggedJson): boolean {
 
 /**
  * Recognize a top-level implication chain `H₁ → H₂ → … → C` where EVERY
- * segment is proposition-like, and render it as `H₁ and H₂ and … ⟹ C` — the
- * mathematical reading of curried hypotheses. Lean pp nests the chain to the
+ * segment is proposition-like, and render it as `H₁ and H₂ and …, then C` —
+ * the mathematical reading of curried hypotheses. Lean pp nests the chain to the
  * right (`H₁ → (H₂ → C)` across tags), so we walk into lone tag/append RHSs to
  * collect all segments. Null when there's no pure arrow or any segment looks
  * like a type (function arrows stay arrows).
@@ -402,7 +402,12 @@ function recognizeImplicationChain(kids: TaggedJson[], wrap: boolean): MathNode[
 
   const out: MathNode[] = [];
   segs.forEach((seg, i) => {
-    if (i > 0) out.push(i === segs.length - 1 ? mkSymbol('\\implies') : mkText('and'));
+    // Hypotheses join with "and"; the consequent reads ", then" — so the whole
+    // chain is the sentence `H₁ and H₂, then C`.
+    if (i > 0) {
+      if (i === segs.length - 1) out.push(mkSymbol(','), mkText('then'));
+      else out.push(mkText('and'));
+    }
     // Render each segment through nodesOf's append path so notation recognizers
     // (limit, ∑) still fire on segments the chain walk unwrapped from their tag.
     out.push(...nodesOf(seg.length === 1 ? seg[0] : { t: 'append', kids: seg }, wrap));

@@ -325,7 +325,7 @@ describe('structural restructuring', () => {
     };
     const latex = renderStaticLatex(codeWithInfosToMathRow(tagged, { wrapSubterms: false }));
     expect(latex).toContain('\\text{and}');
-    expect(latex).toContain('\\implies');
+    expect(latex).toContain(',\\;\\text{then}'); // consequent reads ", then"
     expect(latex).not.toContain('\\to');
   });
 
@@ -341,7 +341,7 @@ describe('structural restructuring', () => {
     };
     const latex = renderStaticLatex(codeWithInfosToMathRow(tagged, { wrapSubterms: false }));
     expect(latex).toContain('\\to');
-    expect(latex).not.toContain('\\implies');
+    expect(latex).not.toContain('\\text{then}');
     expect(latex).not.toContain('\\text{and}');
   });
 
