@@ -122,6 +122,10 @@ export interface ApplyNode {
   readonly name: string;
   /** Sub-proofs for each subgoal created by apply. */
   readonly children: readonly ProofNode[];
+  /** When true, `name` IS the whole tactic (e.g. `constructor`) printed
+   *  verbatim rather than as `apply <name>`. Used for apply-like tactics that
+   *  open subgoals but aren't spelled with the `apply` keyword. */
+  readonly raw?: boolean;
 }
 
 export interface SimpNode {
@@ -287,8 +291,9 @@ export function withRewriteSideGoals(node: RewriteNode, count: number): RewriteN
   return { ...node, sideGoals };
 }
 
-export function mkApply(name: string, children: readonly ProofNode[]): ApplyNode {
-  return { tag: 'apply', id: freshProofId(), name, children };
+export function mkApply(name: string, children: readonly ProofNode[], raw = false): ApplyNode {
+  const node: ApplyNode = { tag: 'apply', id: freshProofId(), name, children };
+  return raw ? { ...node, raw: true } : node;
 }
 
 export function mkSimp(lemmas: readonly string[], steps: readonly ProofNode[], child: ProofNode, only = false): SimpNode {

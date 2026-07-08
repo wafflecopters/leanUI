@@ -92,6 +92,23 @@ describe('leanTacticsToTree', () => {
     expect((tree as any).expr).toBe('omega');
   });
 
+  test('constructor parses as a CHAINING raw apply (opened field gets a hole)', () => {
+    resetProofIds();
+    const tree = leanTacticsToTree('constructor') as any;
+    expect(tree.tag).toBe('apply');
+    expect(tree.raw).toBe(true);
+    expect(tree.name).toBe('constructor');
+    expect(tree.children).toHaveLength(1);
+    expect(tree.children[0].tag).toBe('hole');
+  });
+
+  test('constructor followed by a tactic chains it as the subgoal proof', () => {
+    resetProofIds();
+    const tree = leanTacticsToTree('constructor\nintro eps heps') as any;
+    expect(tree.tag).toBe('apply');
+    expect(tree.children[0].tag).toBe('intros');
+  });
+
   test('conditional rewrite parses into main child + side goals', () => {
     resetProofIds();
     const tree = leanTacticsToTree(
@@ -127,6 +144,7 @@ describe('leanTacticsToTree', () => {
       ['simp only', '  simp only [plusComm, mulComm]\n  sorry'],
       ['terminal tactic (omega)', '  omega'],
       ['terminal tactic (rfl)', '  rfl'],
+      ['constructor with continuation', '  constructor\n  sorry'],
       ['unrecognized tactic prints verbatim (not exact)', '  refine leqAntisym ?_ ?_'],
       [
         'conditional rewrite (side goal as bullet branches)',

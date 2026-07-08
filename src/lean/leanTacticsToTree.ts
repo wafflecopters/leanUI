@@ -101,6 +101,14 @@ function parseTactic(lines: Line[], pos: { i: number }, level: number, text: str
     return mkExact(text.trim(), true);
   }
 
+  // `constructor` opens the goal's constructor and leaves its fields as
+  // subgoals (e.g. Limit.mk's eps_delta) — a CHAINING tactic, not a terminal
+  // one. Model as a raw apply with the continuation as its subgoal, so the
+  // opened field gets a hole to live in.
+  if (/^constructor\s*$/.test(text)) {
+    return mkApply('constructor', [continuation(lines, pos, level)], true);
+  }
+
   // conv in (pat) => rw [lemma]  — a subterm-scoped rewrite.
   m = text.match(/^conv\s+in\s+\((.*)\)\s*=>\s*rw\s*\[\s*(.*?)\s*\]\s*$/);
   if (m) {
