@@ -99,3 +99,49 @@ describe('parseAnalyzeJson', () => {
     expect(parseAnalyzeJson(stdout)).toEqual({ messages: [], goals: [], declarations: [] });
   });
 });
+
+describe('createAnalyzeLimiter', () => {
+  test('caps concurrency and priority jumps the queue', async () => {
+    const { createAnalyzeLimiter } = await import('./lean-bridge');
+    const limiter = createAnalyzeLimiter(1);
+    const order: string[] = [];
+
+    // Occupy the single slot.
+    await limiter.acquire(false);
+
+    // Queue: two background trials, then one priority goal refresh.
+    const bg1 = limiter.acquire(false).then(() => order.push('bg1'));
+    const bg2 = limiter.acquire(false).then(() => order.push('bg2'));
+    const pri = limiter.acquire(true).then(() => order.push('priority'));
+
+    // Nothing runs until the slot frees.
+    await Promise.resolve();
+    expect(order).toEqual([]);
+
+    limiter.release(); // → priority first, despite arriving last
+    await pri;
+    expect(order).toEqual(['priority']);
+
+    limiter.release(); // → bg1 (FIFO among non-priority)
+    await bg1;
+    limiter.release(); // → bg2
+    await bg2;
+    expect(order).toEqual(['priority', 'bg1', 'bg2']);
+    limiter.release(); // final release drops the running count safely
+  });
+
+  test('priority waiters keep FIFO order among themselves', async () => {
+    const { createAnalyzeLimiter } = await import('./lean-bridge');
+    const limiter = createAnalyzeLimiter(1);
+    const order: string[] = [];
+    await limiter.acquire(false);
+    const p1 = limiter.acquire(true).then(() => order.push('p1'));
+    const p2 = limiter.acquire(true).then(() => order.push('p2'));
+    limiter.release();
+    await p1;
+    limiter.release();
+    await p2;
+    expect(order).toEqual(['p1', 'p2']);
+    limiter.release();
+  });
+});

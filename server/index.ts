@@ -29,15 +29,18 @@ app.post('/api/check', async (req, res) => {
 });
 
 // Richer analysis: diagnostics + tactic goal states (for goal-at-cursor).
+// `priority: true` (goal/display refreshes) jumps the analyze queue ahead of
+// background suggestion trials, so the visible goal state never starves.
 app.post('/api/analyze', async (req, res) => {
   const source: unknown = req.body?.source;
   const mathlib: boolean = req.body?.mathlib === true;
+  const priority: boolean = req.body?.priority === true;
   if (typeof source !== 'string') {
     res.status(400).json({ error: 'Expected { source: string }' });
     return;
   }
   try {
-    const result = await analyzeLeanSource(source, { mathlib });
+    const result = await analyzeLeanSource(source, { mathlib, priority });
     res.json(result);
   } catch (e) {
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });

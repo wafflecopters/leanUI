@@ -473,9 +473,12 @@ function LeanProofEditor({
     () => [{ id: 'lean-constructor', label: 'constructor', tactic: 'constructor', kind: 'apply' as const }],
     [],
   );
-  // Dedup the combined candidate list by id.
+  // Dedup the combined candidate list by id. ORDER = trial priority (results
+  // stream in as they validate): heuristics and `constructor` are cheap and
+  // high-value (constructor is the way INTO structure goals like Limit), so
+  // they go before the larger rewrite/unfold batches.
   const candSeen = new Set<string>();
-  const validateCandidates = [...heuristicCandidates, ...rewriteCandidates, ...unfoldCandidates, ...ringCandidate, ...constructorCandidate].filter((s) =>
+  const validateCandidates = [...heuristicCandidates, ...constructorCandidate, ...rewriteCandidates, ...unfoldCandidates, ...ringCandidate].filter((s) =>
     candSeen.has(s.id) ? false : (candSeen.add(s.id), true),
   );
   const validated = useLeanValidatedSuggestions({

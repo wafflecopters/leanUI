@@ -114,9 +114,13 @@ export function assembleProofInSource(input: AssembleInSourceInput): AssembledPr
   });
 
   const before = lines.slice(0, startIdx);
-  const after = lines.slice(endIdx);
   const rebuiltRegion = `${head}\n${lean.source}`;
-  const fullSource = [...before, rebuiltRegion, ...after].join('\n');
+  // Everything AFTER the declaration's block is dropped: Lean is strictly
+  // forward-referencing, so later declarations cannot affect this proof — and
+  // every goal/suggestion round-trip re-elaborates the whole file, so a
+  // shorter file is directly faster (the heavyweight sections after the
+  // current decl never run). Node ranges are unaffected (only later lines go).
+  const fullSource = [...before, rebuiltRegion, ''].join('\n');
 
   return { source: fullSource, lean };
 }

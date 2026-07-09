@@ -137,7 +137,8 @@ export function LeanEditorPage() {
         const resp = await fetch('/api/analyze', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ source, mathlib }),
+          // priority: drives the whole page (decl cards, markers, messages).
+          body: JSON.stringify({ source, mathlib, priority: true }),
         });
         const data: AnalyzeResult = await resp.json();
         if (!cancelled) setResult(data);

@@ -20,6 +20,7 @@ import type { AnalyzeResult } from './types';
 import { assembleProofInSource } from './assembleProofDecl';
 import { leanTacticsToTree } from './leanTacticsToTree';
 import { subtermLatexAtPos } from './leanInteractiveGoal';
+import { taggedToLatex } from './codeWithInfos';
 import type { LeanSuggestion } from './leanSuggestions';
 
 export interface UseLeanValidatedSuggestionsArgs {
@@ -104,6 +105,9 @@ export function useLeanValidatedSuggestions(args: UseLeanValidatedSuggestionsArg
         const tacticLine = assembled.lean.nodeRanges.get(sub.id)?.startLine;
         const data = await analyze(assembled.source, mathlib);
         if (cancelled || reqId !== reqRef.current || !data || tacticLine === undefined) return;
+        // A bridge failure (timeout, spawn error) is NOT a validation: with no
+        // messages/goals the candidate would read as a spurious closer. Skip it.
+        if (data.bridgeError) return;
         // Valid iff no error AT the candidate's own line (errors elsewhere — the
         // `by`-line "unsolved goals", or unrelated failing tactics — don't count).
         const failsHere = data.messages.some((m) => m.severity === 'error' && m.startLine === tacticLine);
@@ -137,6 +141,12 @@ export function useLeanValidatedSuggestions(args: UseLeanValidatedSuggestionsArg
         if (postTarget && focusPos && (cand.kind === 'rw' || cand.kind === 'unfold')) {
           const after = subtermLatexAtPos(postTarget, focusPos) ?? '';
           if (after && after !== (focusOriginal ?? '')) preview = after;
+        }
+        // `constructor` transforms the WHOLE goal (opens the structure's field)
+        // — its preview is the resulting goal itself, so the pill shows what
+        // you'd be proving next (e.g. the ε-δ obligation) instead of nothing.
+        if (!preview && cand.id === 'lean-constructor' && postTarget) {
+          preview = taggedToLatex(postTarget);
         }
         // Drop suggestions whose result is headed by a raw `match`/recursor — it
         // didn't reduce to anything useful (e.g. `unfold mul` exposing the

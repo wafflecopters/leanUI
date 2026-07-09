@@ -38,6 +38,9 @@ export interface CheckOptions {
   mathlib?: boolean;
   /** Hard timeout in ms (default 30s). */
   timeoutMs?: number;
+  /** Jump the analyze queue (goal/display refreshes) ahead of background work
+   *  (suggestion trials), so the visible goal state never starves. */
+  priority?: boolean;
 }
 
 export interface CheckResult {
@@ -334,13 +337,65 @@ function cacheKey(source: string, mathlib: boolean): string {
   return `${mathlib ? 'M' : 'C'}:${source}`;
 }
 
+/**
+ * Priority-aware concurrency limiter for analyze runs. Unbounded parallel Lean
+ * processes thrash the CPU (every run slows down, queues build, and the visible
+ * goal state lags minutes behind); a small cap keeps each run near its solo
+ * speed. Priority acquirers (goal/display refreshes) jump ahead of queued
+ * background work (suggestion trials) so the UI never starves.
+ */
+export interface AnalyzeLimiter {
+  acquire(priority: boolean): Promise<void>;
+  release(): void;
+}
+
+export function createAnalyzeLimiter(maxConcurrent: number): AnalyzeLimiter {
+  let running = 0;
+  const waiting: Array<{ priority: boolean; start: () => void }> = [];
+  return {
+    acquire(priority: boolean): Promise<void> {
+      if (running < maxConcurrent) {
+        running++;
+        return Promise.resolve();
+      }
+      return new Promise((start) => {
+        const entry = { priority, start };
+        if (priority) {
+          // Ahead of all non-priority waiters, behind earlier priority ones.
+          const i = waiting.findIndex((w) => !w.priority);
+          if (i === -1) waiting.push(entry);
+          else waiting.splice(i, 0, entry);
+        } else {
+          waiting.push(entry);
+        }
+      });
+    },
+    release(): void {
+      const next = waiting.shift();
+      if (next) next.start(); // the running slot transfers to the next waiter
+      else running = Math.max(0, running - 1);
+    },
+  };
+}
+
+const analyzeLimiter = createAnalyzeLimiter(2);
+
 export async function analyzeLeanSource(source: string, opts: CheckOptions = {}): Promise<AnalyzeResult> {
   const key = cacheKey(source, opts.mathlib === true);
   const hit = ANALYZE_CACHE.get(key);
   if (hit && !hit.bridgeError) {
     return { ...hit, durationMs: 0 };
   }
-  const result = await runAnalyze(source, opts);
+  await analyzeLimiter.acquire(opts.priority === true);
+  let result: AnalyzeResult;
+  try {
+    // Re-check the cache: an identical request may have completed while queued.
+    const hit2 = ANALYZE_CACHE.get(key);
+    if (hit2 && !hit2.bridgeError) return { ...hit2, durationMs: 0 };
+    result = await runAnalyze(source, opts);
+  } finally {
+    analyzeLimiter.release();
+  }
   if (!result.bridgeError) {
     ANALYZE_CACHE.set(key, result);
     if (ANALYZE_CACHE.size > ANALYZE_CACHE_MAX) {

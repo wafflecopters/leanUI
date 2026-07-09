@@ -100,7 +100,9 @@ export function useLeanProofGoals(args: UseLeanProofGoalsArgs): LeanProofGoals {
         const resp = await fetch('/api/analyze', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ source: assembled.source, mathlib }),
+          // priority: the VISIBLE goal state — jumps ahead of queued suggestion
+          // trials so applying a tactic updates the goal promptly.
+          body: JSON.stringify({ source: assembled.source, mathlib, priority: true }),
         });
         const data: AnalyzeResult = await resp.json();
         if (cancelled || reqId !== reqRef.current) return;
