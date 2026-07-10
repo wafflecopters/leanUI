@@ -4,13 +4,13 @@
   "version": "1.0.0",
   "scripts": {
     "lean:build": "cd lean && \"$HOME/.elan/bin/lake\" build extract",
-    "dev": "npm run lean:build && (tsx server/index.ts & rsbuild dev)",
+    "dev": "npm run lean:build && (tsx watch server/index.ts & rsbuild dev)",
     "dev:web": "rsbuild dev",
     "dev:server": "tsx server/index.ts",
     "build": "rsbuild build",
     "preview": "rsbuild preview",
-    "server": "tsx server/index.ts",
-    "start": "npm run lean:build && (tsx server/index.ts & rsbuild dev)",
+    "server": "tsx watch server/index.ts",
+    "start": "npm run lean:build && (tsx watch server/index.ts & rsbuild dev)",
     "test": "vitest run",
     "test:watch": "vitest"
   },

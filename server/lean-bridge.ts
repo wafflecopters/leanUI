@@ -64,14 +64,17 @@ const EXTRACT_LEAN = join(LEAN_PKG_DIR, 'Extract.lean');
 const EXTRACT_BIN = join(LEAN_PKG_DIR, '.lake', 'build', 'bin', 'extract');
 let extractBinExists: boolean | undefined;
 function hasExtractBin(): boolean {
-  if (extractBinExists === undefined) {
+  // Memoize only the POSITIVE result: if the binary doesn't exist yet (built
+  // after the server started), keep re-checking so a long-lived server picks
+  // it up instead of being stuck on the ~20x slower `lean --run` path forever.
+  if (extractBinExists !== true) {
     try {
       extractBinExists = existsSync(EXTRACT_BIN);
     } catch {
       extractBinExists = false;
     }
   }
-  return extractBinExists;
+  return extractBinExists === true;
 }
 
 /** PATH with elan's shim dir prepended so `lean`/`lake` resolve. */
