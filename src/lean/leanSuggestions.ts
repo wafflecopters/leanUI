@@ -75,6 +75,33 @@ export function targetedSuggestions(subtermText: string): LeanSuggestion[] {
   return [];
 }
 
+/** A hypothesis name not already in scope: `h`, then `h1`, `h2`, … Used when
+ *  committing a "use hypothesis with arguments" expression as a `have`. */
+export function freshHypName(existing: readonly string[]): string {
+  const taken = new Set(existing);
+  if (!taken.has('h')) return 'h';
+  for (let i = 1; ; i++) {
+    const name = `h${i}`;
+    if (!taken.has(name)) return name;
+  }
+}
+
+/**
+ * Validated action candidates for a CLICKED hypothesis — the Lean-path version
+ * of the TT editor's "click a hypothesis to use it": close the goal with it,
+ * apply it backwards, or destructure it. Each is trialed via the normal
+ * validation round-trip, so only the ones that actually work surface.
+ */
+export function hypothesisSuggestions(hyp: string): LeanSuggestion[] {
+  return [
+    { id: `hyp-exact:${hyp}`, label: `exact ${hyp}`, tactic: `exact ${hyp}`, kind: 'exact' },
+    { id: `hyp-apply:${hyp}`, label: `apply ${hyp}`, tactic: `apply ${hyp}`, kind: 'apply' },
+    // One `·` case bullet: the common destructure targets (records/structures
+    // like Limit, Pair, DPair) have a single constructor.
+    { id: `hyp-cases:${hyp}`, label: `cases ${hyp}`, tactic: `cases ${hyp}\n·\n  sorry`, validateTactic: `cases ${hyp}`, kind: 'apply' },
+  ];
+}
+
 /**
  * Parse `Try this:` suggestion text out of a Lean info message.
  *

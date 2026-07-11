@@ -24,7 +24,8 @@ import { useLeanValidatedSuggestions } from '../lean/useLeanValidatedSuggestions
 import { equalityLemmas, rankByGoalOverlap, unfoldableDefs, applySubgoalCount, rewriteSideGoalCount } from '../lean/rewriteCandidates';
 import { probeSimpFired } from '../lean/simpProbe';
 import { taggedToInteractiveGoal, subtermTextMap, taggedText, posForGoalId, subtermLatexAtPos } from '../lean/leanInteractiveGoal';
-import { targetedSuggestions, type LeanSuggestion } from '../lean/leanSuggestions';
+import { targetedSuggestions, freshHypName, hypothesisSuggestions, type LeanSuggestion } from '../lean/leanSuggestions';
+import { assembleProofInSource } from '../lean/assembleProofDecl';
 import { enrichInductionCaseNames } from '../lean/enrichInductionCases';
 
 /**
@@ -400,6 +401,65 @@ function LeanProofEditor({
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [hoveredSuggestion, setHoveredSuggestion] = useState<string | null>(null);
 
+  // ── hypothesis "use" flow: click a hypothesis chip to act with it ─────────
+  // (the Lean-path version of the TT editor's click-a-hypothesis interaction).
+  const [selectedHyp, setSelectedHyp] = useState<string | null>(null);
+  // null = closed; otherwise the expression being typed (`limF.eps_delta (eps/2) …`).
+  const [hypArgExpr, setHypArgExpr] = useState<string | null>(null);
+  const [hypArgError, setHypArgError] = useState<string | null>(null);
+  const [hypArgBusy, setHypArgBusy] = useState(false);
+  const hypNames = useMemo(
+    () => (lean.cursorGoal?.hyps ?? []).flatMap((h) => h.names),
+    [lean.cursorGoal],
+  );
+  // Selection is per-goal: moving to a different hole/goal resets it.
+  useEffect(() => {
+    setSelectedHyp(null);
+    setHypArgExpr(null);
+    setHypArgError(null);
+  }, [lean.cursorGoal]);
+
+  // Commit `have <fresh> := <expr>` after Lean validates it at this hole.
+  const submitHypArgs = async () => {
+    const expr = hypArgExpr?.trim();
+    if (!expr || hypArgBusy) return;
+    setHypArgBusy(true);
+    setHypArgError(null);
+    const tactic = `have ${freshHypName(hypNames)} := ${expr}`;
+    try {
+      const sub = leanTacticsToTree(tactic);
+      const applied = replaceNode(state.root, state.cursor.nodeId, sub);
+      const assembled = assembleProofInSource({ source, decl: { line: decl.line }, nextDeclLine, proof: applied });
+      const tacLine = assembled.lean.nodeRanges.get(sub.id)?.startLine;
+      const resp = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source: assembled.source,
+          prefix: assembled.prefixSource,
+          body: assembled.bodySource,
+          mathlib,
+          priority: true,
+        }),
+      });
+      const data = await resp.json();
+      const err = (data.messages ?? []).find(
+        (m: { severity: string; startLine: number }) => m.severity === 'error' && m.startLine === tacLine,
+      );
+      if (err) {
+        setHypArgError(String(err.text).split('\n')[0]);
+        return;
+      }
+      insertTactic(tactic);
+      setSelectedHyp(null);
+      setHypArgExpr(null);
+    } catch (e) {
+      setHypArgError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setHypArgBusy(false);
+    }
+  };
+
   // Candidate tactics to VALIDATE before showing ("try before suggest"):
   // 1. the file's rewrite lemmas (core-Lean stand-in for rw?), ranked by overlap
   //    with the goal and capped — each trialed via `rw [lemma]`;
@@ -473,12 +533,19 @@ function LeanProofEditor({
     () => [{ id: 'lean-constructor', label: 'constructor', tactic: 'constructor', kind: 'apply' as const }],
     [],
   );
+  // A clicked hypothesis contributes its own use-actions (exact/apply/cases),
+  // trialed like everything else so only the applicable ones show.
+  const hypActionCandidates = useMemo(
+    () => (selectedHyp ? hypothesisSuggestions(selectedHyp) : []),
+    [selectedHyp],
+  );
   // Dedup the combined candidate list by id. ORDER = trial priority (results
-  // stream in as they validate): heuristics and `constructor` are cheap and
-  // high-value (constructor is the way INTO structure goals like Limit), so
-  // they go before the larger rewrite/unfold batches.
+  // stream in as they validate): hypothesis actions, heuristics and
+  // `constructor` are cheap and high-value (constructor is the way INTO
+  // structure goals like Limit), so they go before the larger rewrite/unfold
+  // batches.
   const candSeen = new Set<string>();
-  const validateCandidates = [...heuristicCandidates, ...constructorCandidate, ...rewriteCandidates, ...unfoldCandidates, ...ringCandidate].filter((s) =>
+  const validateCandidates = [...hypActionCandidates, ...heuristicCandidates, ...constructorCandidate, ...rewriteCandidates, ...unfoldCandidates, ...ringCandidate].filter((s) =>
     candSeen.has(s.id) ? false : (candSeen.add(s.id), true),
   );
   const validated = useLeanValidatedSuggestions({
@@ -512,11 +579,87 @@ function LeanProofEditor({
   const allSuggestions = [...byLabel.values()];
   const anyLoading = suggest.loading || validated.loading;
 
-  const suggestionSlot =
+  // Hypothesis chips: click one to USE it (validated exact/apply/cases pills
+  // appear) or to give it arguments (`limF.eps_delta (eps/2) …` → have).
+  const hypChips =
+    goalOpen && hypNames.length > 0 ? (
+      <div style={{ marginTop: 8 }}>
+        <div style={{ fontSize: 10, color: C.faint, marginBottom: 4 }}>
+          USING <span style={{ color: C.label }}>(click a hypothesis)</span>
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+          {hypNames.map((h) => {
+            const hyp = (lean.cursorGoal?.hyps ?? []).find((x) => x.names.includes(h));
+            return (
+              <button
+                key={h}
+                onClick={() => {
+                  setSelectedHyp((cur) => (cur === h ? null : h));
+                  setHypArgExpr(null);
+                  setHypArgError(null);
+                }}
+                title={hyp ? taggedText(hyp.type) : h}
+                style={{
+                  fontFamily: mono,
+                  fontSize: 11,
+                  color: selectedHyp === h ? C.bg : C.purple,
+                  background: selectedHyp === h ? C.purple : 'transparent',
+                  border: `1px solid ${selectedHyp === h ? C.purple : C.border}`,
+                  borderRadius: 10,
+                  padding: '1px 8px',
+                  cursor: 'pointer',
+                }}
+              >
+                {h}
+              </button>
+            );
+          })}
+          {selectedHyp && hypArgExpr === null && (
+            <button
+              onClick={() => setHypArgExpr(`${selectedHyp}`)}
+              style={{ fontFamily: mono, fontSize: 11, color: C.blue, background: 'transparent', border: `1px dashed ${C.blue}`, borderRadius: 4, padding: '1px 8px', cursor: 'pointer' }}
+            >
+              give it arguments…
+            </button>
+          )}
+        </div>
+        {hypArgExpr !== null && (
+          <div style={{ marginTop: 6 }}>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <input
+                autoFocus
+                value={hypArgExpr}
+                onChange={(e) => setHypArgExpr(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void submitHypArgs();
+                  if (e.key === 'Escape') { setHypArgExpr(null); setHypArgError(null); }
+                }}
+                placeholder={`${selectedHyp}.field arg₁ arg₂ — any expression`}
+                spellCheck={false}
+                style={{ flex: 1, fontFamily: mono, fontSize: 12, color: C.text, background: C.bg, border: `1px solid ${hypArgError ? '#f85149' : C.border}`, borderRadius: 4, padding: '4px 8px', outline: 'none' }}
+              />
+              <button
+                onClick={() => void submitHypArgs()}
+                disabled={hypArgBusy}
+                style={{ fontFamily: mono, fontSize: 11, color: hypArgBusy ? C.faint : C.green, background: 'transparent', border: `1px solid ${hypArgBusy ? C.border : C.green}`, borderRadius: 4, padding: '3px 10px', cursor: hypArgBusy ? 'default' : 'pointer' }}
+              >
+                {hypArgBusy ? 'checking…' : 'have it'}
+              </button>
+            </div>
+            {hypArgError && (
+              <div style={{ marginTop: 4, fontSize: 11, color: '#f85149', fontFamily: mono }}>{hypArgError}</div>
+            )}
+          </div>
+        )}
+      </div>
+    ) : null;
+
+  const suggestionPills =
     goalOpen && (allSuggestions.length > 0 || anyLoading) ? (
       <div style={{ marginTop: 8 }}>
         <div style={{ fontSize: 10, color: C.faint, marginBottom: 4, display: 'flex', gap: 8 }}>
           <span>SUGGESTIONS</span>
+          {selectedHyp && <span style={{ color: C.label }}>for {selectedHyp}</span>}
           {selectedPath && subtermTexts.get(selectedPath) && (
             <span style={{ color: C.label }}>for {subtermTexts.get(selectedPath)}</span>
           )}
@@ -564,6 +707,14 @@ function LeanProofEditor({
           })}
         </div>
       </div>
+    ) : null;
+
+  const suggestionSlot =
+    hypChips || suggestionPills ? (
+      <>
+        {hypChips}
+        {suggestionPills}
+      </>
     ) : null;
 
   return (

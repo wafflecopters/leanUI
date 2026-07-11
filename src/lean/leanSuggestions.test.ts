@@ -88,3 +88,25 @@ describe('targetedSuggestions', () => {
     expect(targetedSuggestions('a ≤ b')).toEqual([]);
   });
 });
+
+describe('freshHypName', () => {
+  test('h when free, else h1, h2, …', async () => {
+    const { freshHypName } = await import('./leanSuggestions');
+    expect(freshHypName([])).toBe('h');
+    expect(freshHypName(['h'])).toBe('h1');
+    expect(freshHypName(['h', 'h1', 'h2'])).toBe('h3');
+    expect(freshHypName(['limF', 'eps'])).toBe('h');
+  });
+});
+
+describe('hypothesisSuggestions', () => {
+  test('offers exact/apply/cases for a clicked hypothesis', async () => {
+    const { hypothesisSuggestions } = await import('./leanSuggestions');
+    const s = hypothesisSuggestions('limF');
+    expect(s.map((x) => x.label)).toEqual(['exact limF', 'apply limF', 'cases limF']);
+    // cases validates via the bare form but applies with a case-bullet hole.
+    const cases = s.find((x) => x.label === 'cases limF')!;
+    expect(cases.validateTactic).toBe('cases limF');
+    expect(cases.tactic).toContain('·');
+  });
+});
