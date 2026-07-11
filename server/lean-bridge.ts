@@ -16,8 +16,9 @@
  * requires the package to have been built with `-K mathlib=on` first.
  */
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, rm, mkdir, copyFile } from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -383,7 +384,92 @@ export function createAnalyzeLimiter(maxConcurrent: number): AnalyzeLimiter {
 
 const analyzeLimiter = createAnalyzeLimiter(2);
 
-export async function analyzeLeanSource(source: string, opts: CheckOptions = {}): Promise<AnalyzeResult> {
+// ── prefix-olean cache ───────────────────────────────────────────────────────
+// Proof-editor round-trips (goal refreshes, suggestion trials) all share the
+// same file PREFIX — everything before the declaration being edited — and only
+// vary in the decl's proof. Re-elaborating that unchanged prefix dominated
+// every request (~2.5s for the Real-analysis preset). Instead we compile the
+// prefix ONCE to a .olean module (hash-keyed) and analyze
+// `import LeanuiP<hash>\n<body>` with LEAN_PATH pointing at the cache —
+// ~0.2s per request. The cache dir carries the project's lean-toolchain pin so
+// elan resolves the SAME toolchain the extract binary was built with
+// (mismatched toolchains fail with "incompatible olean header").
+interface PrefixModule {
+  ok: boolean;
+  dir: string;
+  modName: string;
+  /** Number of lines in the prefix (for coordinate remapping). */
+  lineCount: number;
+}
+
+const PREFIX_CACHE = new Map<string, Promise<PrefixModule>>();
+const PREFIX_CACHE_MAX = 20;
+const PREFIX_CACHE_ROOT = join(tmpdir(), 'leanui-prefix-cache');
+
+function prefixHash(prefix: string): string {
+  return createHash('sha256').update(prefix).digest('hex').slice(0, 16);
+}
+
+async function compilePrefixModule(prefix: string): Promise<PrefixModule> {
+  const hash = prefixHash(prefix);
+  const modName = `LeanuiP${hash}`;
+  const dir = join(PREFIX_CACHE_ROOT, hash);
+  const lineCount = prefix.split('\n').length;
+  const fail: PrefixModule = { ok: false, dir, modName, lineCount };
+  try {
+    await mkdir(dir, { recursive: true });
+    const olean = join(dir, `${modName}.olean`);
+    if (existsSync(olean)) return { ok: true, dir, modName, lineCount };
+    await writeFile(join(dir, `${modName}.lean`), prefix, 'utf8');
+    // Pin the toolchain: elan resolves `lean` per-cwd via lean-toolchain.
+    await copyFile(join(LEAN_PKG_DIR, 'lean-toolchain'), join(dir, 'lean-toolchain'));
+    const out = await run('lean', ['-o', olean, `${modName}.lean`], { cwd: dir, timeoutMs: 120_000 });
+    // Errors in the prefix (user mid-edit above the decl) → no usable module.
+    if (out.error || !existsSync(olean)) return fail;
+    return { ok: true, dir, modName, lineCount };
+  } catch {
+    return fail;
+  }
+}
+
+function getPrefixModule(prefix: string): Promise<PrefixModule> {
+  const hash = prefixHash(prefix);
+  let entry = PREFIX_CACHE.get(hash);
+  if (!entry) {
+    entry = compilePrefixModule(prefix);
+    PREFIX_CACHE.set(hash, entry);
+    if (PREFIX_CACHE.size > PREFIX_CACHE_MAX) {
+      const oldest = PREFIX_CACHE.keys().next().value;
+      if (oldest !== undefined) PREFIX_CACHE.delete(oldest); // olean stays on disk; harmless
+    }
+  }
+  return entry;
+}
+
+/** Shift all line numbers in an analyze result by `delta` (coordinate remap
+ *  from the `import`-header trial file back to the caller's full-source space). */
+export function shiftAnalyzeLines(
+  parsed: { messages: LeanMessage[]; goals: LeanGoal[]; declarations: LeanDeclaration[] },
+  delta: number,
+): { messages: LeanMessage[]; goals: LeanGoal[]; declarations: LeanDeclaration[] } {
+  const line = (n: number) => Math.max(1, n + delta);
+  return {
+    messages: parsed.messages.map((m) => ({ ...m, startLine: line(m.startLine), endLine: line(m.endLine) })),
+    goals: parsed.goals.map((g) => ({ ...g, startLine: line(g.startLine), endLine: line(g.endLine) })),
+    declarations: parsed.declarations.map((d) => ({ ...d, line: line(d.line) })),
+  };
+}
+
+export interface AnalyzeOptions extends CheckOptions {
+  /** Unchanged file prefix (everything before the decl being edited). When
+   *  given with `body`, the server compiles it once to a .olean and analyzes
+   *  `import <prefix-module>\n<body>` instead — much faster. Coordinates in
+   *  the result are in prefix+body (full-source) space. */
+  prefix?: string;
+  body?: string;
+}
+
+export async function analyzeLeanSource(source: string, opts: AnalyzeOptions = {}): Promise<AnalyzeResult> {
   const key = cacheKey(source, opts.mathlib === true);
   const hit = ANALYZE_CACHE.get(key);
   if (hit && !hit.bridgeError) {
@@ -395,7 +481,9 @@ export async function analyzeLeanSource(source: string, opts: CheckOptions = {})
     // Re-check the cache: an identical request may have completed while queued.
     const hit2 = ANALYZE_CACHE.get(key);
     if (hit2 && !hit2.bridgeError) return { ...hit2, durationMs: 0 };
-    result = await runAnalyze(source, opts);
+
+    // Prefix mode: core (non-mathlib) only — mathlib runs under lake env.
+    result = await runViaPrefix(opts) ?? await runAnalyze(source, opts);
   } finally {
     analyzeLimiter.release();
   }
@@ -407,6 +495,45 @@ export async function analyzeLeanSource(source: string, opts: CheckOptions = {})
     }
   }
   return result;
+}
+
+/** Try the prefix-olean fast path; null → caller falls back to a full analyze. */
+async function runViaPrefix(opts: AnalyzeOptions): Promise<AnalyzeResult | null> {
+  const { prefix, body } = opts;
+  if (opts.mathlib || !prefix || body === undefined || !hasExtractBin()) return null;
+  const mod = await getPrefixModule(prefix);
+  if (!mod.ok) return null; // prefix doesn't compile → full analyze reports why
+  const started = Date.now();
+  let dir: string | undefined;
+  try {
+    dir = await mkdtemp(join(tmpdir(), 'leanui-analyze-'));
+    const file = join(dir, 'Main.lean');
+    await writeFile(file, `import ${mod.modName}\n${body}`, 'utf8');
+    const out = await new Promise<ExecOut>((resolveExec) => {
+      execFile(
+        EXTRACT_BIN,
+        [file],
+        {
+          env: { ...leanEnv(), LEAN_PATH: mod.dir },
+          timeout: opts.timeoutMs ?? 60_000,
+          maxBuffer: 32 * 1024 * 1024,
+        },
+        (error, stdout, stderr) => resolveExec({ stdout: stdout ?? '', stderr: stderr ?? '', error: error ?? undefined }),
+      );
+    });
+    if (out.error) return null;
+    const parsed = parseAnalyzeJson(out.stdout);
+    if (!parsed) return null;
+    // Trial line 1 is the import; body line i sits at trial line i+1 but at
+    // full-source line prefixLines+i → shift by prefixLines-1.
+    const shifted = shiftAnalyzeLines(parsed, mod.lineCount - 1);
+    const success = !shifted.messages.some((m) => m.severity === 'error');
+    return { success, ...shifted, durationMs: Date.now() - started };
+  } catch {
+    return null;
+  } finally {
+    if (dir) await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 async function runAnalyze(source: string, opts: CheckOptions = {}): Promise<AnalyzeResult> {

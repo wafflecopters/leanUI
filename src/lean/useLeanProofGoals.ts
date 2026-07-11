@@ -101,8 +101,15 @@ export function useLeanProofGoals(args: UseLeanProofGoalsArgs): LeanProofGoals {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           // priority: the VISIBLE goal state — jumps ahead of queued suggestion
-          // trials so applying a tactic updates the goal promptly.
-          body: JSON.stringify({ source: assembled.source, mathlib, priority: true }),
+          // trials so applying a tactic updates the goal promptly. The
+          // prefix/body split enables the server's prefix-olean fast path.
+          body: JSON.stringify({
+            source: assembled.source,
+            prefix: assembled.prefixSource,
+            body: assembled.bodySource,
+            mathlib,
+            priority: true,
+          }),
         });
         const data: AnalyzeResult = await resp.json();
         if (cancelled || reqId !== reqRef.current) return;

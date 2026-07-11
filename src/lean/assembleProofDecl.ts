@@ -42,6 +42,12 @@ export interface AssembledProof {
   source: string;
   /** Node ranges + holes, with line numbers absolute in `source`. */
   lean: ProofTreeLean;
+  /** Prefix/body split for the server's prefix-olean fast path: `prefixSource`
+   *  is the UNCHANGED text before the decl (compiled once server-side),
+   *  `bodySource` the decl with the spliced proof. `source` === prefix+\n+body.
+   *  Absent for the standalone (assembleProofDecl) form. */
+  prefixSource?: string;
+  bodySource?: string;
 }
 
 /** Default theorem name when none supplied (kept identifier-safe). */
@@ -120,9 +126,16 @@ export function assembleProofInSource(input: AssembleInSourceInput): AssembledPr
   // every goal/suggestion round-trip re-elaborates the whole file, so a
   // shorter file is directly faster (the heavyweight sections after the
   // current decl never run). Node ranges are unaffected (only later lines go).
-  const fullSource = [...before, rebuiltRegion, ''].join('\n');
+  const prefixSource = before.join('\n');
+  const bodySource = `${rebuiltRegion}\n`;
 
-  return { source: fullSource, lean };
+  // The prefix/body split lets the server compile the unchanged prefix ONCE
+  // (to a .olean) and elaborate only the decl per request. Only offered when
+  // there IS a prefix (decl not at the top of the file).
+  if (before.length > 0) {
+    return { source: `${prefixSource}\n${bodySource}`, lean, prefixSource, bodySource };
+  }
+  return { source: bodySource, lean };
 }
 
 /** Keep only identifier-safe characters; fall back to the default name. */

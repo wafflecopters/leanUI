@@ -44,7 +44,13 @@ export async function probeSimpFired(args: ProbeSimpFiredArgs): Promise<string[]
     const resp = await fetch('/api/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source: assembled.source, mathlib }),
+      // prefix/body split → server's prefix-olean fast path.
+      body: JSON.stringify({
+        source: assembled.source,
+        prefix: assembled.prefixSource,
+        body: assembled.bodySource,
+        mathlib,
+      }),
     });
     data = (await resp.json()) as AnalyzeResult;
   } catch {

@@ -44,12 +44,22 @@ export interface UseLeanValidatedSuggestionsArgs {
 
 const EMPTY = { suggestions: [] as LeanSuggestion[], loading: false };
 
-async function analyze(source: string, mathlib?: boolean): Promise<AnalyzeResult | null> {
+async function analyze(
+  assembled: { source: string; prefixSource?: string; bodySource?: string },
+  mathlib?: boolean,
+): Promise<AnalyzeResult | null> {
   try {
     const resp = await fetch('/api/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source, mathlib }),
+      // prefix/body split → server's prefix-olean fast path (trials elaborate
+      // only the decl, not the whole file).
+      body: JSON.stringify({
+        source: assembled.source,
+        prefix: assembled.prefixSource,
+        body: assembled.bodySource,
+        mathlib,
+      }),
     });
     return (await resp.json()) as AnalyzeResult;
   } catch {
@@ -103,7 +113,7 @@ export function useLeanValidatedSuggestions(args: UseLeanValidatedSuggestionsArg
           return;
         }
         const tacticLine = assembled.lean.nodeRanges.get(sub.id)?.startLine;
-        const data = await analyze(assembled.source, mathlib);
+        const data = await analyze(assembled, mathlib);
         if (cancelled || reqId !== reqRef.current || !data || tacticLine === undefined) return;
         // A bridge failure (timeout, spawn error) is NOT a validation: with no
         // messages/goals the candidate would read as a spurious closer. Skip it.

@@ -31,12 +31,21 @@ export interface UseLeanSuggestionsArgs {
 
 const EMPTY: LeanSuggestionsState = { suggestions: [], loading: false };
 
-async function analyze(source: string, mathlib?: boolean): Promise<AnalyzeResult | null> {
+async function analyze(
+  assembled: { source: string; prefixSource?: string; bodySource?: string },
+  mathlib?: boolean,
+): Promise<AnalyzeResult | null> {
   try {
     const resp = await fetch('/api/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source, mathlib }),
+      // prefix/body split → server's prefix-olean fast path.
+      body: JSON.stringify({
+        source: assembled.source,
+        prefix: assembled.prefixSource,
+        body: assembled.bodySource,
+        mathlib,
+      }),
     });
     return (await resp.json()) as AnalyzeResult;
   } catch {
@@ -76,7 +85,7 @@ export function useLeanSuggestions(args: UseLeanSuggestionsArgs): LeanSuggestion
         } catch {
           continue;
         }
-        const data = await analyze(assembled.source, mathlib);
+        const data = await analyze(assembled, mathlib);
         if (cancelled || reqId !== reqRef.current) return;
         if (!data) continue;
         for (const s of suggestionsFromMessages(data.messages, kind)) {

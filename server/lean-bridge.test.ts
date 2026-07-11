@@ -145,3 +145,21 @@ describe('createAnalyzeLimiter', () => {
     limiter.release();
   });
 });
+
+describe('shiftAnalyzeLines', () => {
+  test('shifts message/goal/declaration lines by delta, clamped at 1', async () => {
+    const { shiftAnalyzeLines } = await import('./lean-bridge');
+    const parsed = {
+      messages: [{ severity: 'error' as const, startLine: 5, startCol: 2, endLine: 6, endCol: 0, text: 'x' }],
+      goals: [{ startLine: 3, startCol: 4, endLine: 3, endCol: 9, goals: [] }],
+      declarations: [{ name: 'd', kind: 'def' as const, prettyType: 'T', line: 2, col: 0 }],
+    };
+    const shifted = shiftAnalyzeLines(parsed, 800);
+    expect(shifted.messages[0]).toMatchObject({ startLine: 805, endLine: 806, startCol: 2 });
+    expect(shifted.goals[0]).toMatchObject({ startLine: 803, endLine: 803 });
+    expect(shifted.declarations[0].line).toBe(802);
+    // Clamp: an import-line artifact never maps below line 1.
+    const clamped = shiftAnalyzeLines(parsed, -10);
+    expect(clamped.declarations[0].line).toBe(1);
+  });
+});

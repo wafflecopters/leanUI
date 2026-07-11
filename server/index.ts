@@ -31,16 +31,26 @@ app.post('/api/check', async (req, res) => {
 // Richer analysis: diagnostics + tactic goal states (for goal-at-cursor).
 // `priority: true` (goal/display refreshes) jumps the analyze queue ahead of
 // background suggestion trials, so the visible goal state never starves.
+// `{prefix, body}` (instead of / alongside `source`) opts into the prefix-olean
+// fast path: the unchanged prefix compiles once, requests only elaborate `body`.
 app.post('/api/analyze', async (req, res) => {
-  const source: unknown = req.body?.source;
+  const rawSource: unknown = req.body?.source;
+  const prefix: unknown = req.body?.prefix;
+  const body: unknown = req.body?.body;
   const mathlib: boolean = req.body?.mathlib === true;
   const priority: boolean = req.body?.priority === true;
-  if (typeof source !== 'string') {
-    res.status(400).json({ error: 'Expected { source: string }' });
+  const hasSplit = typeof prefix === 'string' && typeof body === 'string';
+  const source = typeof rawSource === 'string' ? rawSource : hasSplit ? `${prefix}\n${body}` : null;
+  if (source === null) {
+    res.status(400).json({ error: 'Expected { source: string } or { prefix, body }' });
     return;
   }
   try {
-    const result = await analyzeLeanSource(source, { mathlib, priority });
+    const result = await analyzeLeanSource(source, {
+      mathlib,
+      priority,
+      ...(hasSplit ? { prefix: prefix as string, body: body as string } : {}),
+    });
     res.json(result);
   } catch (e) {
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
