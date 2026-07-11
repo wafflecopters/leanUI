@@ -709,9 +709,20 @@ function LeanProofEditor({
       </div>
     ) : null;
 
+  // While a goal refresh is in flight, the goal box above still shows the
+  // PREVIOUS state — say so, loudly enough that "my tactic did nothing?!"
+  // never happens again, but without hiding/reflowing anything.
+  const goalUpdatingHint =
+    goalOpen && lean.loading ? (
+      <div style={{ marginTop: 6, fontSize: 11, color: '#d29922', fontFamily: mono }}>
+        ⟳ goal updating — the state shown above may be one step behind…
+      </div>
+    ) : null;
+
   const suggestionSlot =
-    hypChips || suggestionPills ? (
+    goalUpdatingHint || hypChips || suggestionPills ? (
       <>
+        {goalUpdatingHint}
         {hypChips}
         {suggestionPills}
       </>
