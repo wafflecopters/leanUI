@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ProofNode, ProofNodeId } from '../proof-tree/proof-tree';
 import type { AnalyzeResult } from './types';
+import { analyzeRequest } from './analyzeClient';
 import { assembleProofInSource } from './assembleProofDecl';
 import { DISCOVERY_TACTICS, suggestionsFromMessages, type LeanSuggestion } from './leanSuggestions';
 
@@ -31,26 +32,16 @@ export interface UseLeanSuggestionsArgs {
 
 const EMPTY: LeanSuggestionsState = { suggestions: [], loading: false };
 
-async function analyze(
+// Discovery probes are BACKGROUND requests (see analyzeClient: browser
+// connection pool must stay clear for the goal refresh).
+function analyze(
   assembled: { source: string; prefixSource?: string; bodySource?: string },
   mathlib?: boolean,
 ): Promise<AnalyzeResult | null> {
-  try {
-    const resp = await fetch('/api/analyze', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      // prefix/body split → server's prefix-olean fast path.
-      body: JSON.stringify({
-        source: assembled.source,
-        prefix: assembled.prefixSource,
-        body: assembled.bodySource,
-        mathlib,
-      }),
-    });
-    return (await resp.json()) as AnalyzeResult;
-  } catch {
-    return null;
-  }
+  return analyzeRequest(
+    { source: assembled.source, prefix: assembled.prefixSource, body: assembled.bodySource, mathlib },
+    { background: true },
+  );
 }
 
 export function useLeanSuggestions(args: UseLeanSuggestionsArgs): LeanSuggestionsState {

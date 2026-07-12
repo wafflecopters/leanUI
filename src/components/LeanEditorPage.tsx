@@ -6,6 +6,7 @@ import type { AnalyzeResult, LeanDeclaration, LeanGoal, LeanGoalState, LeanMessa
 import { pickGoalAtCursor } from '../lean/goalAtCursor';
 import { LEAN_PRESETS, DEFAULT_LEAN_SOURCE } from '../lean/presets';
 import { parseEditorUrlParams, presetSlug, resolveSymbolName } from '../lean/presetLookup';
+import { analyzeRequest } from '../lean/analyzeClient';
 import { LeanMathView } from './LeanMathView';
 import { LeanMathEditor } from './LeanMathEditor';
 import { LeanWysiwygPanel } from './LeanWysiwygPanel';
@@ -145,17 +146,13 @@ export function LeanEditorPage() {
     const handle = setTimeout(async () => {
       setLoading(true);
       try {
-        const resp = await fetch('/api/analyze', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          // NON-priority: this full-file analyze (decl cards, markers,
-          // messages) is the slowest and least latency-critical request — as
-          // priority it stole a worker from the goal refresh on every proof
-          // edit, making tactics feel slow. Markers arriving a couple of
-          // seconds late is fine; a stale goal is not.
-          body: JSON.stringify({ source, mathlib }),
-        });
-        const data: AnalyzeResult = await resp.json();
+        // BACKGROUND + non-priority: this full-file analyze (decl cards,
+        // markers, messages) is the slowest and least latency-critical
+        // request — it must hold neither a browser connection nor a server
+        // worker the goal refresh needs. Markers arriving a couple of seconds
+        // late is fine; a stale goal is not.
+        const data = await analyzeRequest({ source, mathlib }, { background: true });
+        if (!data) throw new Error('analyze request failed');
         if (!cancelled) setResult(data);
       } catch (e) {
         if (!cancelled) {

@@ -3,6 +3,7 @@ import type { ProofNode, ProofNodeId } from '../proof-tree/proof-tree';
 import type { NodeGoalInfo, TypedProofContext } from '../proof-tree/goal-computation';
 import type { AnalyzeResult, LeanGoal, LeanGoalState } from './types';
 import { assembleProofInSource } from './assembleProofDecl';
+import { analyzeRequest } from './analyzeClient';
 import { mapLeanGoalsToNodes } from './leanGoalMapping';
 
 /**
@@ -97,22 +98,19 @@ export function useLeanProofGoals(args: UseLeanProofGoalsArgs): LeanProofGoals {
         return;
       }
       try {
-        const resp = await fetch('/api/analyze', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          // priority: the VISIBLE goal state — jumps ahead of queued suggestion
-          // trials so applying a tactic updates the goal promptly. The
-          // prefix/body split enables the server's prefix-olean fast path.
-          body: JSON.stringify({
-            source: assembled.source,
-            prefix: assembled.prefixSource,
-            body: assembled.bodySource,
-            mathlib,
-            priority: true,
-          }),
+        // FOREGROUND + priority: the VISIBLE goal state — bypasses the client's
+        // background-fetch semaphore (browser connections are ~6 per origin;
+        // queued suggestion trials must never starve this fetch) AND jumps the
+        // server queue, so applying a tactic updates the goal promptly.
+        const data = await analyzeRequest({
+          source: assembled.source,
+          prefix: assembled.prefixSource,
+          body: assembled.bodySource,
+          mathlib,
+          priority: true,
         });
-        const data: AnalyzeResult = await resp.json();
         if (cancelled || reqId !== reqRef.current) return;
+        if (!data) throw new Error('analyze request failed');
 
         const goalMap = mapLeanGoalsToNodes({
           nodeRanges: assembled.lean.nodeRanges,
@@ -141,7 +139,7 @@ export function useLeanProofGoals(args: UseLeanProofGoalsArgs): LeanProofGoals {
         let cursorGoal: LeanGoalState | null = null;
         if (cursorRange) {
           const g: LeanGoal | undefined = data.goals.find(
-            (x) => x.startLine === cursorRange.startLine && x.startCol === cursorRange.startCol,
+            (x: LeanGoal) => x.startLine === cursorRange.startLine && x.startCol === cursorRange.startCol,
           );
           cursorGoal = g && g.goals.length > 0 ? g.goals[0] : null;
         }

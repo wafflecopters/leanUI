@@ -17,6 +17,7 @@ import { useEffect, useRef, useState } from 'react';
 import { type ProofNode, type ProofNodeId, replaceNode } from '../proof-tree/proof-tree';
 import { findFirstHole } from '../proof-tree/tactic-to-tree';
 import type { AnalyzeResult } from './types';
+import { analyzeRequest } from './analyzeClient';
 import { assembleProofInSource } from './assembleProofDecl';
 import { leanTacticsToTree } from './leanTacticsToTree';
 import { subtermLatexAtPos } from './leanInteractiveGoal';
@@ -44,27 +45,16 @@ export interface UseLeanValidatedSuggestionsArgs {
 
 const EMPTY = { suggestions: [] as LeanSuggestion[], loading: false };
 
-async function analyze(
+// Trials are BACKGROUND requests: throttled client-side so they never exhaust
+// the browser's per-origin connection pool and starve the goal refresh.
+function analyze(
   assembled: { source: string; prefixSource?: string; bodySource?: string },
   mathlib?: boolean,
 ): Promise<AnalyzeResult | null> {
-  try {
-    const resp = await fetch('/api/analyze', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      // prefix/body split → server's prefix-olean fast path (trials elaborate
-      // only the decl, not the whole file).
-      body: JSON.stringify({
-        source: assembled.source,
-        prefix: assembled.prefixSource,
-        body: assembled.bodySource,
-        mathlib,
-      }),
-    });
-    return (await resp.json()) as AnalyzeResult;
-  } catch {
-    return null;
-  }
+  return analyzeRequest(
+    { source: assembled.source, prefix: assembled.prefixSource, body: assembled.bodySource, mathlib },
+    { background: true },
+  );
 }
 
 /** Map an array through `fn` with at most `limit` concurrent calls. */
@@ -99,7 +89,7 @@ export function useLeanValidatedSuggestions(args: UseLeanValidatedSuggestionsArg
 
     const handle = setTimeout(async () => {
       const valid: LeanSuggestion[] = [];
-      await mapPool(candidates, 4, async (cand) => {
+      await mapPool(candidates, 3, async (cand) => {
         if (cancelled || reqId !== reqRef.current) return;
         let assembled;
         let sub;

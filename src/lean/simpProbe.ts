@@ -7,6 +7,7 @@
 import type { ProofNode, ProofNodeId } from '../proof-tree/proof-tree';
 import type { AnalyzeResult } from './types';
 import { assembleProofInSource } from './assembleProofDecl';
+import { analyzeRequest } from './analyzeClient';
 
 export interface ProbeSimpFiredArgs {
   source: string;
@@ -39,23 +40,12 @@ export async function probeSimpFired(args: ProbeSimpFiredArgs): Promise<string[]
   } catch {
     return null;
   }
-  let data: AnalyzeResult;
-  try {
-    const resp = await fetch('/api/analyze', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      // prefix/body split → server's prefix-olean fast path.
-      body: JSON.stringify({
-        source: assembled.source,
-        prefix: assembled.prefixSource,
-        body: assembled.bodySource,
-        mathlib,
-      }),
-    });
-    data = (await resp.json()) as AnalyzeResult;
-  } catch {
-    return null;
-  }
+  // Background request: must not hold a browser connection the goal refresh needs.
+  const data = await analyzeRequest(
+    { source: assembled.source, prefix: assembled.prefixSource, body: assembled.bodySource, mathlib },
+    { background: true },
+  );
+  if (!data) return null;
   // `Try this: … simp only [a, b, c]` — pull out the fired lemma list.
   for (const m of data.messages) {
     const mm = m.text.match(/simp only \[([^\]]*)\]/);

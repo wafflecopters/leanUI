@@ -26,6 +26,7 @@ import { probeSimpFired } from '../lean/simpProbe';
 import { taggedToInteractiveGoal, subtermTextMap, taggedText, posForGoalId, subtermLatexAtPos } from '../lean/leanInteractiveGoal';
 import { targetedSuggestions, freshHypName, hypothesisSuggestions, type LeanSuggestion } from '../lean/leanSuggestions';
 import { assembleProofInSource } from '../lean/assembleProofDecl';
+import { analyzeRequest } from '../lean/analyzeClient';
 import { enrichInductionCaseNames } from '../lean/enrichInductionCases';
 
 /**
@@ -431,18 +432,18 @@ function LeanProofEditor({
       const applied = replaceNode(state.root, state.cursor.nodeId, sub);
       const assembled = assembleProofInSource({ source, decl: { line: decl.line }, nextDeclLine, proof: applied });
       const tacLine = assembled.lean.nodeRanges.get(sub.id)?.startLine;
-      const resp = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          source: assembled.source,
-          prefix: assembled.prefixSource,
-          body: assembled.bodySource,
-          mathlib,
-          priority: true,
-        }),
+      // Foreground: the user is waiting on this exact validation.
+      const data = await analyzeRequest({
+        source: assembled.source,
+        prefix: assembled.prefixSource,
+        body: assembled.bodySource,
+        mathlib,
+        priority: true,
       });
-      const data = await resp.json();
+      if (!data) {
+        setHypArgError('analyze request failed');
+        return;
+      }
       const err = (data.messages ?? []).find(
         (m: { severity: string; startLine: number }) => m.severity === 'error' && m.startLine === tacLine,
       );
