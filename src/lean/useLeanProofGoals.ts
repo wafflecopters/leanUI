@@ -164,7 +164,7 @@ export function useLeanProofGoals(args: UseLeanProofGoalsArgs): LeanProofGoals {
           });
         }
       }
-    }, 150);
+    }, 60);
 
     return () => {
       cancelled = true;

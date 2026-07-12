@@ -106,8 +106,15 @@ export function LeanEditorPage() {
     });
   }, []);
 
+  // Did the latest source change come from a structured-proof write-back?
+  // Those re-splice one decl's proof; the full-file analyze they trigger is
+  // pure background (markers/decl list barely change) and must NOT contend
+  // with the interactive goal refresh — so it gets a long debounce.
+  const proofEditRef = useRef(false);
+
   // Imperatively set editor text (preset load) so cursor handling stays sane.
-  const loadSource = useCallback((code: string) => {
+  const loadSource = useCallback((code: string, fromProofEdit = false) => {
+    proofEditRef.current = fromProofEdit;
     setSource(code);
     const ed = editorRef.current;
     const model = ed?.getModel();
@@ -128,17 +135,25 @@ export function LeanEditorPage() {
     [loadSource, setSearchParams],
   );
 
-  // Debounced analyze on source / mathlib change.
+  // Debounced analyze on source / mathlib change. Proof write-backs wait much
+  // longer: during an interactive proof burst (tactic click every second or
+  // two) the timer keeps resetting, so the heavyweight full-file analyze only
+  // runs once the user pauses — never racing the goal refresh for a worker.
   useEffect(() => {
     let cancelled = false;
+    const delay = proofEditRef.current ? 2500 : 450;
     const handle = setTimeout(async () => {
       setLoading(true);
       try {
         const resp = await fetch('/api/analyze', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          // priority: drives the whole page (decl cards, markers, messages).
-          body: JSON.stringify({ source, mathlib, priority: true }),
+          // NON-priority: this full-file analyze (decl cards, markers,
+          // messages) is the slowest and least latency-critical request — as
+          // priority it stole a worker from the goal refresh on every proof
+          // edit, making tactics feel slow. Markers arriving a couple of
+          // seconds late is fine; a stale goal is not.
+          body: JSON.stringify({ source, mathlib }),
         });
         const data: AnalyzeResult = await resp.json();
         if (!cancelled) setResult(data);
@@ -156,7 +171,7 @@ export function LeanEditorPage() {
       } finally {
         if (!cancelled) setLoading(false);
       }
-    }, 450);
+    }, delay);
     return () => {
       cancelled = true;
       clearTimeout(handle);
@@ -275,7 +290,7 @@ export function LeanEditorPage() {
               theme="vs-dark"
               defaultLanguage="plaintext"
               value={source}
-              onChange={(v) => setSource(v ?? '')}
+              onChange={(v) => { proofEditRef.current = false; setSource(v ?? ''); }}
               onMount={handleMount}
               options={{ minimap: { enabled: false }, fontSize: 14, scrollBeyondLastLine: false, automaticLayout: true }}
             />
@@ -292,7 +307,7 @@ export function LeanEditorPage() {
                   goals={goals}
                   source={source}
                   mathlib={mathlib}
-                  onSourceChange={loadSource}
+                  onSourceChange={(next) => loadSource(next, true)}
                   autoExpandSymbol={autoExpandName}
                   onAutoExpandConsumed={() => setPendingSymbol(null)}
                 />

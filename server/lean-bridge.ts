@@ -382,7 +382,7 @@ export function createAnalyzeLimiter(maxConcurrent: number): AnalyzeLimiter {
   };
 }
 
-const analyzeLimiter = createAnalyzeLimiter(2);
+const analyzeLimiter = createAnalyzeLimiter(3);
 
 // ── persistent extract workers (`extract --serve`) ──────────────────────────
 // One-shot extract runs pay process boot + `importModules` on EVERY request —
@@ -457,7 +457,7 @@ class ExtractWorker {
   }
 }
 
-const EXTRACT_WORKERS = [new ExtractWorker(), new ExtractWorker()];
+const EXTRACT_WORKERS = [new ExtractWorker(), new ExtractWorker(), new ExtractWorker()];
 
 /** Run one analyze through a persistent worker. Null → fall back to one-shot
  *  (worker busy/unavailable, old binary without --serve, crash, timeout). */
