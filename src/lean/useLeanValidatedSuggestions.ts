@@ -168,7 +168,7 @@ export function useLeanValidatedSuggestions(args: UseLeanValidatedSuggestionsArg
         setState({ suggestions: [...valid], loading: true });
       });
       if (!cancelled && reqId === reqRef.current) setState({ suggestions: valid, loading: false });
-    }, 450);
+    }, 250);
 
     return () => {
       cancelled = true;

@@ -15,7 +15,7 @@
  * Lean package (`/lean`) as cwd so Mathlib is on the import path. That path
  * requires the package to have been built with `-K mathlib=on` first.
  */
-import { execFile } from 'node:child_process';
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdtemp, writeFile, rm, mkdir, copyFile } from 'node:fs/promises';
@@ -384,6 +384,98 @@ export function createAnalyzeLimiter(maxConcurrent: number): AnalyzeLimiter {
 
 const analyzeLimiter = createAnalyzeLimiter(2);
 
+// ── persistent extract workers (`extract --serve`) ──────────────────────────
+// One-shot extract runs pay process boot + `importModules` on EVERY request —
+// the reason goal updates felt slow next to the text editor, whose
+// `lean --server` keeps the environment resident. `--serve` mode is our
+// version of the same: a long-lived extract process with an env cache, one
+// file path in per stdin line, one JSON out per stdout line. Warm requests
+// run in ~20ms. Pool size matches the analyze limiter cap, so an acquired
+// slot always finds a free worker.
+
+class ExtractWorker {
+  private child: ChildProcessWithoutNullStreams | null = null;
+  private waiters: Array<(line: string | null) => void> = [];
+  private buf = '';
+  private served = 0;
+  busy = false;
+
+  private ensure(): boolean {
+    if (this.child) return true;
+    if (!hasExtractBin()) return false;
+    try {
+      this.child = spawn(EXTRACT_BIN, ['--serve'], {
+        env: { ...leanEnv(), LEAN_PATH: PREFIX_CACHE_ROOT },
+        cwd: LEAN_PKG_DIR, // lean-toolchain pin for findSysroot
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } catch {
+      this.child = null;
+      return false;
+    }
+    this.buf = '';
+    this.served = 0;
+    this.child.stdout.on('data', (d: Buffer) => {
+      this.buf += d.toString('utf8');
+      let i;
+      while ((i = this.buf.indexOf('\n')) >= 0) {
+        const line = this.buf.slice(0, i);
+        this.buf = this.buf.slice(i + 1);
+        this.waiters.shift()?.(line);
+      }
+    });
+    this.child.stderr.on('data', () => {}); // linter notes etc. — not part of the protocol
+    const dead = () => {
+      this.child = null;
+      // Flush anyone waiting: their request died with the process.
+      for (const w of this.waiters.splice(0)) w(null);
+    };
+    this.child.on('exit', dead);
+    this.child.on('error', dead);
+    return true;
+  }
+
+  /** One request (serial per worker). Null → caller should fall back. */
+  async request(path: string, timeoutMs: number): Promise<string | null> {
+    if (this.busy || !this.ensure()) return null;
+    this.busy = true;
+    try {
+      const reply = new Promise<string | null>((res) => this.waiters.push(res));
+      this.child!.stdin.write(`${path}\n`);
+      const timer = setTimeout(() => this.child?.kill(), timeoutMs); // kill → exit → waiters flushed null
+      const line = await reply;
+      clearTimeout(timer);
+      // Recycle periodically: each request's elaboration state accumulates.
+      if (++this.served >= 400) {
+        this.child?.kill();
+        this.child = null;
+      }
+      return line;
+    } finally {
+      this.busy = false;
+    }
+  }
+}
+
+const EXTRACT_WORKERS = [new ExtractWorker(), new ExtractWorker()];
+
+/** Run one analyze through a persistent worker. Null → fall back to one-shot
+ *  (worker busy/unavailable, old binary without --serve, crash, timeout). */
+async function requestViaWorker(file: string, timeoutMs: number): Promise<ReturnType<typeof parseAnalyzeJson> | null> {
+  const worker = EXTRACT_WORKERS.find((w) => !w.busy);
+  if (!worker) return null;
+  const line = await worker.request(file, timeoutMs);
+  if (line === null) return null;
+  let obj: any;
+  try {
+    obj = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (obj && typeof obj === 'object' && typeof obj.serveError === 'string') return null;
+  return parseAnalyzeJson(line);
+}
+
 // ── prefix-olean cache ───────────────────────────────────────────────────────
 // Proof-editor round-trips (goal refreshes, suggestion trials) all share the
 // same file PREFIX — everything before the declaration being edited — and only
@@ -413,7 +505,10 @@ function prefixHash(prefix: string): string {
 async function compilePrefixModule(prefix: string): Promise<PrefixModule> {
   const hash = prefixHash(prefix);
   const modName = `LeanuiP${hash}`;
-  const dir = join(PREFIX_CACHE_ROOT, hash);
+  // FLAT layout: every prefix module lives directly in the cache root (names
+  // are hash-unique), so ONE `LEAN_PATH=<root>` serves all of them — required
+  // by the persistent --serve workers, whose search path is fixed at spawn.
+  const dir = PREFIX_CACHE_ROOT;
   const lineCount = prefix.split('\n').length;
   const fail: PrefixModule = { ok: false, dir, modName, lineCount };
   try {
@@ -436,7 +531,12 @@ function getPrefixModule(prefix: string): Promise<PrefixModule> {
   const hash = prefixHash(prefix);
   let entry = PREFIX_CACHE.get(hash);
   if (!entry) {
-    entry = compilePrefixModule(prefix);
+    entry = compilePrefixModule(prefix).then((mod) => {
+      // Pre-warm the persistent workers' env caches with the new module, so
+      // the FIRST interactive request doesn't pay the ~0.7s import either.
+      if (mod.ok) void warmWorkersForPrefix(mod);
+      return mod;
+    });
     PREFIX_CACHE.set(hash, entry);
     if (PREFIX_CACHE.size > PREFIX_CACHE_MAX) {
       const oldest = PREFIX_CACHE.keys().next().value;
@@ -444,6 +544,34 @@ function getPrefixModule(prefix: string): Promise<PrefixModule> {
     }
   }
   return entry;
+}
+
+/** Fire-and-forget: run a trivial `import <prefix>` file through every worker
+ *  so their env caches hold the module before real requests arrive. Each
+ *  warm-up holds a NON-priority limiter slot — never competing with real
+ *  requests for a worker (the limiter cap equals the pool size, so a real
+ *  slot-holder must always find a free worker). */
+async function warmWorkersForPrefix(mod: PrefixModule): Promise<void> {
+  let dir: string | undefined;
+  try {
+    dir = await mkdtemp(join(tmpdir(), 'leanui-warm-'));
+    const file = join(dir, 'Warm.lean');
+    await writeFile(file, `import ${mod.modName}\n`, 'utf8');
+    await Promise.all(
+      EXTRACT_WORKERS.map(async (w) => {
+        await analyzeLimiter.acquire(false);
+        try {
+          await w.request(file, 120_000); // null if busy → it warms on first real use
+        } finally {
+          analyzeLimiter.release();
+        }
+      }),
+    );
+  } catch {
+    // Warmup is best-effort; real requests just pay the import themselves.
+  } finally {
+    if (dir) await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 /** Shift all line numbers in an analyze result by `delta` (coordinate remap
@@ -509,20 +637,22 @@ async function runViaPrefix(opts: AnalyzeOptions): Promise<AnalyzeResult | null>
     dir = await mkdtemp(join(tmpdir(), 'leanui-analyze-'));
     const file = join(dir, 'Main.lean');
     await writeFile(file, `import ${mod.modName}\n${body}`, 'utf8');
-    const out = await new Promise<ExecOut>((resolveExec) => {
-      execFile(
-        EXTRACT_BIN,
-        [file],
-        {
-          env: { ...leanEnv(), LEAN_PATH: mod.dir },
-          timeout: opts.timeoutMs ?? 60_000,
-          maxBuffer: 32 * 1024 * 1024,
-        },
-        (error, stdout, stderr) => resolveExec({ stdout: stdout ?? '', stderr: stderr ?? '', error: error ?? undefined }),
-      );
-    });
-    if (out.error) return null;
-    const parsed = parseAnalyzeJson(out.stdout);
+    const timeoutMs = opts.timeoutMs ?? 60_000;
+
+    // Persistent worker first (~20ms warm); one-shot process as fallback.
+    let parsed = await requestViaWorker(file, timeoutMs);
+    if (!parsed) {
+      const out = await new Promise<ExecOut>((resolveExec) => {
+        execFile(
+          EXTRACT_BIN,
+          [file],
+          { env: { ...leanEnv(), LEAN_PATH: mod.dir }, timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 },
+          (error, stdout, stderr) => resolveExec({ stdout: stdout ?? '', stderr: stderr ?? '', error: error ?? undefined }),
+        );
+      });
+      if (out.error) return null;
+      parsed = parseAnalyzeJson(out.stdout);
+    }
     if (!parsed) return null;
     // Trial line 1 is the import; body line i sits at trial line i+1 but at
     // full-source line prefixLines+i → shift by prefixLines-1.
@@ -546,8 +676,16 @@ async function runAnalyze(source: string, opts: CheckOptions = {}): Promise<Anal
     await writeFile(file, source, 'utf8');
 
     // Mathlib mode runs under `lake env` (interpreted) for the import path.
-    // Core mode prefers the precompiled binary (supportInterpreter=true, so it
-    // elaborates correctly), falling back to `lean --run` if not yet built.
+    // Core mode prefers a persistent --serve worker (env stays resident, ~20ms
+    // warm), then the one-shot precompiled binary (supportInterpreter=true, so
+    // it elaborates correctly), then `lean --run` if not yet built.
+    if (!opts.mathlib && hasExtractBin()) {
+      const parsed = await requestViaWorker(file, timeoutMs);
+      if (parsed) {
+        const success = !parsed.messages.some((m) => m.severity === 'error');
+        return { success, ...parsed, durationMs: Date.now() - started };
+      }
+    }
     let out: ExecOut;
     let cmdName: string;
     if (opts.mathlib) {

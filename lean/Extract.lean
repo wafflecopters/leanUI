@@ -51,16 +51,16 @@ private def sevString : MessageSeverity → String
 private def mkRangeFields (sl sc el ec : Nat) : List (String × Json) :=
   [("startLine", natJ sl), ("startCol", natJ sc), ("endLine", natJ el), ("endCol", natJ ec)]
 
--- `unsafe` because `enableInitializersExecution` (needed for `loadExts`) is unsafe.
-unsafe def main (args : List String) : IO Unit := do
-  let some path := args[0]?
-    | do IO.eprintln "usage: Extract <file.lean> [mathlib]"; IO.Process.exit 1
-  let input ← IO.FS.readFile (System.FilePath.mk path)
-  -- Required before `importModules (loadExts := true)` so module initializers
-  -- (which register parsers/notation/elaborators) may run.
-  Lean.enableInitializersExecution
-  Lean.initSearchPath (← Lean.findSysroot)
+/-- Environment cache for `--serve` mode, keyed by the import set. Environments
+    are immutable — `Command.mkState` extends a copy — so reusing one across
+    requests is safe, and skips the `importModules` cost (the dominant cost of
+    a one-shot run) whenever the import set repeats. -/
+abbrev EnvCache := IO.Ref (Array (String × Environment))
 
+/-- Analyze one file, reusing a cached environment for its import set when
+    possible. Emits the same JSON as the one-shot mode always did. -/
+unsafe def analyzeFile (cache : EnvCache) (path : String) : IO Json := do
+  let input ← IO.FS.readFile (System.FilePath.mk path)
   -- Build the environment from the file's own header. `headerToImports` returns
   -- the auto-prelude `Init` (+ its meta import) plus any `import` lines the user
   -- wrote — exactly the import set `lean --json` uses. We import them ourselves
@@ -71,10 +71,21 @@ unsafe def main (args : List String) : IO Unit := do
   let inputCtx := Parser.mkInputContext input path
   let (header, parserState, msgLog) ← Parser.parseHeader inputCtx
   let imports := headerToImports header
-  -- `loadExts := true` is essential: it loads the parser/notation/elab
-  -- extensions (not just the constants), so `+`, numeric literals, and tactic
-  -- syntax actually parse. Without it the command parser rejects `+` etc.
-  let env ← importModules imports {} (trustLevel := 1024) (loadExts := true)
+  let key := String.intercalate "," (imports.toList.map (fun i => i.module.toString))
+  let cached ← cache.get
+  let env ← match cached.find? (fun e => e.1 == key) with
+    | some (_, e) => pure e
+    | none => do
+        -- `loadExts := true` is essential: it loads the parser/notation/elab
+        -- extensions (not just the constants), so `+`, numeric literals, and
+        -- tactic syntax actually parse (and the prefix module's notations /
+        -- unexpanders survive the olean round-trip).
+        let e ← importModules imports {} (trustLevel := 1024) (loadExts := true)
+        -- Bounded cache (envs are large); drop the oldest import set.
+        cache.modify fun a =>
+          let a := a.push (key, e)
+          if a.size > 4 then a.eraseIdx! 0 else a
+        pure e
 
   let cmdState := Command.mkState env msgLog {}
   let cmdState := { cmdState with infoState.enabled := true }
@@ -230,8 +241,46 @@ unsafe def main (args : List String) : IO Unit := do
   let sortedRows := declRows.qsort (fun a b => a.1 < b.1 || (a.1 == b.1 && a.2.1 < b.2.1))
   let declarations := sortedRows.map (·.2.2)
 
-  let out := Json.mkObj
+  return Json.mkObj
     [("messages", Json.arr messages),
      ("goals", Json.arr goals),
      ("declarations", Json.arr declarations)]
-  IO.println out.compress
+
+/-- `--serve` mode: a persistent request loop — the same trick `lean --server`
+    uses to make the text editor fast. One file path per stdin line; one
+    compressed JSON response per stdout line. The env cache persists across
+    requests, so repeat analyses skip `importModules` entirely (the dominant
+    per-request cost) and only elaborate the file's own commands. -/
+unsafe def serveLoop (cache : EnvCache) : IO Unit := do
+  let stdin ← IO.getStdin
+  let line ← stdin.getLine
+  if line.isEmpty then return -- EOF: parent closed stdin, shut down.
+  let path := line.trim
+  if path.isEmpty then
+    serveLoop cache
+  else
+    let out ← try
+        analyzeFile cache path
+      catch e =>
+        pure <| Json.mkObj [("serveError", Json.str (toString e))]
+    IO.println out.compress
+    (← IO.getStdout).flush
+    serveLoop cache
+
+-- `unsafe` because `enableInitializersExecution` (needed for `loadExts`) is unsafe.
+unsafe def main (args : List String) : IO Unit := do
+  -- Required before `importModules (loadExts := true)` so module initializers
+  -- (which register parsers/notation/elaborators) may run.
+  Lean.enableInitializersExecution
+  Lean.initSearchPath (← Lean.findSysroot)
+  match args with
+  | ["--serve"] => do
+      let cache : EnvCache ← IO.mkRef #[]
+      serveLoop cache
+  | path :: _ => do
+      let cache : EnvCache ← IO.mkRef #[]
+      let out ← analyzeFile cache path
+      IO.println out.compress
+  | [] => do
+      IO.eprintln "usage: Extract (<file.lean> [mathlib] | --serve)"
+      IO.Process.exit 1
