@@ -79,7 +79,14 @@ export function useLeanProofGoals(args: UseLeanProofGoalsArgs): LeanProofGoals {
   const reqRef = useRef(0);
 
   useEffect(() => {
-    if (!enabled || !source) {
+    if (!enabled) {
+      // Deactivated (another card became active): FREEZE the last goal state
+      // rather than blanking it — the prose keeps its goal decorations, and
+      // reactivation resumes from a warm display. Just stop any spinner.
+      setState((s) => (s.loading ? { ...s, loading: false } : s));
+      return;
+    }
+    if (!source) {
       setState(EMPTY);
       return;
     }

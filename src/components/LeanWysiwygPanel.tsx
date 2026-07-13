@@ -97,6 +97,14 @@ export function LeanWysiwygPanel({
   );
   const nextLineOf = (line: number): number | undefined => sortedLines.find((l) => l > line);
 
+  // ONE active card: only the declaration the user is working on runs its
+  // Lean round-trips (goals + suggestions). Without this, EVERY provable decl
+  // (67 in the Real-analysis preset!) mounted live hooks that all re-fired on
+  // every source write-back — and each decl AFTER the edited one saw a new
+  // prefix, stampeding dozens of parallel prefix recompiles per tactic click.
+  // The visible goal refresh queued behind all of it. O(file) → O(1).
+  const [activeKey, setActiveKey] = useState<string | null>(null);
+
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', color: C.text }}>
       <div
@@ -122,6 +130,8 @@ export function LeanWysiwygPanel({
             nextDeclLine={nextLineOf(d.line)}
             tacticBlock={proofSeedBlock(source, d, nextLineOf(d.line))}
             mathlib={mathlib}
+            active={activeKey === declKey(d)}
+            onActivate={() => setActiveKey(declKey(d))}
             autoExpand={autoExpandSymbol != null && d.name === autoExpandSymbol}
             onAutoExpandConsumed={onAutoExpandConsumed}
             onProofChange={
@@ -143,6 +153,8 @@ function DeclCard({
   nextDeclLine,
   tacticBlock,
   mathlib,
+  active,
+  onActivate,
   autoExpand,
   onAutoExpandConsumed,
   onProofChange,
@@ -153,6 +165,10 @@ function DeclCard({
   nextDeclLine?: number;
   tacticBlock: string | null;
   mathlib?: boolean;
+  /** Only the ACTIVE card runs Lean round-trips (goals/suggestions). Any click
+   *  in the card activates it — including the click that performs a tactic. */
+  active?: boolean;
+  onActivate?: () => void;
   /** Deep link: open this card expanded. One-shot — consumed on arrival, so a
    *  later user collapse sticks (no re-expansion tug-of-war). */
   autoExpand?: boolean;
@@ -167,6 +183,7 @@ function DeclCard({
   useEffect(() => {
     if (autoExpand) {
       setExpanded(true);
+      onActivate?.(); // deep-linked card is the one being worked on
       onAutoExpandConsumed?.();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -219,6 +236,7 @@ function DeclCard({
           nextDeclLine={nextDeclLine}
           tacticBlock={tacticBlock}
           mathlib={mathlib}
+          active={active}
           onProofChange={onProofChange}
         />
       )}
@@ -232,7 +250,12 @@ function DeclCard({
   );
 
   return (
-    <div style={{ marginBottom: 12, border: `1px solid ${C.border}`, borderRadius: 6, overflow: 'hidden', backgroundColor: C.panel }}>
+    <div
+      // Any interaction with the card makes it THE active one (live Lean
+      // round-trips); the same click also performs its action (bubbling).
+      onClick={active ? undefined : onActivate}
+      style={{ marginBottom: 12, border: `1px solid ${active ? '#2f5c8f' : C.border}`, borderRadius: 6, overflow: 'hidden', backgroundColor: C.panel }}
+    >
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', backgroundColor: C.header, borderBottom: `1px solid ${C.border}` }}>
         {kindLabel}
         <span style={{ flex: 1, fontFamily: mono, fontSize: 13, fontWeight: 500, color: '#e6edf3' }}>{decl.name}</span>
@@ -277,6 +300,7 @@ function LeanProofEditor({
   nextDeclLine,
   tacticBlock,
   mathlib,
+  active = false,
   onProofChange,
 }: {
   decl: LeanDeclaration;
@@ -285,6 +309,9 @@ function LeanProofEditor({
   nextDeclLine?: number;
   tacticBlock: string;
   mathlib?: boolean;
+  /** Only the active card runs Lean round-trips; inactive cards render the
+   *  proof structure statically (their first click activates them). */
+  active?: boolean;
   onProofChange?: (newBlock: string) => void;
 }) {
   // Seed the proof tree from the user's actual Lean proof. Re-seed only on
@@ -324,6 +351,7 @@ function LeanProofEditor({
     proof: state.root,
     cursorId: state.cursor.nodeId,
     mathlib,
+    enabled: active,
   });
 
   // Once Lean reports each induction case's name + introduced hypotheses, bake
@@ -346,7 +374,7 @@ function LeanProofEditor({
   const cursorIsHole = cursorNode?.tag === 'hole';
   // Only suggest at an OPEN goal — when the hole's goal is already solved
   // (cursorGoal is null), there's nothing to suggest.
-  const goalOpen = cursorIsHole && lean.cursorGoal !== null;
+  const goalOpen = active && cursorIsHole && lean.cursorGoal !== null;
   const suggest = useLeanSuggestions({
     source,
     declLine: decl.line,
@@ -355,6 +383,7 @@ function LeanProofEditor({
     cursorId: state.cursor.nodeId,
     cursorIsHole: goalOpen,
     mathlib,
+    enabled: active,
   });
 
   const insertTactic = (tactic: string) => {
@@ -563,6 +592,7 @@ function LeanProofEditor({
         ? subtermLatexAtPos(lean.cursorGoal.targetTagged, posForGoalId(selectedPath) ?? '')
         : null,
     mathlib,
+    enabled: active,
   });
 
   // Merge validated suggestions with Lean's own discovery (exact?/simp?/apply?,

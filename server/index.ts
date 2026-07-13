@@ -51,6 +51,10 @@ app.post('/api/analyze', async (req, res) => {
       priority,
       ...(hasSplit ? { prefix: prefix as string, body: body as string } : {}),
     });
+    // One-line request log — ground truth for "why was X slow" reports.
+    console.log(
+      `[analyze] pri=${priority ? 1 : 0} prefix=${hasSplit ? 1 : 0} ${result.durationMs}ms${result.bridgeError ? ' ERR' : ''}`,
+    );
     res.json(result);
   } catch (e) {
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
