@@ -27,26 +27,14 @@ Live demo proving `sum(0..n, i) = n*(n+1)/2` (triangle numbers) in a WYSIWYG edi
 3. Chain rule: `d/dx f(g(x)) = f'(g(x)) · g'(x)`
 
 ## Current Focus
-- Keep converging text tactics, the structured tactic tree, and WYSIWYG prose onto one shared tactic/proof-tree/replay core.
-- Keep hardening the Prop/Sort kernel story: proof irrelevance, singleton elimination, large-elim restrictions, and PLift/ULift-style universe behavior.
-- Keep shrinking oversized adapter files, especially `goal-computation.ts` and `ProofTreeEditor.tsx`, by extracting tested pure helpers and small rendering/replay modules.
-- Keep replacing domain-name heuristics in generic proof-tree/editor code with definition-backed or registry-backed classification.
+- Lean-backend performance is now the product baseline: persistent `extract --serve` workers (resident env cache), prefix-olean compilation cache, priority analyze queue, client-side connection semaphore, ONE active decl card — goal refresh ~0.2-0.4s steady-state (text-editor parity).
+- Building the limitAdd (limits add) proof flow in the WYSIWYG: constructor→ε-δ unwrap, hypothesis "use" chips (click limF → exact/apply/cases + give-it-arguments → validated `have`), multi-subgoal constructor bullets (DPair: body + witness both visible).
+- Rendering parity: \lim with under-subscript, ℝ via Carrier unexpander, Greek (ε/δ incl. spelled-out names), ∀ x ∈ T binder prose with and/", then" implication chains, f(x) application style, display-math sizing.
 - Keep the full smoke gate non-negotiable: `npx tsc --noEmit && npm test`.
 
 ## Recent Progress
-- Tightened large-elimination soundness: non-singleton Prop elimination now fails closed when the motive sort cannot be proven Prop, with a narrow safe fallback for heads whose declared codomain is definitely Prop.
-- Made the singleton/large-elim classifier more conservative: unknown inductive result shapes no longer grant large elimination.
-- Moved the proof-irrelevance-only type classifier out of `whnf.ts` into an explicit helper module, keeping WHNF smaller and making the eventual checker-owned oracle seam clearer.
-- Removed stray `debugger` statements from non-test compiler paths and gated an ungated totality case-tree log.
-- Reduced proof-tree domain coupling: `isValueTypeGoal` now prefers definition-backed sort classification for real replay, with hardcoded head sets only as a no-definition fallback, and added tests for custom non-hardcoded Prop/Type heads.
-
-## Up Next
-- Replace the proof-irrelevance classifier fallback with a checker/meta-owned oracle so defeq does not duplicate inference rules.
-- Split `goal-computation.ts` into replay, rendering-normalization, alias/literal folding, and case/induction modules.
-- Split `ProofTreeEditor.tsx` prose rows into dedicated component modules now that the pure helper seams exist.
-- Finish tactic proof-term validation by adding the `Match` case to `checkType`.
-- Move remaining hardcoded proposition/value classifiers behind generic definition metadata or syntax/registry annotations.
-
-## Open Questions
-- Should we build atop Lean instead of, or alongside, the custom TT engine?
-- Which large cleanup should come first after the current Prop/tactics convergence stabilizes: `goal-computation.ts`, `ProofTreeEditor.tsx`, or checker/meta proof-irrelevance ownership?
+- Triangle-sum milestone SHIPPED proven in-preset (zero: simp+rfl; succ: conditional rewrite with visible `0 ≤ a` side-goal branch closed by constructor).
+- Perf overhaul (five stacked root causes found+fixed): stale bridge processes → tsx watch; per-request Lean spawns → persistent --serve workers (~20ms warm); full-file analyze contention → deferred non-priority; browser 6-connection starvation → analyzeClient semaphore; 67-hook per-edit stampede → single active card.
+- Deep links: `?preset=real-analysis&symbol=limitAdd` loads the preset and opens that decl expanded (async symbol resolution).
+- Hypothesis "use" flow + multi-subgoal constructor: the ε/2 move (`have hF := limF.eps_delta (rdiv eps (rtwo R)) (divTwoPos eps heps)`) validates and commits; `constructor` on DPair opens body + witness as two bullet subgoals.
+- Suggestion system: validated pills with in-button result previews, ✓ Solve Goal closers, constructor previews of the opened obligation, hypothesis chips.

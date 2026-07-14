@@ -102,6 +102,16 @@ describe('leanTacticsToTree', () => {
     expect(tree.children[0].tag).toBe('hole');
   });
 
+  test('constructor with bullet branches parses them as its subgoals', () => {
+    resetProofIds();
+    const tree = leanTacticsToTree(['constructor', '·', '  intro d', '·', '  sorry'].join('\n')) as any;
+    expect(tree.tag).toBe('apply');
+    expect(tree.raw).toBe(true);
+    expect(tree.children).toHaveLength(2);
+    expect(tree.children[0].tag).toBe('intros');
+    expect(tree.children[1].tag).toBe('hole');
+  });
+
   test('constructor followed by a tactic chains it as the subgoal proof', () => {
     resetProofIds();
     const tree = leanTacticsToTree('constructor\nintro eps heps') as any;
@@ -145,6 +155,10 @@ describe('leanTacticsToTree', () => {
       ['terminal tactic (omega)', '  omega'],
       ['terminal tactic (rfl)', '  rfl'],
       ['constructor with continuation', '  constructor\n  sorry'],
+      [
+        'constructor with two subgoal bullets (DPair: body + witness)',
+        ['  constructor', '  ·', '    sorry', '  ·', '    sorry'].join('\n'),
+      ],
       ['unrecognized tactic prints verbatim (not exact)', '  refine leqAntisym ?_ ?_'],
       [
         'conditional rewrite (side goal as bullet branches)',

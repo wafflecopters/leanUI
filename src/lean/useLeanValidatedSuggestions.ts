@@ -118,6 +118,7 @@ export function useLeanValidatedSuggestions(args: UseLeanValidatedSuggestionsArg
         // the tactic's first hole.
         let closes = false;
         let postTarget;
+        let subgoals = 0;
         if (!firstHole) {
           // Terminal tactic (rfl/omega/constructor/exact …) with no continuation
           // hole: it CLOSES only if Lean reports no leftover "unsolved goals". A
@@ -132,6 +133,11 @@ export function useLeanValidatedSuggestions(args: UseLeanValidatedSuggestionsArg
           const g = range ? data.goals.find((x) => x.startLine === range.startLine && x.startCol === range.startCol) : undefined;
           closes = !g || g.goals.length === 0;
           postTarget = g?.goals?.[0]?.targetTagged;
+          // The trial's lone `sorry` sees ALL remaining goals (goalsBefore), so
+          // this is the tactic's true subgoal count — e.g. 2 for `constructor`
+          // on DPair (body + witness). Carried on the suggestion so applying it
+          // opens that many child holes.
+          subgoals = g?.goals.length ?? 0;
         }
         // Preview: how the FOCUSED subterm looks after the tactic (e.g.
         // `b + c` → `c + b`). Only for rewrites/unfold (induction etc. case-split
@@ -152,7 +158,7 @@ export function useLeanValidatedSuggestions(args: UseLeanValidatedSuggestionsArg
         // didn't reduce to anything useful (e.g. `unfold mul` exposing the
         // pattern-match body).
         if (/\\operatorname\{match\}|\bmatch\b/.test(preview)) return;
-        valid.push({ ...cand, preview, closes });
+        valid.push({ ...cand, preview, closes, ...(subgoals > 1 ? { subgoals } : {}) });
         // Preserve the caller's candidate order as results stream in.
         valid.sort((a, b) => candidates.findIndex((c) => c.id === a.id) - candidates.findIndex((c) => c.id === b.id));
         setState({ suggestions: [...valid], loading: true });

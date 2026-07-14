@@ -161,12 +161,16 @@ function emitNode(em: Emitter, node: ProofNode, depth: number): void {
     case 'apply': {
       // `raw` apply carries a whole tactic (e.g. `constructor`) — print verbatim.
       em.emit(depth, node.raw ? node.name : `apply ${node.name}`, node.id);
-      // Each child proves one subgoal; emit them in order at the same depth.
-      // Lean focuses subgoals sequentially after `apply`. A LONE child follows
-      // the chaining-tactic convention (write-back drops a trailing hole, so a
-      // goal-closing `constructor` doesn't write a stray `sorry`).
+      // Each child proves one subgoal. A LONE child follows the chaining-tactic
+      // convention (write-back drops a trailing hole, so a goal-closing
+      // `constructor` doesn't write a stray `sorry`). MULTIPLE children of a
+      // RAW apply print as `·` bullets — unambiguous to parse back (a flat
+      // tactic sequence can't express "these N chains are N subgoals") and how
+      // a Lean author writes a multi-goal constructor (DPair: body + witness).
       if (node.children.length === 1) {
         emitChild(em, node.children[0], depth);
+      } else if (node.raw) {
+        for (const child of node.children) emitBullet(em, child, depth);
       } else {
         for (const child of node.children) {
           emitNode(em, child, depth);

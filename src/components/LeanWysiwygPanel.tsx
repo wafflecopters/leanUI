@@ -9,6 +9,7 @@ import {
   createHistory,
   pushState,
   findNode,
+  mkHole,
   replaceNode,
   withRewriteSideGoals,
   type ProofTreeHistory,
@@ -386,7 +387,7 @@ function LeanProofEditor({
     enabled: active,
   });
 
-  const insertTactic = (tactic: string) => {
+  const insertTactic = (tactic: string, subgoals?: number) => {
     let replacement = leanTacticsToTree(tactic);
     // A conditional rewrite (`rw [lemma]` whose lemma has premises) leaves side
     // goals — attach holes for them so they're visible as bullet branches
@@ -395,6 +396,19 @@ function LeanProofEditor({
       const count = rewriteSideGoalCount(allDeclarations, replacement.name);
       if (count > 0) replacement = withRewriteSideGoals(replacement, count);
     }
+    // A multi-subgoal opener (validation reported `subgoals`, e.g. constructor
+    // on DPair → body + witness) gets one child hole PER subgoal, so every
+    // obligation is a visible bullet branch immediately.
+    if (
+      subgoals !== undefined &&
+      subgoals > 1 &&
+      replacement.tag === 'apply' &&
+      replacement.raw &&
+      replacement.children.length === 1 &&
+      replacement.children[0].tag === 'hole'
+    ) {
+      replacement = { ...replacement, children: Array.from({ length: subgoals }, () => mkHole()) };
+    }
     const newRoot = replaceNode(state.root, state.cursor.nodeId, replacement);
     const firstHole = findFirstHole(newRoot);
     handleHistoryChange(
@@ -402,7 +416,7 @@ function LeanProofEditor({
     );
   };
 
-  const applySuggestion = (tactic: string) => {
+  const applySuggestion = (tactic: string, subgoals?: number) => {
     // A broad `simp [many lemmas]` → narrow to the subset that actually fired
     // (via `simp?`), so the proof reads `simp [<fired>]`. Insert immediately so
     // the UI is responsive; the narrowed form replaces it when the probe returns.
@@ -416,7 +430,7 @@ function LeanProofEditor({
         .catch(() => insertTactic(tactic));
       return;
     }
-    insertTactic(tactic);
+    insertTactic(tactic, subgoals);
   };
 
   // Build the clickable interactive goal + a map of subterm id → its text.
@@ -705,7 +719,7 @@ function LeanProofEditor({
             return (
               <button
                 key={s.id}
-                onClick={() => applySuggestion(s.tactic)}
+                onClick={() => applySuggestion(s.tactic, s.subgoals)}
                 onMouseEnter={() => setHoveredSuggestion(s.id)}
                 onMouseLeave={() => setHoveredSuggestion((h) => (h === s.id ? null : h))}
                 title={s.tactic}

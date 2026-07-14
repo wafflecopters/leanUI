@@ -31,6 +31,11 @@ export interface LeanSuggestion {
   preview?: string;
   /** True when applying this tactic CLOSES the goal (no goals remain). */
   closes?: boolean;
+  /** Number of goals remaining after the tactic (from the validation trial).
+   *  A multi-subgoal opener (e.g. `constructor` on DPair: body + witness)
+   *  applies with this many child holes so every obligation is visible
+   *  immediately instead of surfacing when the first one closes. */
+  subgoals?: number;
 }
 
 /** Discovery tactics we try at a hole, in priority order (cheapest/most-closing

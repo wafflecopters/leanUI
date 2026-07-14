@@ -102,10 +102,13 @@ function parseTactic(lines: Line[], pos: { i: number }, level: number, text: str
   }
 
   // `constructor` opens the goal's constructor and leaves its fields as
-  // subgoals (e.g. Limit.mk's eps_delta) — a CHAINING tactic, not a terminal
-  // one. Model as a raw apply with the continuation as its subgoal, so the
-  // opened field gets a hole to live in.
+  // subgoals (e.g. Limit.mk's eps_delta; DPair's body + witness) — a CHAINING
+  // tactic, not a terminal one. `·` bullet branches following it are its
+  // subgoal proofs (the printer's multi-subgoal form); otherwise the plain
+  // continuation is its single subgoal.
   if (/^constructor\s*$/.test(text)) {
+    const branches = parseRewriteBullets(lines, pos, level);
+    if (branches.length > 0) return mkApply('constructor', branches, true);
     return mkApply('constructor', [continuation(lines, pos, level)], true);
   }
 
