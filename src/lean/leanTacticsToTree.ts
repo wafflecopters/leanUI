@@ -107,6 +107,10 @@ function parseTactic(lines: Line[], pos: { i: number }, level: number, text: str
   // subgoal proofs (the printer's multi-subgoal form); otherwise the plain
   // continuation is its single subgoal.
   if (/^constructor\s*$/.test(text)) {
+    // `case <tag> =>` blocks select subgoals BY NAME (possibly reordered —
+    // witness before dependent body); `·` bullets take them in Lean's order.
+    const tagged = parseCaseTagBlocks(lines, pos, level);
+    if (tagged) return mkApply('constructor', tagged.children, true, tagged.tags);
     const branches = parseRewriteBullets(lines, pos, level);
     if (branches.length > 0) return mkApply('constructor', branches, true);
     return mkApply('constructor', [continuation(lines, pos, level)], true);
@@ -274,6 +278,33 @@ function parseBulletCase(lines: Line[], pos: { i: number }): CaseNode {
   }
   // No constructor name (bullet form) — label is a display placeholder only.
   return mkCase('case', body);
+}
+
+/** Consecutive `case <tag> => …` goal-selection blocks at `level` (bodies on
+ *  following deeper lines, or inline after `=>`). Null unless at least one
+ *  block is present. Used for a raw apply's (constructor's) tagged subgoals. */
+function parseCaseTagBlocks(
+  lines: Line[],
+  pos: { i: number },
+  level: number,
+): { children: ProofNode[]; tags: string[] } | null {
+  const children: ProofNode[] = [];
+  const tags: string[] = [];
+  for (;;) {
+    if (pos.i >= lines.length || lines[pos.i].indent !== level) break;
+    const m = lines[pos.i].text.match(/^case\s+(\S+)\s*=>\s*(.*)$/);
+    if (!m) break;
+    pos.i++;
+    tags.push(m[1]);
+    const inline = m[2].trim();
+    if (inline.length > 0) {
+      const innerPos = { i: 0 };
+      children.push(parseChainAt([{ indent: level + 2, text: inline }], innerPos, level + 2));
+    } else {
+      children.push(parseSeq(lines, pos, level + 1));
+    }
+  }
+  return children.length > 0 ? { children, tags } : null;
 }
 
 /** Is this line a `·`/`.` bullet at the given indent? */

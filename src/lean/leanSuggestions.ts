@@ -36,6 +36,31 @@ export interface LeanSuggestion {
    *  applies with this many child holes so every obligation is visible
    *  immediately instead of surfacing when the first one closes. */
   subgoals?: number;
+  /** Lean goal tags for those subgoals, in DISPLAY order (witness-first, see
+   *  orderedSubgoalTags). When present, applying prints `case <tag> =>` blocks
+   *  so the proof presents goals in this order regardless of Lean's. */
+  subgoalTags?: string[];
+}
+
+/**
+ * Present subgoals witness-first: Lean's `apply`/`constructor` POSTPONES
+ * dependent goals, so `DPair` yields [body-with-?fst, fst] — but a human gives
+ * the witness first, then proves the property about it. Generic signal, no
+ * domain names: a goal whose target mentions NO metavariable (`?m`) provides
+ * data the metavariable-bearing goals depend on — put those first (stable
+ * order otherwise). Returns null unless every goal is tagged (the `case`
+ * selector needs names) — callers then fall back to Lean's order.
+ */
+export function orderedSubgoalTags(
+  goals: ReadonlyArray<{ tag?: string; target: string }>,
+): string[] | null {
+  if (goals.length < 2) return null;
+  if (goals.some((g) => !g.tag)) return null;
+  const hasMeta = (g: { target: string }) => /\?/.test(g.target);
+  const data = goals.filter((g) => !hasMeta(g));
+  const dependent = goals.filter(hasMeta);
+  if (data.length === 0 || dependent.length === 0) return goals.map((g) => g.tag!);
+  return [...data, ...dependent].map((g) => g.tag!);
 }
 
 /** Discovery tactics we try at a hole, in priority order (cheapest/most-closing

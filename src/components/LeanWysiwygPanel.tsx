@@ -387,7 +387,7 @@ function LeanProofEditor({
     enabled: active,
   });
 
-  const insertTactic = (tactic: string, subgoals?: number) => {
+  const insertTactic = (tactic: string, subgoals?: number, subgoalTags?: string[]) => {
     let replacement = leanTacticsToTree(tactic);
     // A conditional rewrite (`rw [lemma]` whose lemma has premises) leaves side
     // goals — attach holes for them so they're visible as bullet branches
@@ -407,7 +407,14 @@ function LeanProofEditor({
       replacement.children.length === 1 &&
       replacement.children[0].tag === 'hole'
     ) {
-      replacement = { ...replacement, children: Array.from({ length: subgoals }, () => mkHole()) };
+      const children = Array.from({ length: subgoals }, () => mkHole());
+      // With tags, subgoals print as `case <tag> =>` blocks in DISPLAY order
+      // (witness before dependent body); untagged falls back to `·` bullets
+      // in Lean's own order.
+      replacement =
+        subgoalTags && subgoalTags.length === subgoals
+          ? { ...replacement, children, childTags: subgoalTags }
+          : { ...replacement, children };
     }
     const newRoot = replaceNode(state.root, state.cursor.nodeId, replacement);
     const firstHole = findFirstHole(newRoot);
@@ -416,7 +423,7 @@ function LeanProofEditor({
     );
   };
 
-  const applySuggestion = (tactic: string, subgoals?: number) => {
+  const applySuggestion = (tactic: string, subgoals?: number, subgoalTags?: string[]) => {
     // A broad `simp [many lemmas]` → narrow to the subset that actually fired
     // (via `simp?`), so the proof reads `simp [<fired>]`. Insert immediately so
     // the UI is responsive; the narrowed form replaces it when the probe returns.
@@ -430,7 +437,7 @@ function LeanProofEditor({
         .catch(() => insertTactic(tactic));
       return;
     }
-    insertTactic(tactic, subgoals);
+    insertTactic(tactic, subgoals, subgoalTags);
   };
 
   // Build the clickable interactive goal + a map of subterm id → its text.
@@ -719,7 +726,7 @@ function LeanProofEditor({
             return (
               <button
                 key={s.id}
-                onClick={() => applySuggestion(s.tactic, s.subgoals)}
+                onClick={() => applySuggestion(s.tactic, s.subgoals, s.subgoalTags)}
                 onMouseEnter={() => setHoveredSuggestion(s.id)}
                 onMouseLeave={() => setHoveredSuggestion((h) => (h === s.id ? null : h))}
                 title={s.tactic}

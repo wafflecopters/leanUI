@@ -126,6 +126,11 @@ export interface ApplyNode {
    *  verbatim rather than as `apply <name>`. Used for apply-like tactics that
    *  open subgoals but aren't spelled with the `apply` keyword. */
   readonly raw?: boolean;
+  /** Lean goal tags for the children (parallel array), printed as
+   *  `case <tag> =>` blocks. Lets subgoals appear in a DIFFERENT order than
+   *  Lean produces them (e.g. DPair's witness before its body — Lean postpones
+   *  the dependent goal, humans give the witness first). Raw applies only. */
+  readonly childTags?: readonly string[];
 }
 
 export interface SimpNode {
@@ -291,9 +296,10 @@ export function withRewriteSideGoals(node: RewriteNode, count: number): RewriteN
   return { ...node, sideGoals };
 }
 
-export function mkApply(name: string, children: readonly ProofNode[], raw = false): ApplyNode {
+export function mkApply(name: string, children: readonly ProofNode[], raw = false, childTags?: readonly string[]): ApplyNode {
   const node: ApplyNode = { tag: 'apply', id: freshProofId(), name, children };
-  return raw ? { ...node, raw: true } : node;
+  const withRaw = raw ? { ...node, raw: true as const } : node;
+  return childTags && childTags.length === children.length ? { ...withRaw, childTags } : withRaw;
 }
 
 export function mkSimp(lemmas: readonly string[], steps: readonly ProofNode[], child: ProofNode, only = false): SimpNode {

@@ -169,6 +169,14 @@ function emitNode(em: Emitter, node: ProofNode, depth: number): void {
       // a Lean author writes a multi-goal constructor (DPair: body + witness).
       if (node.children.length === 1) {
         emitChild(em, node.children[0], depth);
+      } else if (node.raw && node.childTags && node.childTags.length === node.children.length) {
+        // Tagged children print as `case <tag> =>` blocks — Lean selects goals
+        // BY NAME, so the proof can present them in a different order than
+        // Lean produced them (witness before dependent body).
+        node.children.forEach((child, i) => {
+          em.emit(depth, `case ${node.childTags![i]} =>`);
+          emitNode(em, child, depth + 1);
+        });
       } else if (node.raw) {
         for (const child of node.children) emitBullet(em, child, depth);
       } else {

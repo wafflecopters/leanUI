@@ -20,9 +20,9 @@ import type { AnalyzeResult } from './types';
 import { analyzeRequest } from './analyzeClient';
 import { assembleProofInSource } from './assembleProofDecl';
 import { leanTacticsToTree } from './leanTacticsToTree';
-import { subtermLatexAtPos } from './leanInteractiveGoal';
+import { subtermLatexAtPos, taggedText } from './leanInteractiveGoal';
 import { taggedToLatex } from './codeWithInfos';
-import type { LeanSuggestion } from './leanSuggestions';
+import { orderedSubgoalTags, type LeanSuggestion } from './leanSuggestions';
 
 export interface UseLeanValidatedSuggestionsArgs {
   source: string;
@@ -119,6 +119,7 @@ export function useLeanValidatedSuggestions(args: UseLeanValidatedSuggestionsArg
         let closes = false;
         let postTarget;
         let subgoals = 0;
+        let subgoalTags: string[] | null = null;
         if (!firstHole) {
           // Terminal tactic (rfl/omega/constructor/exact …) with no continuation
           // hole: it CLOSES only if Lean reports no leftover "unsolved goals". A
@@ -138,6 +139,13 @@ export function useLeanValidatedSuggestions(args: UseLeanValidatedSuggestionsArg
           // on DPair (body + witness). Carried on the suggestion so applying it
           // opens that many child holes.
           subgoals = g?.goals.length ?? 0;
+          // Tags in DISPLAY order (witness before dependent body) — applying
+          // then prints `case <tag> =>` blocks in that order.
+          if (g && g.goals.length > 1) {
+            subgoalTags = orderedSubgoalTags(
+              g.goals.map((gs) => ({ tag: gs.case, target: taggedText(gs.targetTagged) })),
+            );
+          }
         }
         // Preview: how the FOCUSED subterm looks after the tactic (e.g.
         // `b + c` → `c + b`). Only for rewrites/unfold (induction etc. case-split
@@ -158,7 +166,7 @@ export function useLeanValidatedSuggestions(args: UseLeanValidatedSuggestionsArg
         // didn't reduce to anything useful (e.g. `unfold mul` exposing the
         // pattern-match body).
         if (/\\operatorname\{match\}|\bmatch\b/.test(preview)) return;
-        valid.push({ ...cand, preview, closes, ...(subgoals > 1 ? { subgoals } : {}) });
+        valid.push({ ...cand, preview, closes, ...(subgoals > 1 ? { subgoals } : {}), ...(subgoalTags ? { subgoalTags } : {}) });
         // Preserve the caller's candidate order as results stream in.
         valid.sort((a, b) => candidates.findIndex((c) => c.id === a.id) - candidates.findIndex((c) => c.id === b.id));
         setState({ suggestions: [...valid], loading: true });

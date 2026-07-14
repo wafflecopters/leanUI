@@ -102,6 +102,17 @@ describe('leanTacticsToTree', () => {
     expect(tree.children[0].tag).toBe('hole');
   });
 
+  test('constructor with case blocks parses tags + children (order preserved)', () => {
+    resetProofIds();
+    const tree = leanTacticsToTree(
+      ['constructor', 'case fst =>', '  exact d', 'case snd =>', '  sorry'].join('\n'),
+    ) as any;
+    expect(tree.tag).toBe('apply');
+    expect(tree.childTags).toEqual(['fst', 'snd']);
+    expect(tree.children[0].tag).toBe('exact');
+    expect(tree.children[1].tag).toBe('hole');
+  });
+
   test('constructor with bullet branches parses them as its subgoals', () => {
     resetProofIds();
     const tree = leanTacticsToTree(['constructor', '·', '  intro d', '·', '  sorry'].join('\n')) as any;
@@ -158,6 +169,10 @@ describe('leanTacticsToTree', () => {
       [
         'constructor with two subgoal bullets (DPair: body + witness)',
         ['  constructor', '  ·', '    sorry', '  ·', '    sorry'].join('\n'),
+      ],
+      [
+        'constructor with case-tagged subgoals (witness-first order)',
+        ['  constructor', '  case fst =>', '    sorry', '  case snd =>', '    sorry'].join('\n'),
       ],
       ['unrecognized tactic prints verbatim (not exact)', '  refine leqAntisym ?_ ?_'],
       [

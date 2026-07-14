@@ -110,3 +110,32 @@ describe('hypothesisSuggestions', () => {
     expect(cases.tactic).toContain('·');
   });
 });
+
+describe('orderedSubgoalTags', () => {
+  test('metavariable-free (witness) goals come first', async () => {
+    const { orderedSubgoalTags } = await import('./leanSuggestions');
+    // Lean order after constructor on DPair: body (mentions ?fst), then fst.
+    expect(
+      orderedSubgoalTags([
+        { tag: 'snd', target: 'EpsDeltaWitness f x0 L eps ?eps_delta.fst' },
+        { tag: 'fst', target: 'ℝ' },
+      ]),
+    ).toEqual(['fst', 'snd']);
+  });
+
+  test('no dependency signal → Lean order kept', async () => {
+    const { orderedSubgoalTags } = await import('./leanSuggestions');
+    expect(
+      orderedSubgoalTags([
+        { tag: 'left', target: 'a = b' },
+        { tag: 'right', target: 'c = d' },
+      ]),
+    ).toEqual(['left', 'right']);
+  });
+
+  test('missing tags or single goal → null (fall back to bullets)', async () => {
+    const { orderedSubgoalTags } = await import('./leanSuggestions');
+    expect(orderedSubgoalTags([{ tag: undefined, target: 'ℝ' }, { tag: 'snd', target: '?x' }])).toBeNull();
+    expect(orderedSubgoalTags([{ tag: 'fst', target: 'ℝ' }])).toBeNull();
+  });
+});
