@@ -878,6 +878,15 @@ export function editExact(
   return { root: newRoot, cursor: state.cursor };
 }
 
+export function editHaveExpr(
+  state: ProofTreeState, nodeId: ProofNodeId, newExpr: string,
+): ProofTreeState | null {
+  const node = findNode(state.root, nodeId);
+  if (!node || node.tag !== 'have') return null;
+  const newRoot = replaceNode(state.root, nodeId, { ...node, expr: newExpr });
+  return { root: newRoot, cursor: state.cursor };
+}
+
 export function editCaseLabel(
   state: ProofTreeState, caseId: ProofNodeId, newLabel: string,
 ): ProofTreeState {

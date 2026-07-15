@@ -44,6 +44,53 @@ export interface TermSlot {
   error?: string;
 }
 
+/**
+ * What the TermBuilderView actually RENDERS — the display subset of
+ * TermBuilderState. The Lean backend supplies this shape directly (probing
+ * Lean instead of kernel metas), so the REAL builder UI runs on both engines.
+ */
+export interface TermBuilderDisplaySlot {
+  readonly index: number;
+  readonly name: string;
+  readonly typeLatex: string;
+  readonly implicit: boolean;
+  /** Filled marker (kernel term on TT; any non-null marker on Lean). */
+  value: unknown | null;
+  sourceExpr?: string;
+  valueLatex?: string;
+  error?: string;
+  /** Lean path: plain type text (for slot-suggestion matching). */
+  typePlain?: string;
+}
+
+export interface TermBuilderDisplay {
+  readonly fnDisplayName: string;
+  readonly slots: TermBuilderDisplaySlot[];
+  readonly slotSuggestions: Map<number, string[]>;
+  readonly returnTypeLatex?: string;
+}
+
+/**
+ * Async engine seam for the term builder — the Lean backend implements this
+ * (probing `have leanuiProbe := <fn> <args>` round-trips) so the SAME
+ * TermBuilderView drives either engine. `fill`/`clear` return the updated
+ * display plus the have-expression to write into the proof tree (unfilled
+ * slots print as `?_`, which Lean treats as goals — the have updates live on
+ * every fill, exactly like the TT builder).
+ */
+export interface TermBuilderProvider {
+  open(haveExpr: string): Promise<TermBuilderDisplay | null>;
+  fill(
+    display: TermBuilderDisplay,
+    slotIndex: number,
+    sourceExpr: string,
+  ): Promise<{ display: TermBuilderDisplay; expr: string } | null>;
+  clear(
+    display: TermBuilderDisplay,
+    slotIndex: number,
+  ): Promise<{ display: TermBuilderDisplay; expr: string } | null>;
+}
+
 export interface TermBuilderState {
   /** The function being applied (Const name). */
   readonly fnName: string;

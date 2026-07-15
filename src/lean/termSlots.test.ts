@@ -92,3 +92,19 @@ describe('projectionCandidates', () => {
     expect(c).not.toContain('limF.plusComm');
   });
 });
+
+describe('appliedExprWithHoles / parseApplied (builder ⟷ have round-trip)', () => {
+  test('holes print as ?_ and parse back to null', async () => {
+    const { appliedExprWithHoles, parseApplied } = await import('./termSlots');
+    const expr = appliedExprWithHoles('limF.eps_delta', [null, 'divTwoPos eps epsPos']);
+    expect(expr).toBe('limF.eps_delta ?_ (divTwoPos eps epsPos)');
+    const back = parseApplied(expr);
+    expect(back.fn).toBe('limF.eps_delta');
+    expect(back.values).toEqual([null, 'divTwoPos eps epsPos']);
+  });
+
+  test('bare fn round-trips with no values', async () => {
+    const { parseApplied } = await import('./termSlots');
+    expect(parseApplied('limF.eps_delta')).toEqual({ fn: 'limF.eps_delta', values: [] });
+  });
+});

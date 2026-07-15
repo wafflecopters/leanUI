@@ -540,6 +540,19 @@ export function codeWithInfosToMathRow(tagged: TaggedJson, opts?: { wrapSubterms
 }
 
 /**
+ * Render PLAIN pretty-printed Lean text (no tags) to LaTeX — for slot types in
+ * the term builder, where we only have text segments of a larger type. Reuses
+ * the same tokenize→restructure pipeline as tagged rendering.
+ */
+export function mathTextToLatex(text: string, fallback = ''): string {
+  try {
+    return renderStaticLatex(mkRow(restructure(tokenizeText(text))));
+  } catch {
+    return fallback || text;
+  }
+}
+
+/**
  * Render a Lean tagged expression directly to a LaTeX string, via the math
  * editor's own static renderer. Used where the existing UI contract expects a
  * LaTeX string (e.g. `NodeGoalInfo.goalLatex`, `TypedHypothesis.type`) rather

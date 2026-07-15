@@ -139,6 +139,49 @@ export function appliedExpr(fn: string, values: readonly string[]): string {
   return parts.join(' ');
 }
 
+/** The applied expression with `?_` for UNFILLED slots — Lean's term-mode
+ *  hole, so a partially-built have still elaborates and the holes become
+ *  visible goals (exactly the TT builder's `?` placeholders). */
+export function appliedExprWithHoles(fn: string, values: ReadonlyArray<string | null>): string {
+  const parts = [fn.trim()];
+  for (const v of values) {
+    if (v === null || v.trim() === '') {
+      parts.push('?_');
+      continue;
+    }
+    const t = v.trim();
+    parts.push(/^[A-Za-z0-9_.'⟨⟩?]+$/.test(t) || (t.startsWith('(') && t.endsWith(')')) ? t : `(${t})`);
+  }
+  return parts.join(' ');
+}
+
+/** Parse a have-expression back into fn + argument values (`?_`/`?` → null) —
+ *  inverse of appliedExprWithHoles for re-opening the builder on an existing
+ *  have. Top-level split only (parens kept intact). */
+export function parseApplied(expr: string): { fn: string; values: Array<string | null> } {
+  const s = expr.replace(/\s+/g, ' ').trim();
+  const parts: string[] = [];
+  let depth = 0;
+  let cur = '';
+  for (const ch of s) {
+    if (ch === '(' || ch === '[' || ch === '{' || ch === '⟨') depth++;
+    else if (ch === ')' || ch === ']' || ch === '}' || ch === '⟩') depth--;
+    if (ch === ' ' && depth === 0) {
+      if (cur) parts.push(cur);
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur) parts.push(cur);
+  const [fn = '', ...args] = parts;
+  const values = args.map((a) => {
+    if (a === '?_' || a === '?') return null;
+    return a.startsWith('(') && a.endsWith(')') ? a.slice(1, -1) : a;
+  });
+  return { fn, values };
+}
+
 /** First identifier-ish token of a type — its head shape, for loose matching. */
 function headToken(type: string): string {
   const m = type.trim().match(/[A-Za-z_][A-Za-z0-9_.']*|[<≤≥=∈+\-*/⟦]/);

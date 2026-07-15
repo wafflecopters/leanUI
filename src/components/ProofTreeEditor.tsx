@@ -22,6 +22,7 @@ import {
   applySimp,
   moveCursorUp, moveCursorDown,
   pushState, updateCurrent, undo, redo,
+  editHaveExpr,
 } from '../proof-tree/proof-tree';
 import { runSimp } from '../tactics/simp-tactic';
 import {
@@ -69,6 +70,8 @@ import {
   fillTermBuilderSlotFromGoal,
   TermBuilderState,
   TermSlot,
+  type TermBuilderDisplay,
+  type TermBuilderProvider,
 } from '../proof-tree/term-builder';
 import {
   addInductionCaseInProofTree,
@@ -149,6 +152,16 @@ export interface ProofTreeEditorProps {
    *  its presence also marks the Lean backend (hides TT-only buttons like Fold). */
   applySubgoalCount?: (name: string) => number;
   rewriteSideGoalCount?: (name: string) => number;
+  /** Lean backend: replaces the kernel-computed hypothesis action tray
+   *  (Exact/Apply/Destructure/Use …) shown under a clicked CONTEXT hypothesis. */
+  hypSuggestionsOverride?: readonly TacticSuggestion[];
+  /** Lean backend: reports which hypothesis is selected in the CONTEXT list. */
+  onHypothesisSelect?: (name: string | null) => void;
+  /** Lean backend: handle a suggestion before the kernel path; return true if
+   *  handled (kernel apply is then skipped). */
+  onApplySuggestionOverride?: (s: TacticSuggestion) => boolean;
+  /** Lean backend: async engine for the have TERM BUILDER (probe-backed). */
+  termBuilderProvider?: TermBuilderProvider;
 }
 
 // ============================================================================
@@ -219,7 +232,7 @@ type TacticMode = null | ProofTreeManualTacticMode;
 // Main Component
 // ============================================================================
 
-export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelType, definitions, registry, inductiveMap, currentDeclName, tacticTrace, goalMapOverride, typedContextOverride, interactiveGoalOverride, onGoalPathSelect, goalExtraSlot, applySubgoalCount, rewriteSideGoalCount }: ProofTreeEditorProps) {
+export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelType, definitions, registry, inductiveMap, currentDeclName, tacticTrace, goalMapOverride, typedContextOverride, interactiveGoalOverride, onGoalPathSelect, goalExtraSlot, applySubgoalCount, rewriteSideGoalCount, hypSuggestionsOverride, onHypothesisSelect, onApplySuggestionOverride, termBuilderProvider }: ProofTreeEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const state = history.current;
 
@@ -238,6 +251,9 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
   const [goalInteractionState, setGoalInteractionState] = useState<GoalInteractionState>(
     EMPTY_GOAL_INTERACTION_STATE,
   );
+  // Lean backend: hypothesis-selection reporting (name resolved once
+  // typedContext is available; see the effect after typedContext).
+  const pendingHypSelectRef = useRef<number | null | undefined>(undefined);
   const {
     selectedPath: goalSelectedPath,
     selectedBinder,
@@ -258,7 +274,13 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
   }, [onGoalPathSelect]);
 
   const handleToggleHypothesis = useCallback((hypIndex: number) => {
-    setGoalInteractionState(prev => toggleGoalInteractionHypothesis(prev, hypIndex));
+    setGoalInteractionState(prev => {
+      const next = toggleGoalInteractionHypothesis(prev, hypIndex);
+      // Report the selection to the Lean backend (name resolved by the caller
+      // effect below, which sees the fresh typedContext).
+      pendingHypSelectRef.current = next.selectedHyp;
+      return next;
+    });
   }, []);
 
   const emptyRegistry = useMemo<SyntaxRegistry>(() => ({ symbolMap: new Map(), entries: [] }), []);
@@ -338,12 +360,22 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
   ]);
 
   const hypSuggestions = useMemo<readonly TacticSuggestion[]>(() => {
+    // Lean backend: the tray is computed by the panel (validated round-trips).
+    if (hypSuggestionsOverride !== undefined) return hypSuggestionsOverride;
     return computeGoalInteractionHypothesisSuggestions(
       goalInteractionState,
       typedContext,
       definitions,
     );
-  }, [goalInteractionState, typedContext, definitions]);
+  }, [hypSuggestionsOverride, goalInteractionState, typedContext, definitions]);
+
+  // Report hypothesis selection (by NAME) to the Lean backend.
+  useEffect(() => {
+    if (pendingHypSelectRef.current === undefined || !onHypothesisSelect) return;
+    const idx = pendingHypSelectRef.current;
+    pendingHypSelectRef.current = undefined;
+    onHypothesisSelect(idx === null ? null : (typedContext?.hypotheses[idx]?.name ?? null));
+  });
 
   // Reset goal selection and binder selection when cursor changes
   useEffect(() => {
@@ -385,6 +417,12 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
   }, [history, onHistoryChange]);
 
   const handleApplySuggestion = useCallback((suggestion: TacticSuggestion) => {
+    // Lean backend: the panel may handle this suggestion itself (validated
+    // insert / term-builder open). Clear the hypothesis selection either way.
+    if (onApplySuggestionOverride?.(suggestion)) {
+      setGoalInteractionState(prev => ({ ...prev, selectedHyp: null }));
+      return;
+    }
     const result = applySuggestionToProofTreeState(state, suggestion, {
       inductiveMap,
       registry,
@@ -407,7 +445,7 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
     goalInteractionState.editingNames,
     goalInteractionState.editingSuggestionId,
     pushChange,
-  ]);
+  , onApplySuggestionOverride]);
 
   const handleStartSuggestionEditing = useCallback((suggestion: TacticSuggestion) => {
     setGoalInteractionState(prev => startGoalInteractionEditing(prev, suggestion));
@@ -552,6 +590,7 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
                 holeExtraSlot={goalExtraSlot}
                 applySubgoalCount={applySubgoalCount}
                 rewriteSideGoalCount={rewriteSideGoalCount}
+                termBuilderProvider={termBuilderProvider}
               />
             )}
           </div>
@@ -982,7 +1021,7 @@ const sectionHeaderStyle: React.CSSProperties = {
 function HaveProseItem({
   item, kind, rowStyle, rowHandlers, prose, deleteBtn, renderGoalSection, nextItem,
   state, onPushChange, registry: _registry,
-  definitions, typedContext,
+  definitions, typedContext, termBuilderProvider,
 }: {
   item: ProseItem;
   kind: Extract<ProseItemKind, { tag: 'have' }>;
@@ -997,8 +1036,10 @@ function HaveProseItem({
   registry?: SyntaxRegistry;
   definitions?: DefinitionsMap;
   typedContext: TypedProofContext | null;
+  /** Lean backend: probe-backed builder engine (replaces the kernel path). */
+  termBuilderProvider?: TermBuilderProvider;
 }) {
-  const [builderState, setBuilderState] = useState<TermBuilderState | null>(null);
+  const [builderState, setBuilderState] = useState<TermBuilderState | TermBuilderDisplay | null>(null);
   const [editingName, setEditingName] = useState(false);
   const [editingExpr, setEditingExpr] = useState(false);
   const nameCommittedRef = useRef(false);
@@ -1016,13 +1057,20 @@ function HaveProseItem({
     setEditingName(false);
   }, [state, item.nodeId, onPushChange]);
 
-  // Open the term builder by parsing the have expression into slots
+  // Open the term builder by parsing the have expression into slots.
+  // Lean backend: the async provider probes Lean instead of the kernel.
   const openBuilder = useCallback(() => {
+    if (termBuilderProvider) {
+      void termBuilderProvider.open(kind.expr).then((d) => {
+        if (d) setBuilderState(d);
+      });
+      return;
+    }
     const opened = openHaveExprTermBuilder(kind.expr, typedContext?.kernelGoal, definitions);
     if (opened) {
       setBuilderState(opened.builderState);
     }
-  }, [kind.expr, definitions, typedContext]);
+  }, [kind.expr, definitions, typedContext, termBuilderProvider]);
 
   if (builderState) {
     return (
@@ -1031,10 +1079,21 @@ function HaveProseItem({
           builderState={builderState}
           registry={_registry}
           onFillSlot={(slotIndex, sourceExpr) => {
+            if (termBuilderProvider) {
+              // Lean path: probe-validate the fill, then write the updated
+              // expression into the have node (live, like the TT builder).
+              void termBuilderProvider.fill(builderState, slotIndex, sourceExpr).then((r) => {
+                if (!r) return;
+                setBuilderState(r.display);
+                const updated = editHaveExpr(state, item.nodeId, r.expr);
+                if (updated) onPushChange(updated);
+              });
+              return;
+            }
             const rebuilt = fillHaveTermBuilderSlotInProofTree(
               state,
               item.nodeId,
-              builderState,
+              builderState as TermBuilderState,
               slotIndex,
               sourceExpr,
               typedContext?.kernelGoal,
@@ -1045,10 +1104,19 @@ function HaveProseItem({
             onPushChange(rebuilt.state);
           }}
           onClearSlot={(slotIndex) => {
+            if (termBuilderProvider) {
+              void termBuilderProvider.clear(builderState, slotIndex).then((r) => {
+                if (!r) return;
+                setBuilderState(r.display);
+                const updated = editHaveExpr(state, item.nodeId, r.expr);
+                if (updated) onPushChange(updated);
+              });
+              return;
+            }
             const rebuilt = clearHaveTermBuilderSlotInProofTree(
               state,
               item.nodeId,
-              builderState,
+              builderState as TermBuilderState,
               slotIndex,
               typedContext?.kernelGoal,
               definitions,
@@ -1059,9 +1127,9 @@ function HaveProseItem({
           }}
           onConfirm={() => setBuilderState(null)}
           onCancel={() => setBuilderState(null)}
-          onHoistToHave={(slotIndex) => {
+          onHoistToHave={termBuilderProvider ? undefined : (slotIndex) => {
             if (!builderState) return;
-            const updated = hoistTermBuilderSlotToHave(state, item.nodeId, builderState, slotIndex, definitions);
+            const updated = hoistTermBuilderSlotToHave(state, item.nodeId, builderState as TermBuilderState, slotIndex, definitions);
             if (!updated) return;
             onPushChange(updated);
             setBuilderState(null);
@@ -1166,6 +1234,10 @@ function HaveProseItem({
 // TermBuilderView — interactive slot-filling for function application
 // ============================================================================
 
+/** Registry fallback for the builder's MathEditor on the Lean path (no TT
+ *  registry there): plain identifiers/applications convert generically. */
+const EMPTY_BUILDER_REGISTRY: SyntaxRegistry = { symbolMap: new Map(), entries: [] };
+
 function TermBuilderView({
   builderState,
   onFillSlot,
@@ -1175,7 +1247,9 @@ function TermBuilderView({
   registry,
   onHoistToHave,
 }: {
-  builderState: TermBuilderState;
+  /** Display contract — satisfied by both TT's TermBuilderState (kernel) and
+   *  the Lean provider's probe-backed display. */
+  builderState: TermBuilderDisplay;
   onFillSlot: (slotIndex: number, value: string) => void;
   onClearSlot: (slotIndex: number) => void;
   onConfirm: () => void;
@@ -1307,8 +1381,9 @@ function TermBuilderView({
                   e.preventDefault();
                   e.stopPropagation();
                   const editorState = mathEditorRef.current?.getState();
-                  if (editorState && registry) {
-                    const result = convertToSource(registry, editorState.root.children);
+                  const reg = registry ?? EMPTY_BUILDER_REGISTRY;
+                  if (editorState) {
+                    const result = convertToSource(reg, editorState.root.children);
                     if (result.source && result.source !== '?') {
                       onFillSlot(activeSlot, result.source);
                       setActiveSlot(null);
@@ -1333,8 +1408,9 @@ function TermBuilderView({
             <button
               onClick={() => {
                 const editorState = mathEditorRef.current?.getState();
-                if (editorState && registry) {
-                  const result = convertToSource(registry, editorState.root.children);
+                const reg = registry ?? EMPTY_BUILDER_REGISTRY;
+                if (editorState) {
+                  const result = convertToSource(reg, editorState.root.children);
                   if (result.source && result.source !== '?') {
                     onFillSlot(activeSlot, result.source);
                     setActiveSlot(null);
@@ -2274,6 +2350,7 @@ interface ProseViewProps {
   holeExtraSlot?: React.ReactNode;
   applySubgoalCount?: (name: string) => number;
   rewriteSideGoalCount?: (name: string) => number;
+  termBuilderProvider?: TermBuilderProvider;
 }
 
 function ProofProseView({
@@ -2283,7 +2360,7 @@ function ProofProseView({
   editingNames, onEditingNames, editingSuggestionId, onEditingSuggestionId,
   onApplySuggestion, onStartEditingSuggestion,
   rewriteProgress, selectedBinder, onSelectBinder,
-  termBuilder, onSetTermBuilder, holeExtraSlot, applySubgoalCount, rewriteSideGoalCount,
+  termBuilder, onSetTermBuilder, holeExtraSlot, applySubgoalCount, rewriteSideGoalCount, termBuilderProvider,
 }: ProseViewProps) {
   if (items.length === 0) {
     return <div style={{ padding: '8px 12px', color: '#484f58', fontStyle: 'italic' }}>No proof steps yet.</div>;
@@ -2348,6 +2425,7 @@ function ProofProseView({
             holeExtraSlot={holeExtraSlot}
             applySubgoalCount={applySubgoalCount}
             rewriteSideGoalCount={rewriteSideGoalCount}
+            termBuilderProvider={termBuilderProvider}
           />
         );
       })}
@@ -2402,6 +2480,7 @@ interface ProseItemViewProps {
   holeExtraSlot?: React.ReactNode;
   applySubgoalCount?: (name: string) => number;
   rewriteSideGoalCount?: (name: string) => number;
+  termBuilderProvider?: TermBuilderProvider;
 }
 
 const proseStyle: React.CSSProperties = {
@@ -2522,7 +2601,7 @@ function ProofTreeTermBuilderPanel({
   onHoistToHave,
   marginBottom = '8px',
 }: {
-  builderState: TermBuilderState;
+  builderState: TermBuilderDisplay;
   registry?: SyntaxRegistry;
   onFillSlot: (slotIndex: number, sourceExpr: string) => void;
   onClearSlot: (slotIndex: number) => void;
@@ -3440,7 +3519,7 @@ function ProseItemView({
   editingNames, onEditingNames, editingSuggestionId, onEditingSuggestionId,
   onApplySuggestion, onStartEditingSuggestion,
   rewriteProgress, selectedBinder, onSelectBinder,
-  termBuilder, onSetTermBuilder, holeExtraSlot, applySubgoalCount, rewriteSideGoalCount,
+  termBuilder, onSetTermBuilder, holeExtraSlot, applySubgoalCount, rewriteSideGoalCount, termBuilderProvider,
 }: ProseItemViewProps) {
   const [hovered, setHovered] = useState(false);
   const { kind } = item;
@@ -3715,6 +3794,7 @@ function ProseItemView({
           registry={registry}
           definitions={definitions}
           typedContext={typedContext}
+          termBuilderProvider={termBuilderProvider}
         />
       );
 
@@ -3794,6 +3874,7 @@ function ProseItemView({
           holeExtraSlot={holeExtraSlot}
           applySubgoalCount={applySubgoalCount}
           rewriteSideGoalCount={rewriteSideGoalCount}
+          termBuilderProvider={termBuilderProvider}
         />
       );
     }
@@ -3849,6 +3930,7 @@ interface HoleProseViewProps {
   holeExtraSlot?: React.ReactNode;
   applySubgoalCount?: (name: string) => number;
   rewriteSideGoalCount?: (name: string) => number;
+  termBuilderProvider?: TermBuilderProvider;
 }
 
 function HoleProseView({
