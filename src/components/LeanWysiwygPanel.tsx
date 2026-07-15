@@ -26,6 +26,7 @@ import { equalityLemmas, rankByGoalOverlap, unfoldableDefs, applySubgoalCount, r
 import { probeSimpFired } from '../lean/simpProbe';
 import { taggedToInteractiveGoal, subtermTextMap, taggedText, posForGoalId, subtermLatexAtPos } from '../lean/leanInteractiveGoal';
 import { targetedSuggestions, freshHypName, hypothesisSuggestions, type LeanSuggestion } from '../lean/leanSuggestions';
+import { parseSlots, appliedExpr, slotSuggestionNames, projectionCandidates, type TermSlot } from '../lean/termSlots';
 import { assembleProofInSource } from '../lean/assembleProofDecl';
 import { analyzeRequest } from '../lean/analyzeClient';
 import { enrichInductionCaseNames } from '../lean/enrichInductionCases';
@@ -61,6 +62,11 @@ function PreviewMath({ latex }: { latex: string }) {
   }
   return <span style={{ fontSize: 13, color: C.text }} dangerouslySetInnerHTML={{ __html: html }} />;
 }
+
+// Probe binder for the slot builder. NOT `__`-prefixed: Lean's interactive
+// goal display filters double-underscore names as internal, which would hide
+// the probed term's type from us.
+const PROBE_NAME = 'leanuiProbe';
 
 const KIND_COLOR: Record<LeanDeclaration['kind'], string> = {
   def: C.blue,
@@ -452,37 +458,55 @@ function LeanProofEditor({
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [hoveredSuggestion, setHoveredSuggestion] = useState<string | null>(null);
 
-  // ── hypothesis "use" flow: click a hypothesis chip to act with it ─────────
-  // (the Lean-path version of the TT editor's click-a-hypothesis interaction).
+  // ── hypothesis "use" flow: the TT editor's TermBuilder, on Lean ───────────
+  // Click a hypothesis chip → validated action pills (exact/apply/cases) and
+  // `use <hyp>.<projection>` pills. Choosing one opens the SLOT BUILDER: one
+  // slot per remaining argument (name + type from a Lean probe), per-slot
+  // suggestions from matching hypotheses, live re-validation on every fill,
+  // committed as `have <fresh> := <fn> <args…>`.
   const [selectedHyp, setSelectedHyp] = useState<string | null>(null);
-  // null = closed; otherwise the expression being typed (`limF.eps_delta (eps/2) …`).
-  const [hypArgExpr, setHypArgExpr] = useState<string | null>(null);
-  const [hypArgError, setHypArgError] = useState<string | null>(null);
-  const [hypArgBusy, setHypArgBusy] = useState(false);
+  const [useBuilder, setUseBuilder] = useState<null | {
+    fn: string;
+    /** Values already applied (each re-validated by a probe). */
+    filled: string[];
+    /** REMAINING slots (types specialize as fills land). */
+    slots: TermSlot[];
+    returnType: string;
+    input: string;
+    error: string | null;
+    busy: boolean;
+  }>(null);
   const hypNames = useMemo(
     () => (lean.cursorGoal?.hyps ?? []).flatMap((h) => h.names),
+    [lean.cursorGoal],
+  );
+  /** Hypotheses with plain type text (for slot suggestions / projections). */
+  const hypsWithTypes = useMemo(
+    () =>
+      (lean.cursorGoal?.hyps ?? []).flatMap((h) =>
+        h.names.map((name) => ({ name, type: taggedText(h.type) })),
+      ),
     [lean.cursorGoal],
   );
   // Selection is per-goal: moving to a different hole/goal resets it.
   useEffect(() => {
     setSelectedHyp(null);
-    setHypArgExpr(null);
-    setHypArgError(null);
+    setUseBuilder(null);
   }, [lean.cursorGoal]);
 
-  // Commit `have <fresh> := <expr>` after Lean validates it at this hole.
-  const submitHypArgs = async () => {
-    const expr = hypArgExpr?.trim();
-    if (!expr || hypArgBusy) return;
-    setHypArgBusy(true);
-    setHypArgError(null);
-    const tactic = `have ${freshHypName(hypNames)} := ${expr}`;
+  // Probe: analyze `have __use := <fn> <filled…>` and read the built term's
+  // remaining FUNCTION type from the goal state — its Pi binders are the open
+  // slots (the Lean-path stand-in for TT's per-slot kernel metas).
+  const probeUse = async (
+    fn: string,
+    filled: string[],
+  ): Promise<{ slots: TermSlot[]; returnType: string } | { error: string }> => {
     try {
-      const sub = leanTacticsToTree(tactic);
+      const sub = leanTacticsToTree(`have ${PROBE_NAME} := ${appliedExpr(fn, filled)}`);
       const applied = replaceNode(state.root, state.cursor.nodeId, sub);
       const assembled = assembleProofInSource({ source, decl: { line: decl.line }, nextDeclLine, proof: applied });
       const tacLine = assembled.lean.nodeRanges.get(sub.id)?.startLine;
-      // Foreground: the user is waiting on this exact validation.
+      // Foreground: the user is mid-interaction with the builder.
       const data = await analyzeRequest({
         source: assembled.source,
         prefix: assembled.prefixSource,
@@ -490,25 +514,61 @@ function LeanProofEditor({
         mathlib,
         priority: true,
       });
-      if (!data) {
-        setHypArgError('analyze request failed');
-        return;
-      }
+      if (!data) return { error: 'analyze request failed' };
       const err = (data.messages ?? []).find(
         (m: { severity: string; startLine: number }) => m.severity === 'error' && m.startLine === tacLine,
       );
-      if (err) {
-        setHypArgError(String(err.text).split('\n')[0]);
-        return;
-      }
-      insertTactic(tactic);
-      setSelectedHyp(null);
-      setHypArgExpr(null);
+      if (err) return { error: String(err.text).split('\n')[0] };
+      const hole = findFirstHole(sub);
+      const range = hole ? assembled.lean.nodeRanges.get(hole.id) : undefined;
+      const g = range
+        ? data.goals.find((x: { startLine: number; startCol: number }) => x.startLine === range.startLine && x.startCol === range.startCol)
+        : undefined;
+      const hyp = g?.goals?.[0]?.hyps?.find((h: { names: string[] }) => h.names.includes(PROBE_NAME));
+      if (!hyp) return { error: 'could not read the built term' };
+      const parsed = parseSlots(taggedText(hyp.type));
+      return parsed;
     } catch (e) {
-      setHypArgError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setHypArgBusy(false);
+      return { error: e instanceof Error ? e.message : String(e) };
     }
+  };
+
+  const openBuilder = (fn: string) => {
+    setUseBuilder({ fn, filled: [], slots: [], returnType: '', input: '', error: null, busy: true });
+    void probeUse(fn, []).then((r) => {
+      setUseBuilder((b) =>
+        b && b.fn === fn
+          ? 'error' in r
+            ? { ...b, busy: false, error: r.error }
+            : { ...b, busy: false, slots: r.slots, returnType: r.returnType }
+          : b,
+      );
+    });
+  };
+
+  /** Fill the FIRST remaining slot; the probe re-derives the rest (their types
+   *  specialize — `0 < epsilon` becomes `0 < eps/2` once ε is given). */
+  const fillSlot = (value: string) => {
+    const b = useBuilder;
+    const v = value.trim();
+    if (!b || b.busy || !v) return;
+    const candidate = [...b.filled, v];
+    setUseBuilder({ ...b, busy: true, error: null });
+    void probeUse(b.fn, candidate).then((r) => {
+      setUseBuilder((cur) => {
+        if (!cur || cur.fn !== b.fn) return cur;
+        if ('error' in r) return { ...cur, busy: false, error: r.error };
+        return { ...cur, busy: false, filled: candidate, slots: r.slots, returnType: r.returnType, input: '' };
+      });
+    });
+  };
+
+  const commitBuilder = () => {
+    const b = useBuilder;
+    if (!b || b.busy || b.error) return;
+    insertTactic(`have ${freshHypName(hypNames)} := ${appliedExpr(b.fn, b.filled)}`);
+    setUseBuilder(null);
+    setSelectedHyp(null);
   };
 
   // Candidate tactics to VALIDATE before showing ("try before suggest"):
@@ -586,10 +646,19 @@ function LeanProofEditor({
   );
   // A clicked hypothesis contributes its own use-actions (exact/apply/cases),
   // trialed like everything else so only the applicable ones show.
-  const hypActionCandidates = useMemo(
-    () => (selectedHyp ? hypothesisSuggestions(selectedHyp) : []),
-    [selectedHyp],
-  );
+  const hypActionCandidates = useMemo(() => {
+    if (!selectedHyp) return [];
+    const out = hypothesisSuggestions(selectedHyp);
+    // Projections to USE on this hypothesis (TT's "Use <field>"): every dotted
+    // declaration is a candidate, ranked by type-token overlap with the hyp;
+    // validation (a `have __use := <hyp>.<field>` trial) drops non-typechecking
+    // ones. Clicking opens the slot builder rather than inserting directly.
+    const hypType = hypsWithTypes.find((h) => h.name === selectedHyp)?.type ?? '';
+    for (const expr of projectionCandidates(selectedHyp, hypType, allDeclarations)) {
+      out.push({ id: `hyp-use:${expr}`, label: `use ${expr}`, tactic: `have ${PROBE_NAME} := ${expr}`, kind: 'apply' });
+    }
+    return out;
+  }, [selectedHyp, hypsWithTypes, allDeclarations]);
   // Dedup the combined candidate list by id. ORDER = trial priority (results
   // stream in as they validate): hypothesis actions, heuristics and
   // `constructor` are cheap and high-value (constructor is the way INTO
@@ -647,8 +716,7 @@ function LeanProofEditor({
                 key={h}
                 onClick={() => {
                   setSelectedHyp((cur) => (cur === h ? null : h));
-                  setHypArgExpr(null);
-                  setHypArgError(null);
+                  setUseBuilder(null);
                 }}
                 title={hyp ? taggedText(hyp.type) : h}
                 style={{
@@ -666,41 +734,101 @@ function LeanProofEditor({
               </button>
             );
           })}
-          {selectedHyp && hypArgExpr === null && (
+          {selectedHyp && !useBuilder && (
             <button
-              onClick={() => setHypArgExpr(`${selectedHyp}`)}
+              onClick={() => openBuilder(selectedHyp)}
               style={{ fontFamily: mono, fontSize: 11, color: C.blue, background: 'transparent', border: `1px dashed ${C.blue}`, borderRadius: 4, padding: '1px 8px', cursor: 'pointer' }}
+              title="Open the term builder on this hypothesis (its `use …` pills below open it on a projection)"
             >
-              give it arguments…
+              build with {selectedHyp}…
             </button>
           )}
         </div>
-        {hypArgExpr !== null && (
-          <div style={{ marginTop: 6 }}>
-            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-              <input
-                autoFocus
-                value={hypArgExpr}
-                onChange={(e) => setHypArgExpr(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') void submitHypArgs();
-                  if (e.key === 'Escape') { setHypArgExpr(null); setHypArgError(null); }
-                }}
-                placeholder={`${selectedHyp}.field arg₁ arg₂ — any expression`}
-                spellCheck={false}
-                style={{ flex: 1, fontFamily: mono, fontSize: 12, color: C.text, background: C.bg, border: `1px solid ${hypArgError ? '#f85149' : C.border}`, borderRadius: 4, padding: '4px 8px', outline: 'none' }}
-              />
+        {useBuilder && (
+          <div style={{ marginTop: 6, border: `1px solid ${C.border}`, borderRadius: 6, padding: '8px 10px', background: C.bg }}>
+            {/* fn + filled values (green) + remaining slots */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', fontFamily: mono, fontSize: 12 }}>
+              <span style={{ color: C.blue, fontWeight: 600 }}>{useBuilder.fn}</span>
+              {useBuilder.filled.map((v, i) => (
+                <span key={i} style={{ color: C.green, border: `1px solid ${C.green}`, borderRadius: 4, padding: '1px 6px' }}>{v}</span>
+              ))}
+              {useBuilder.slots.map((s, i) => (
+                <span
+                  key={`slot-${i}`}
+                  style={{
+                    color: i === 0 ? C.text : C.faint,
+                    border: `1px ${i === 0 ? 'solid' : 'dashed'} ${i === 0 ? C.blue : C.border}`,
+                    borderRadius: 4,
+                    padding: '1px 6px',
+                  }}
+                  title={s.type}
+                >
+                  {s.name ? `${s.name} : ` : ''}{s.type.length > 28 ? `${s.type.slice(0, 28)}…` : s.type}
+                </span>
+              ))}
+              {useBuilder.busy && <span style={{ color: C.label, fontSize: 11 }}>checking…</span>}
+            </div>
+            {/* result type once no slots remain */}
+            {!useBuilder.busy && useBuilder.slots.length === 0 && useBuilder.returnType && (
+              <div style={{ marginTop: 4, fontFamily: mono, fontSize: 11, color: C.label }}>
+                : {useBuilder.returnType.length > 90 ? `${useBuilder.returnType.slice(0, 90)}…` : useBuilder.returnType}
+              </div>
+            )}
+            {/* active slot: suggestions + free input */}
+            {useBuilder.slots.length > 0 && (
+              <div style={{ marginTop: 6 }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 4 }}>
+                  {slotSuggestionNames(useBuilder.slots[0].type, hypsWithTypes).map((n) => (
+                    <button
+                      key={n}
+                      onClick={() => fillSlot(n)}
+                      style={{ fontFamily: mono, fontSize: 11, color: C.purple, background: 'transparent', border: `1px solid ${C.border}`, borderRadius: 4, padding: '1px 8px', cursor: 'pointer' }}
+                    >
+                      {n}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <input
+                    autoFocus
+                    value={useBuilder.input}
+                    onChange={(e) => setUseBuilder((b) => (b ? { ...b, input: e.target.value } : b))}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') fillSlot(useBuilder.input);
+                      if (e.key === 'Escape') setUseBuilder(null);
+                    }}
+                    placeholder={`${useBuilder.slots[0].name ?? 'value'} : ${useBuilder.slots[0].type}`}
+                    spellCheck={false}
+                    style={{ flex: 1, fontFamily: mono, fontSize: 12, color: C.text, background: C.panel, border: `1px solid ${useBuilder.error ? '#f85149' : C.border}`, borderRadius: 4, padding: '4px 8px', outline: 'none' }}
+                  />
+                  <button
+                    onClick={() => fillSlot(useBuilder.input)}
+                    disabled={useBuilder.busy}
+                    style={{ fontFamily: mono, fontSize: 11, color: useBuilder.busy ? C.faint : C.blue, background: 'transparent', border: `1px solid ${useBuilder.busy ? C.border : C.blue}`, borderRadius: 4, padding: '3px 10px', cursor: useBuilder.busy ? 'default' : 'pointer' }}
+                  >
+                    fill
+                  </button>
+                </div>
+              </div>
+            )}
+            {useBuilder.error && (
+              <div style={{ marginTop: 4, fontSize: 11, color: '#f85149', fontFamily: mono }}>{useBuilder.error}</div>
+            )}
+            <div style={{ marginTop: 6, display: 'flex', gap: 6 }}>
               <button
-                onClick={() => void submitHypArgs()}
-                disabled={hypArgBusy}
-                style={{ fontFamily: mono, fontSize: 11, color: hypArgBusy ? C.faint : C.green, background: 'transparent', border: `1px solid ${hypArgBusy ? C.border : C.green}`, borderRadius: 4, padding: '3px 10px', cursor: hypArgBusy ? 'default' : 'pointer' }}
+                onClick={commitBuilder}
+                disabled={useBuilder.busy || !!useBuilder.error}
+                style={{ fontFamily: mono, fontSize: 11, color: useBuilder.busy || useBuilder.error ? C.faint : C.green, background: 'transparent', border: `1px solid ${useBuilder.busy || useBuilder.error ? C.border : C.green}`, borderRadius: 4, padding: '3px 10px', cursor: useBuilder.busy || useBuilder.error ? 'default' : 'pointer' }}
               >
-                {hypArgBusy ? 'checking…' : 'have it'}
+                {useBuilder.slots.length === 0 ? '✓ have it' : 'have it (partial)'}
+              </button>
+              <button
+                onClick={() => setUseBuilder(null)}
+                style={{ fontFamily: mono, fontSize: 11, color: C.label, background: 'transparent', border: `1px solid ${C.border}`, borderRadius: 4, padding: '3px 10px', cursor: 'pointer' }}
+              >
+                close
               </button>
             </div>
-            {hypArgError && (
-              <div style={{ marginTop: 4, fontSize: 11, color: '#f85149', fontFamily: mono }}>{hypArgError}</div>
-            )}
           </div>
         )}
       </div>
@@ -726,7 +854,11 @@ function LeanProofEditor({
             return (
               <button
                 key={s.id}
-                onClick={() => applySuggestion(s.tactic, s.subgoals, s.subgoalTags)}
+                onClick={() =>
+                  s.id.startsWith('hyp-use:')
+                    ? openBuilder(s.id.slice('hyp-use:'.length))
+                    : applySuggestion(s.tactic, s.subgoals, s.subgoalTags)
+                }
                 onMouseEnter={() => setHoveredSuggestion(s.id)}
                 onMouseLeave={() => setHoveredSuggestion((h) => (h === s.id ? null : h))}
                 title={s.tactic}
