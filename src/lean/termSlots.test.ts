@@ -108,3 +108,21 @@ describe('appliedExprWithHoles / parseApplied (builder ⟷ have round-trip)', ()
     expect(parseApplied('limF.eps_delta')).toEqual({ fn: 'limF.eps_delta', values: [] });
   });
 });
+
+describe('resolveGreekToHypNames', () => {
+  test('ε resolves to the unique prefix-named hypothesis (eps ⊂ epsilon)', async () => {
+    const { resolveGreekToHypNames } = await import('./termSlots');
+    expect(resolveGreekToHypNames('ε / 2', ['eps', 'epsPos', 'limF'])).toBe('eps / 2');
+  });
+
+  test('a real unicode-named hypothesis is left alone (→ null, no change needed)', async () => {
+    const { resolveGreekToHypNames } = await import('./termSlots');
+    expect(resolveGreekToHypNames('ε / 2', ['ε', 'h'])).toBeNull();
+  });
+
+  test('ambiguous or unmatched → null', async () => {
+    const { resolveGreekToHypNames } = await import('./termSlots');
+    expect(resolveGreekToHypNames('ε / 2', ['eps', 'epsilon'])).toBeNull(); // two candidates
+    expect(resolveGreekToHypNames('δ + 1', ['eps'])).toBeNull(); // no candidate
+  });
+});

@@ -1082,7 +1082,9 @@ function HaveProseItem({
             if (termBuilderProvider) {
               // Lean path: probe-validate the fill, then write the updated
               // expression into the have node (live, like the TT builder).
-              void termBuilderProvider.fill(builderState, slotIndex, sourceExpr).then((r) => {
+              // Same latex→unicode conversion the TT fill path applies (the
+              // MathEditor emits `\epsilon`; Lean wants `ε`).
+              void termBuilderProvider.fill(builderState, slotIndex, convertMathEditorSourceToUnicode(sourceExpr)).then((r) => {
                 if (!r) return;
                 setBuilderState(r.display);
                 const updated = editHaveExpr(state, item.nodeId, r.expr);

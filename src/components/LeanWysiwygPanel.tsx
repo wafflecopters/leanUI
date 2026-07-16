@@ -28,7 +28,7 @@ import { taggedToInteractiveGoal, subtermTextMap, taggedText, posForGoalId, subt
 import { targetedSuggestions, freshHypName, hypothesisSuggestions, type LeanSuggestion } from '../lean/leanSuggestions';
 import type { TacticSuggestion } from '../proof-tree/tactic-suggestions';
 import type { TermBuilderDisplay, TermBuilderProvider } from '../proof-tree/term-builder';
-import { parseSlots, appliedExpr, appliedExprWithHoles, parseApplied, slotSuggestionNames, projectionCandidates, type TermSlot } from '../lean/termSlots';
+import { parseSlots, appliedExpr, appliedExprWithHoles, parseApplied, resolveGreekToHypNames, slotSuggestionNames, projectionCandidates, type TermSlot } from '../lean/termSlots';
 import { assembleProofInSource } from '../lean/assembleProofDecl';
 import { mathTextToLatex } from '../lean/codeWithInfos';
 import { analyzeRequest } from '../lean/analyzeClient';
@@ -561,9 +561,26 @@ function LeanProofEditor({
       const fn = display.fnDisplayName;
       const values = valuesOf(display);
       values[slotIndex] = sourceExpr;
-      const expr = appliedExprWithHoles(fn, values);
+      let expr = appliedExprWithHoles(fn, values);
       // Validate the whole application with this fill in place.
-      const check = await probeUse(expr);
+      let check = await probeUse(expr);
+      if ('error' in check) {
+        // Typed Greek (ε) against an ASCII-named hypothesis (eps)? Resolve
+        // against the context and retry once.
+        const resolved = resolveGreekToHypNames(sourceExpr, hypNames);
+        if (resolved) {
+          const retryValues = [...values];
+          retryValues[slotIndex] = resolved;
+          const retryExpr = appliedExprWithHoles(fn, retryValues);
+          const retry = await probeUse(retryExpr);
+          if (!('error' in retry)) {
+            values[slotIndex] = resolved;
+            sourceExpr = resolved;
+            expr = retryExpr;
+            check = retry;
+          }
+        }
+      }
       if ('error' in check) {
         const slots = display.slots.map((sl, i) =>
           i === slotIndex ? { ...sl, error: check.error } : sl,

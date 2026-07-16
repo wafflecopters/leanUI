@@ -791,13 +791,16 @@ def rdiv {R : Real} (a b : Carrier R) : Carrier R := rmul a (rinv b)
 def rlt {R : Real} (a b : Carrier R) : Type := Pair (rle a b) (a = b → MyVoid)
 
 -- Notation so the editor renders real-number expressions as math.
-infixl:65 " + " => radd
-infixl:70 " * " => rmul
-infixl:65 " - " => rsub
-infixl:70 " / " => rdiv
-infix:50 " ≤ " => rle
-infix:50 " < " => rlt
-prefix:75 "-" => rneg
+-- (priority := high): these coexist with core's +/*/-// (HAdd/HDiv…); without
+-- an explicit priority, a term like eps / 2 is AMBIGUOUS between rdiv and
+-- HDiv.hDiv — high priority makes the carrier operators win outright.
+infixl:65 (priority := high) " + " => radd
+infixl:70 (priority := high) " * " => rmul
+infixl:65 (priority := high) " - " => rsub
+infixl:70 (priority := high) " / " => rdiv
+infix:50 (priority := high) " ≤ " => rle
+infix:50 (priority := high) " < " => rlt
+prefix:75 (priority := high) "-" => rneg
 
 -- Absolute value (defined from leTotal via eitherElim, not axiomatized)
 def rabs {R : Real} (a : Carrier R) : Carrier R :=
@@ -940,6 +943,14 @@ def addLtBoth {R : Real} (a b c d : Carrier R) (hab : rlt a b) (hcd : rlt c d) :
 ------------------------------------------------------------
 
 def rtwo (R : Real) : Carrier R := radd (rone R) (rone R)
+
+-- Numeric literals AT the carrier: 0/1/2 elaborate to rzero/rone/rtwo, so a
+-- user can WRITE what the goals display (eps / 2, 0 < eps). Display of
+-- those constants as literals is the unexpanders' job below; these instances
+-- are the PARSING direction.
+instance {R : Real} : OfNat (Carrier R) 0 := ⟨rzero R⟩
+instance {R : Real} : OfNat (Carrier R) 1 := ⟨rone R⟩
+instance {R : Real} : OfNat (Carrier R) 2 := ⟨rtwo R⟩
 
 -- Render the carrier constants rzero/rone/rtwo R as the literals 0/1/2 in the
 -- structured editor (display only — like MyNat.zero's unexpander).

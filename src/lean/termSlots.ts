@@ -182,6 +182,42 @@ export function parseApplied(expr: string): { fn: string; values: Array<string |
   return { fn, values };
 }
 
+/** Greek unicode → spelled-out name (for resolving typed math against
+ *  ASCII-named hypotheses: user types \epsilon → ε, but the hyp is `eps`). */
+const GREEK_UNICODE_TO_WORD: Record<string, string> = {
+  'α': 'alpha', 'β': 'beta', 'γ': 'gamma', 'δ': 'delta', 'ε': 'epsilon',
+  'ζ': 'zeta', 'η': 'eta', 'θ': 'theta', 'λ': 'lambda', 'μ': 'mu',
+  'ν': 'nu', 'ξ': 'xi', 'π': 'pi', 'ρ': 'rho', 'σ': 'sigma', 'τ': 'tau',
+  'φ': 'phi', 'χ': 'chi', 'ψ': 'psi', 'ω': 'omega',
+};
+
+/**
+ * Resolve Greek UNICODE identifiers in a typed expression against the actual
+ * hypothesis names: `ε` matches a hypothesis named `ε`, else the unique
+ * hypothesis whose name is a PREFIX (≥3 chars) of the spelled-out word —
+ * `eps` ⊂ `epsilon`, `del` ⊂ `delta`. Returns the substituted expression, or
+ * null when nothing needed substituting or a char was ambiguous/unmatched.
+ */
+export function resolveGreekToHypNames(expr: string, hypNames: readonly string[]): string | null {
+  let changed = false;
+  let failed = false;
+  const out = expr.replace(/[α-ω]/g, (ch) => {
+    if (hypNames.includes(ch)) return ch; // a real unicode-named hypothesis
+    const word = GREEK_UNICODE_TO_WORD[ch];
+    if (!word) return ch;
+    const candidates = hypNames.filter(
+      (n) => n === word || (n.length >= 3 && word.startsWith(n)),
+    );
+    if (candidates.length === 1) {
+      changed = true;
+      return candidates[0];
+    }
+    failed = true;
+    return ch;
+  });
+  return changed && !failed ? out : null;
+}
+
 /** First identifier-ish token of a type — its head shape, for loose matching. */
 function headToken(type: string): string {
   const m = type.trim().match(/[A-Za-z_][A-Za-z0-9_.']*|[<≤≥=∈+\-*/⟦]/);
