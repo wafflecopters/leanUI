@@ -5,6 +5,7 @@ import type { AnalyzeResult, LeanGoal, LeanGoalState } from './types';
 import { assembleProofInSource } from './assembleProofDecl';
 import { analyzeRequest } from './analyzeClient';
 import { mapLeanGoalsToNodes } from './leanGoalMapping';
+import { mathTextToLatex } from './codeWithInfos';
 
 /**
  * Compute a proof tree's goal state from Lean (the async provider for the
@@ -56,6 +57,29 @@ function childNodes(n: ProofNode): ProofNode[] {
   }
   if (n.tag === 'induction') for (const c of n.cases) out.push(c.body);
   return out;
+}
+
+/**
+ * Render each have/exact node's EXPRESSION as math into the goal map
+ * (`proofExprLatex`) — the affordance TT hangs the term builder on: the have
+ * shows "since ⟨math⟩." and CLICKING THE MATH opens the TermBuilderView.
+ * Without this the prose falls back to the plain-text expression editor.
+ * `?_` term-holes render as □ (TT's hole glyph).
+ */
+function addProofExprLatex(node: ProofNode, goalMap: Map<ProofNodeId, NodeGoalInfo>): void {
+  if ((node.tag === 'have' && !node.proofTree) || node.tag === 'exact') {
+    const expr = (node as { expr: string }).expr.trim();
+    if (expr && expr !== '?') {
+      const existing = goalMap.get(node.id) ?? { goalLatex: '', hypotheses: [] };
+      if (!existing.proofExprLatex) {
+        goalMap.set(node.id, {
+          ...existing,
+          proofExprLatex: mathTextToLatex(expr.replace(/\?_/g, '\\square').replace(/\?(?![a-zA-Z_])/g, '\\square')),
+        });
+      }
+    }
+  }
+  for (const child of childNodes(node)) addProofExprLatex(child, goalMap);
 }
 
 /**
@@ -130,6 +154,7 @@ export function useLeanProofGoals(args: UseLeanProofGoalsArgs): LeanProofGoals {
         // tree; once an ancestor has a tacticError, demote any "solved" holes in
         // its subtree to an error so the UI doesn't falsely claim Goal solved.
         unsolveAfterErrors(proof, goalMap, false);
+        addProofExprLatex(proof, goalMap);
         const cursorInfo = goalMap.get(cursorId);
         const typedContext: TypedProofContext | null = cursorInfo
           ? {
