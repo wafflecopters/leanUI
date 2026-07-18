@@ -574,6 +574,14 @@ structure DPair (A : Type u) (B : A → Type v) : Type (max u v) where
   fst : A
   snd : B fst
 
+-- DPair IS the data existential: display (and allow writing) it as
+-- exists-prime x in A, P x. The prime keeps it distinct from core's
+-- Prop-valued exists; the math renderer shows a plain exists-quantifier.
+notation:30 "∃' " x:51 " ∈ " A:51 ", " P => DPair A (fun x => P)
+@[app_unexpander DPair] def unexpDPair : Lean.PrettyPrinter.Unexpander
+  | \`($_ $A fun $x:ident => $P) => \`(∃' $x:ident ∈ $A, $P)
+  | _ => throw ()
+
 ------------------------------------------------------------
 -- Order Hierarchy: Preorder -> PartialOrder -> TotalOrder
 ------------------------------------------------------------

@@ -399,3 +399,14 @@ describe('structural restructuring', () => {
     expect(kids.map((n) => n.tag)).toEqual(['Group', 'Symbol', 'Group']);
   });
 });
+
+describe('data-existential display', () => {
+  test("∃' (the preset's DPair notation) renders as a plain ∃ quantifier", () => {
+    const latex = renderStaticLatex(
+      codeWithInfosToMathRow({ t: 'text', s: "∃' delta ∈ ℝ, P delta" }, { wrapSubterms: false }),
+    );
+    expect(latex).toContain('\\exists');
+    expect(latex).not.toContain("'"); // prime stripped
+    expect(latex).toContain('\\delta');
+  });
+});

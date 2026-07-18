@@ -115,7 +115,9 @@ function isWordChar(ch: string): boolean {
 export function tokenizeText(s: string): MathNode[] {
   const nodes: MathNode[] = [];
   let i = 0;
-  const chars = Array.from(s); // codepoint-safe
+  // Display cleanup: the preset's data-existential is spelled ∃' in SOURCE
+  // (to coexist with core's Prop ∃), but reads as a plain quantifier.
+  const chars = Array.from(s.replace(/∃'/g, '∃')); // codepoint-safe
   let word = '';
   const flush = () => {
     if (word.length > 0) {
