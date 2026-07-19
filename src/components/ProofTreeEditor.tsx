@@ -23,6 +23,10 @@ import {
   moveCursorUp, moveCursorDown,
   pushState, updateCurrent, undo, redo,
   editHaveExpr,
+  findNode,
+  mkHave,
+  mkHole,
+  replaceNode,
 } from '../proof-tree/proof-tree';
 import { runSimp } from '../tactics/simp-tactic';
 import {
@@ -1129,7 +1133,24 @@ function HaveProseItem({
           }}
           onConfirm={() => setBuilderState(null)}
           onCancel={() => setBuilderState(null)}
-          onHoistToHave={termBuilderProvider ? undefined : (slotIndex) => {
+          onHoistToHave={(slotIndex) => {
+            if (termBuilderProvider) {
+              // Lean path: mirror TT's hoist — insert `have hN : <slot type>`
+              // with its own interactive proof subtree above this have, and
+              // fill the slot with hN.
+              const r = termBuilderProvider.hoist?.(builderState, slotIndex);
+              if (!r) return;
+              const target = findNode(state.root, item.nodeId);
+              if (!target || target.tag !== 'have') return;
+              const inserted = mkHave(r.haveName, '?', target, r.haveTypeExpr, mkHole());
+              const withInsert: ProofTreeState = {
+                root: replaceNode(state.root, item.nodeId, inserted),
+                cursor: state.cursor,
+              };
+              setBuilderState(r.display);
+              onPushChange(editHaveExpr(withInsert, item.nodeId, r.expr) ?? withInsert);
+              return;
+            }
             if (!builderState) return;
             const updated = hoistTermBuilderSlotToHave(state, item.nodeId, builderState as TermBuilderState, slotIndex, definitions);
             if (!updated) return;

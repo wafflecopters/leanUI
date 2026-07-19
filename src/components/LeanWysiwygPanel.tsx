@@ -616,6 +616,32 @@ function LeanProofEditor({
       const d = displayFrom(fn, baseSlots, '', values);
       return { display: d, expr: appliedExprWithHoles(fn, values) };
     },
+    // TT's hoist: eject an unfilled slot's obligation into `have hN : <type>`
+    // (with its own proof subtree) above, and fill the slot with hN. Sync —
+    // correct by construction; the goal round-trip validates it.
+    hoist: (display, slotIndex) => {
+      const slot = display.slots[slotIndex];
+      if (!slot || slot.value !== null || !slot.typePlain) return null;
+      // TT naming: h<slotName>, falling back to the index for defaulted names.
+      const base = /^arg\d+$/.test(slot.name) ? `${slotIndex}` : slot.name;
+      let haveName = `h${base}`;
+      if (hypNames.includes(haveName)) haveName = freshHypName(hypNames);
+      const values = valuesOf(display);
+      values[slotIndex] = haveName;
+      const slots = display.slots.map((sl, i) =>
+        i === slotIndex
+          ? { ...sl, value: haveName, sourceExpr: haveName, valueLatex: mathTextToLatex(haveName), error: undefined }
+          : sl,
+      );
+      const suggestions = new Map(display.slotSuggestions);
+      suggestions.set(slotIndex, []);
+      return {
+        display: { ...display, slots, slotSuggestions: suggestions },
+        expr: appliedExprWithHoles(display.fnDisplayName, values),
+        haveName,
+        haveTypeExpr: slot.typePlain,
+      };
+    },
   };
 
   // Candidate tactics to VALIDATE before showing ("try before suggest"):

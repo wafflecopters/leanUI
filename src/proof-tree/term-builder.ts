@@ -89,6 +89,14 @@ export interface TermBuilderProvider {
     display: TermBuilderDisplay,
     slotIndex: number,
   ): Promise<{ display: TermBuilderDisplay; expr: string } | null>;
+  /** Hoist an unfilled slot's obligation into a `have <haveName> : <type>`
+   *  with its own proof subtree ABOVE the builder's have, filling the slot
+   *  with the name. Synchronous — correct by construction (the new have's
+   *  type IS the slot's type), validated by the normal goal round-trip. */
+  hoist?(
+    display: TermBuilderDisplay,
+    slotIndex: number,
+  ): { display: TermBuilderDisplay; expr: string; haveName: string; haveTypeExpr: string } | null;
 }
 
 export interface TermBuilderState {
