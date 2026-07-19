@@ -600,3 +600,17 @@ describe('shared structural editing helpers', () => {
     expect(next.root.expr).toBe('(pairNat n)');
   });
 });
+
+describe('tray input normalization (latex → unicode)', () => {
+  test('intros \\epsilon introduces ε, not a literal backslash name', async () => {
+    const { applyManualProofTreeTactic } = await import('./tactic-editing');
+    const { createInitialState, findNode } = await import('./proof-tree');
+    const state = createInitialState();
+    const next = applyManualProofTreeTactic(state, { tactic: 'intros' } as any, '\\epsilon hpos', {} as any);
+    expect(next).not.toBeNull();
+    const root = next!.root as any;
+    expect(root.tag).toBe('intros');
+    expect(root.names).toEqual(['ε', 'hpos']);
+    expect(findNode(next!.root, next!.cursor.nodeId)).toBeTruthy();
+  });
+});

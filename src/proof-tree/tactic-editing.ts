@@ -764,6 +764,11 @@ export function applyManualProofTreeTactic(
 ): ProofTreeState | null {
   if (!tacticMode) return null;
 
+  // Tray inputs accept LaTeX-style names (`\epsilon`): normalize to unicode
+  // (ε) — a valid identifier on both engines — before any tactic parses the
+  // value. Without this, `intros \epsilon` sends a literal backslash to Lean.
+  value = convertMathEditorSourceToUnicode(value);
+
   switch (tacticMode.tactic) {
     case 'intros': {
       const names = splitNames(value);
