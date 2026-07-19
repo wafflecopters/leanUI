@@ -278,28 +278,25 @@ function restructure(nodes: MathNode[]): MathNode[] {
   const forall = recognizeForall(nodes);
   if (forall) return forall;
 
-  // Fraction: a / b  (split on the first top-level `/`).
-  const slash = nodes.findIndex((n) => isOpSymbol(n, '/'));
-  if (slash > 0 && slash < nodes.length - 1) {
-    const numer = restructure(nodes.slice(0, slash));
-    const denom = restructure(nodes.slice(slash + 1));
-    return [mkFrac(mkRow(numer), mkRow(denom))];
-  }
-
-  // Superscript: base ^ exp.
-  const caret = nodes.findIndex((n) => isOpSymbol(n, '^'));
-  if (caret > 0 && caret < nodes.length - 1) {
-    const base = restructure(nodes.slice(0, caret));
-    const exp = restructure(nodes.slice(caret + 1));
-    return [mkSup(mkRow(base), mkRow(exp))];
-  }
-
-  // Subscript: base _ sub (Lean emits `_` as a symbol from tokenizeText).
-  const under = nodes.findIndex((n) => isOpSymbol(n, '_'));
-  if (under > 0 && under < nodes.length - 1) {
-    const base = restructure(nodes.slice(0, under));
-    const sub = restructure(nodes.slice(under + 1));
-    return [mkSub(mkRow(base), mkRow(sub))];
+  // Fraction / superscript / subscript: these bind TIGHTER than everything
+  // around them, so they take only the ADJACENT operands (an atom or a
+  // parenthesized group), never the whole run — `0 < eps / 2` must render
+  // `0 < \frac{eps}{2}`, not `\frac{0<eps}{2}`; `(eps / 2)` must not split
+  // its parens across numerator and denominator. Leftmost occurrence first,
+  // then recurse (the built node is itself an operand for later rules, so
+  // `f (a / 2)` becomes `f(\frac{a}{2})` via the application rule).
+  for (const [op, build] of TIGHT_BINARY_OPS) {
+    for (let i = 1; i < nodes.length - 1; i++) {
+      if (!isOpSymbol(nodes[i], op)) continue;
+      const left = operandEndingAt(nodes, i - 1);
+      const right = operandStartingAt(nodes, i + 1);
+      if (!left || !right) continue;
+      const built = build(
+        mkRow(restructure(left.operand)),
+        mkRow(restructure(right.operand)),
+      );
+      return restructure([...nodes.slice(0, left.start), built, ...nodes.slice(right.end + 1)]);
+    }
   }
 
   // Big operator: ∑/∏/∫ … body — operator (already mapped to \sum etc.) is the
@@ -329,6 +326,49 @@ function restructure(nodes: MathNode[]): MathNode[] {
   }
 
   return nodes;
+}
+
+/** Tight-binding binary operators handled by adjacent-operand extraction. */
+const TIGHT_BINARY_OPS: ReadonlyArray<[string, (l: MathRow, r: MathRow) => MathNode]> = [
+  ['/', (l, r) => mkFrac(l, r)],
+  ['^', (l, r) => mkSup(l, r)],
+  ['_', (l, r) => mkSub(l, r)],
+];
+
+/** The operand ENDING at `end` (inclusive): a parenthesized group (returned
+ *  WITHOUT its parens) or a single value atom. Null when `end` isn't a value
+ *  (e.g. an operator) — the caller then leaves the tight op literal. */
+function operandEndingAt(nodes: MathNode[], end: number): { start: number; operand: MathNode[] } | null {
+  if (end < 0) return null;
+  if (isOpSymbol(nodes[end], ')')) {
+    let depth = 0;
+    for (let i = end; i >= 0; i--) {
+      if (isOpSymbol(nodes[i], ')')) depth++;
+      else if (isOpSymbol(nodes[i], '(')) {
+        depth--;
+        if (depth === 0) return { start: i, operand: nodes.slice(i + 1, end) };
+      }
+    }
+    return null;
+  }
+  return isAppAtom(nodes[end]) ? { start: end, operand: [nodes[end]] } : null;
+}
+
+/** The operand STARTING at `start` (inclusive) — mirror of operandEndingAt. */
+function operandStartingAt(nodes: MathNode[], start: number): { end: number; operand: MathNode[] } | null {
+  if (start >= nodes.length) return null;
+  if (isOpSymbol(nodes[start], '(')) {
+    let depth = 0;
+    for (let i = start; i < nodes.length; i++) {
+      if (isOpSymbol(nodes[i], '(')) depth++;
+      else if (isOpSymbol(nodes[i], ')')) {
+        depth--;
+        if (depth === 0) return { end: i, operand: nodes.slice(start + 1, i) };
+      }
+    }
+    return null;
+  }
+  return isAppAtom(nodes[start]) ? { end: start, operand: [nodes[start]] } : null;
 }
 
 /** Symbols that are operators/punctuation (NOT application operands). */
