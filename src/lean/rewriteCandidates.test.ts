@@ -83,3 +83,26 @@ describe('rankByGoalOverlap', () => {
     expect(ranked.map((c) => c.name)).toEqual(['plusComm']); // only + overlaps
   });
 });
+
+
+describe('applyCandidates (the core-Lean apply? stand-in)', () => {
+  test('ranks lemmas whose conclusion matches the goal head', async () => {
+    const { applyCandidates } = await import('./rewriteCandidates');
+    const decls = [
+      { name: 'divTwoPos', kind: 'def', prettyType: '{R : Real} → (e : ℝ) → 0 < e → 0 < e / 2', line: 1, col: 0 },
+      { name: 'divPos', kind: 'def', prettyType: '{R : Real} → (a b : ℝ) → 0 < a → 0 < b → 0 < a / b', line: 2, col: 0 },
+      { name: 'plusComm', kind: 'def', prettyType: '∀ (n m : MyNat), n + m = m + n', line: 3, col: 0 },
+      { name: 'sum', kind: 'def', prettyType: 'MyNat → MyNat', line: 4, col: 0 },
+    ] as any;
+    const c = applyCandidates(decls, '0 < ε / 2', 'limitAdd');
+    expect(c[0]).toBe('divTwoPos'); // highest conclusion-token overlap
+    expect(c).toContain('divPos');
+    expect(c).not.toContain('plusComm'); // = head, not <
+    expect(c).not.toContain('sum'); // no relational conclusion
+  });
+
+  test('no head operator in the goal → no candidates', async () => {
+    const { applyCandidates } = await import('./rewriteCandidates');
+    expect(applyCandidates([] as any, 'Limit f x0 L')).toEqual([]);
+  });
+});

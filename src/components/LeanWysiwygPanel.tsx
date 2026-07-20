@@ -22,7 +22,7 @@ import { proofTreeToLean, proofTreeToSource } from '../lean/proofTreeToLean';
 import { useLeanProofGoals } from '../lean/useLeanProofGoals';
 import { useLeanSuggestions } from '../lean/useLeanSuggestions';
 import { useLeanValidatedSuggestions } from '../lean/useLeanValidatedSuggestions';
-import { equalityLemmas, rankByGoalOverlap, unfoldableDefs, applySubgoalCount, rewriteSideGoalCount } from '../lean/rewriteCandidates';
+import { equalityLemmas, rankByGoalOverlap, unfoldableDefs, applyCandidates, applySubgoalCount, rewriteSideGoalCount } from '../lean/rewriteCandidates';
 import { probeSimpFired } from '../lean/simpProbe';
 import { taggedToInteractiveGoal, subtermTextMap, taggedText, posForGoalId, subtermLatexAtPos } from '../lean/leanInteractiveGoal';
 import { targetedSuggestions, freshHypName, hypothesisSuggestions, type LeanSuggestion } from '../lean/leanSuggestions';
@@ -708,6 +708,26 @@ function LeanProofEditor({
     const names = equalityLemmas(allDeclarations, decl.name).map((c) => c.name);
     return names.length ? [{ id: 'lean-simp-ring', label: 'simp [ring lemmas]', tactic: `simp [${names.join(', ')}]`, kind: 'simp' as const }] : [];
   }, [allDeclarations, decl.name]);
+  // `assumption` closes any goal already in the context — cheap, and shows as
+  // ✓ Solve Goal when it fires (e.g. `0 < ε` with epsPos in scope).
+  const assumptionCandidate = useMemo(
+    () => [{ id: 'lean-assumption', label: 'assumption', tactic: 'assumption', kind: 'exact' as const }],
+    [],
+  );
+  // File lemmas whose conclusion matches the goal's shape → `apply <lemma>`
+  // pills (validated; subgoal counts from the trial). Surfaces e.g.
+  // `apply divTwoPos` at `0 < ε / 2`, which exact? misses entirely on the
+  // preset's Type-valued relations.
+  const applyLemmaCandidates = useMemo<LeanSuggestion[]>(
+    () =>
+      applyCandidates(allDeclarations, goalText, decl.name).map((name) => ({
+        id: `lean-applylemma:${name}`,
+        label: `apply ${name}`,
+        tactic: `apply ${name}`,
+        kind: 'apply' as const,
+      })),
+    [allDeclarations, goalText, decl.name],
+  );
   // Always try `constructor` — it unifies the goal with its inductive type's
   // constructors. Generic (no domain names); validated, so it only shows when
   // it applies. Closing (`0 ≤ a` ↦ `Leq.LeqZero`) shows as ✓ Solve Goal;
@@ -738,7 +758,7 @@ function LeanProofEditor({
   // structure goals like Limit), so they go before the larger rewrite/unfold
   // batches.
   const candSeen = new Set<string>();
-  const validateCandidates = [...hypActionCandidates, ...heuristicCandidates, ...constructorCandidate, ...rewriteCandidates, ...unfoldCandidates, ...ringCandidate].filter((s) =>
+  const validateCandidates = [...hypActionCandidates, ...heuristicCandidates, ...assumptionCandidate, ...constructorCandidate, ...applyLemmaCandidates, ...rewriteCandidates, ...unfoldCandidates, ...ringCandidate].filter((s) =>
     candSeen.has(s.id) ? false : (candSeen.add(s.id), true),
   );
   const validated = useLeanValidatedSuggestions({

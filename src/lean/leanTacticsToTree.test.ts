@@ -150,6 +150,17 @@ describe('leanTacticsToTree', () => {
     expect(tree.sideGoals).toBeUndefined();
   });
 
+  test('findFirstHole descends into a have proof subtree (hoisted obligation)', async () => {
+    const { findFirstHole } = await import('../proof-tree/tactic-to-tree');
+    resetProofIds();
+    const tree = leanTacticsToTree(
+      ['have h1 : 0 < e := by', '  sorry', 'have h := f h1', 'sorry'].join('\n'),
+    ) as any;
+    // The FIRST hole in proof order is inside h1's by-block, not the trailing one.
+    const hole = findFirstHole(tree)!;
+    expect(hole.id).toBe(tree.proofTree.id);
+  });
+
   // Round-trip stability: printing a parsed tree reproduces the canonical form.
   describe('parse → print round-trip is stable', () => {
     const cases: Array<[string, string]> = [

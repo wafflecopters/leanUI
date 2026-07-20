@@ -1335,6 +1335,13 @@ def divTwoPos {R : Real} (e : Carrier R) (hlt : rlt (rzero R) e) :
     rlt (rzero R) (rdiv e (rtwo R)) :=
   replace (fun z => rlt (rzero R) z) (halfEqDiv e) (halfMulEpsPos e hlt)
 
+-- General positivity of quotients: 0 < a and 0 < b give 0 < a / b. The ε-δ
+-- proofs mostly need the divTwoPos special case above, but the general form
+-- belongs in the toolkit (statement faithful; body sorried like the other
+-- ports of TT tactic proofs — the sorry surfaces as a warning, not an error).
+def divPos {R : Real} (a b : Carrier R) (ha : rlt (rzero R) a) (hb : rlt (rzero R) b) :
+    rlt (rzero R) (rdiv a b) := sorry
+
 def divTwoAddEq {R : Real} (e : Carrier R) :
     (radd (rdiv e (rtwo R)) (rdiv e (rtwo R))) = e :=
   replace (fun z => (radd z z) = e) (halfEqDiv e) (halfMulEps e)

@@ -343,10 +343,33 @@ export function findFirstHole(node: ProofNode): ProofNode | null {
     case 'intros':
     case 'unfold':
     case 'fold':
-    case 'rewrite':
-    case 'have':
-    case 'suffices':
       return findFirstHole(node.child);
+    case 'rewrite': {
+      // Main continuation first, then any conditional side-goal branches.
+      const inChild = findFirstHole(node.child);
+      if (inChild) return inChild;
+      for (const sg of node.sideGoals ?? []) {
+        const found = findFirstHole(sg);
+        if (found) return found;
+      }
+      return null;
+    }
+    case 'have': {
+      // A have's own proof subtree (e.g. a hoisted obligation) comes BEFORE
+      // its continuation — proof order, and where the cursor should land.
+      if (node.proofTree) {
+        const found = findFirstHole(node.proofTree);
+        if (found) return found;
+      }
+      return findFirstHole(node.child);
+    }
+    case 'suffices': {
+      if (node.byProof) {
+        const found = findFirstHole(node.byProof);
+        if (found) return found;
+      }
+      return findFirstHole(node.child);
+    }
     case 'simp':
       return findFirstHole(node.child);
     case 'induction':

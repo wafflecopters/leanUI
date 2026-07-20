@@ -190,6 +190,36 @@ export function unfoldableDefs(
 }
 
 /**
+ * File lemmas whose CONCLUSION is shaped like the goal — candidates for
+ * `apply <name>` (the core-Lean stand-in for `apply?`, which found nothing
+ * useful here: Lean's built-in search struggles with the presets' Type-valued
+ * relations). Same head operator as the goal, ranked by token overlap of the
+ * conclusion, capped. Validation trials drop the ones that don't unify.
+ */
+export function applyCandidates(
+  declarations: readonly LeanDeclaration[],
+  goalText: string,
+  currentDeclName?: string,
+  cap = 8,
+): string[] {
+  const goalHead = headOp(goalText);
+  if (!goalHead) return [];
+  const goalTokens = tokens(goalText);
+  const scored: Array<{ name: string; score: number }> = [];
+  for (const d of declarations) {
+    if (d.name === currentDeclName) continue;
+    if (d.kind !== 'def' && d.kind !== 'theorem') continue;
+    const concl = conclusionOf(d.prettyType);
+    if (headOp(concl) !== goalHead) continue;
+    let score = 0;
+    for (const t of tokens(concl)) if (goalTokens.has(t)) score++;
+    scored.push({ name: d.name, score });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, cap).map((s) => s.name);
+}
+
+/**
  * Order candidates by descending token overlap between their LHS and the goal,
  * then cap. Candidates sharing more symbols with the goal are likelier to fire.
  */
