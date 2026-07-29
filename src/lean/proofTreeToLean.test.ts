@@ -54,11 +54,28 @@ describe('proofTreeToLean', () => {
     expect(proofTreeToLean(mkSimp(['a', 'b'], [], mkHole())).source).toBe('  simp [a, b]\n  sorry');
   });
 
-  test('apply with two subgoal children', () => {
+  // A multi-premise `apply` opens BRANCHES, and branches print as bullets —
+  // the same form `constructor` uses. Printed flat (`apply foo` / `exact h1` /
+  // `exact h2`) the structure is gone: a flat tactic sequence cannot say "these
+  // two chains prove two different goals", so re-parsing collapses them.
+  test('apply with two subgoal children prints them as bullets', () => {
     resetProofIds();
     const tree = mkApply('foo', [mkExact('h1'), mkExact('h2')]);
     const out = proofTreeToLean(tree);
-    expect(out.source).toBe('  apply foo\n  exact h1\n  exact h2');
+    expect(out.source).toBe('  apply foo\n  ·\n    exact h1\n  ·\n    exact h2');
+  });
+
+  test('apply with named subgoals prints `case <tag> =>` blocks', () => {
+    resetProofIds();
+    const tree = mkApply('divPos', [mkHole(), mkHole()], false, ['ha', 'hb']);
+    expect(proofTreeToLean(tree).source).toBe(
+      '  apply divPos\n  case ha =>\n    sorry\n  case hb =>\n    sorry',
+    );
+  });
+
+  test('a single-child apply still chains (the common case)', () => {
+    resetProofIds();
+    expect(proofTreeToLean(mkApply('foo', [mkExact('h1')])).source).toBe('  apply foo\n  exact h1');
   });
 
   test('have flat expression', () => {

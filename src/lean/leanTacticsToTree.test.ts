@@ -161,6 +161,44 @@ describe('leanTacticsToTree', () => {
     expect(hole.id).toBe(tree.proofTree.id);
   });
 
+  // REGRESSION: `apply <lemma>` used to accept only a single continuation, so a
+  // multi-premise apply's branches parsed back as stray `exact ·` steps — the
+  // proof structure was destroyed by every save/reload cycle.
+  test('apply branches parse as subgoals, not as `exact ·` steps', () => {
+    const tree = leanTacticsToTree('apply divPos\n·\n  exact h1\n·\n  exact h2');
+    expect(tree.tag).toBe('apply');
+    const apply = tree as { tag: 'apply'; children: readonly { tag: string }[] };
+    expect(apply.children).toHaveLength(2);
+    expect(apply.children.every((c) => c.tag === 'exact')).toBe(true);
+  });
+
+  test('case-tagged apply branches keep their goal names', () => {
+    const tree = leanTacticsToTree('apply divPos\ncase ha =>\n  sorry\ncase hb =>\n  sorry');
+    expect((tree as { childTags?: string[] }).childTags).toEqual(['ha', 'hb']);
+  });
+
+  // REGRESSION: the Compute suggestion emits `conv in (pat) => simp`, which
+  // fell through to the raw-exact fallback — a TERMINAL node. The hole it
+  // replaced vanished, so the goal chain stopped dead after the step instead
+  // of continuing to the rewritten goal (e.g. `0 < 1` after `0 < 2 + -1`).
+  test('conv-scoped simp is a chaining simp step, not a terminal exact', () => {
+    resetProofIds();
+    const tree = leanTacticsToTree('conv in (2 + -1) => simp') as any;
+    expect(tree.tag).toBe('simp');
+    expect(tree.convPattern).toBe('2 + -1');
+    expect(tree.child.tag).toBe('hole');
+  });
+
+  test('conv-scoped simp keeps its continuation and lemma list', () => {
+    resetProofIds();
+    const tree = leanTacticsToTree('  conv in (f x) => simp only [foo, bar]\n  exact h') as any;
+    expect(tree.tag).toBe('simp');
+    expect(tree.convPattern).toBe('f x');
+    expect(tree.only).toBe(true);
+    expect(tree.lemmas).toEqual(['foo', 'bar']);
+    expect(tree.child.tag).toBe('exact');
+  });
+
   // Round-trip stability: printing a parsed tree reproduces the canonical form.
   describe('parse → print round-trip is stable', () => {
     const cases: Array<[string, string]> = [
@@ -173,6 +211,8 @@ describe('leanTacticsToTree', () => {
       ],
       ['conv-scoped rewrite', '  conv in (a.succ + 1) => rw [plusComm]\n  sorry'],
       ['conv-scoped reverse rewrite', '  conv in (sum i n f) => rw [← summationSplit]\n  sorry'],
+      ['conv-scoped simp', '  conv in (2 + -1) => simp\n  sorry'],
+      ['conv-scoped simp only with lemmas', '  conv in (f x) => simp only [foo]\n  sorry'],
       ['simp only', '  simp only [plusComm, mulComm]\n  sorry'],
       ['terminal tactic (omega)', '  omega'],
       ['terminal tactic (rfl)', '  rfl'],
@@ -184,6 +224,15 @@ describe('leanTacticsToTree', () => {
       [
         'constructor with case-tagged subgoals (witness-first order)',
         ['  constructor', '  case fst =>', '    sorry', '  case snd =>', '    sorry'].join('\n'),
+      ],
+      ['apply with a single continuation', '  apply divTwoPos\n  sorry'],
+      [
+        'apply with two subgoal bullets (a multi-premise lemma)',
+        ['  apply divPos', '  ·', '    sorry', '  ·', '    sorry'].join('\n'),
+      ],
+      [
+        'apply with case-tagged subgoals',
+        ['  apply divPos', '  case ha =>', '    sorry', '  case hb =>', '    sorry'].join('\n'),
       ],
       ['unrecognized tactic prints verbatim (not exact)', '  refine leqAntisym ?_ ?_'],
       [

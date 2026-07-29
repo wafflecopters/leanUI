@@ -35,11 +35,13 @@ describe('parseAnalyzeJson', () => {
           startCol: 2,
           endLine: 6,
           endCol: 5,
+          valueCaseTags: ['b'],
           goals: [
             {
               case: 'succ',
               hyps: [{ names: ['n'], type: { t: 'text', s: 'Nat' } }],
               targetTagged: { t: 'append', kids: [{ t: 'tag', pos: '/', child: { t: 'text', s: 'n + 0 = n' } }] },
+              isProp: false,
               plain: 'n : Nat\n⊢ n + 0 = n',
             },
           ],
@@ -54,10 +56,16 @@ describe('parseAnalyzeJson', () => {
     expect(parsed).not.toBeNull();
     expect(parsed!.messages).toHaveLength(1);
     expect(parsed!.goals).toHaveLength(1);
+    // The split-time dependency record must survive parsing — it's what keeps
+    // "choose a value" goals marked after the value is supplied.
+    expect(parsed!.goals[0].valueCaseTags).toEqual(['b']);
     const gstate = parsed!.goals[0].goals[0];
     expect(gstate.case).toBe('succ');
     expect(gstate.hyps).toEqual([{ names: ['n'], type: { t: 'text', s: 'Nat' } }]);
     expect(gstate.targetTagged.t).toBe('append');
+    // isProp must survive parsing — dropping it silently reverts the UI to the
+    // stale-heuristic behavior ("We must show ℝ" on data goals).
+    expect(gstate.isProp).toBe(false);
     expect(gstate.plain).toContain('⊢ n + 0 = n');
     expect(parsed!.declarations).toHaveLength(2);
     expect(parsed!.declarations[0]).toMatchObject({ name: 'good', kind: 'def', prettyValue: '42' });
@@ -161,5 +169,30 @@ describe('shiftAnalyzeLines', () => {
     // Clamp: an import-line artifact never maps below line 1.
     const clamped = shiftAnalyzeLines(parsed, -10);
     expect(clamped.declarations[0].line).toBe(1);
+  });
+});
+
+describe('clampPoolSize', () => {
+  test('unset env falls back to the default', async () => {
+    const { clampPoolSize } = await import('./lean-bridge');
+    expect(clampPoolSize(undefined, 3, 8)).toBe(3);
+    expect(clampPoolSize(undefined, 1, 4)).toBe(1);
+  });
+
+  test('valid integers in range are honored', async () => {
+    const { clampPoolSize } = await import('./lean-bridge');
+    expect(clampPoolSize('1', 3, 8)).toBe(1);
+    expect(clampPoolSize('2', 1, 4)).toBe(2);
+    expect(clampPoolSize('8', 3, 8)).toBe(8);
+  });
+
+  test('garbage, zero, negatives, floats, and out-of-range all fall back', async () => {
+    const { clampPoolSize } = await import('./lean-bridge');
+    expect(clampPoolSize('', 3, 8)).toBe(3); // Number('') is 0 — below min
+    expect(clampPoolSize('0', 3, 8)).toBe(3);
+    expect(clampPoolSize('-2', 3, 8)).toBe(3);
+    expect(clampPoolSize('2.5', 3, 8)).toBe(3);
+    expect(clampPoolSize('lots', 3, 8)).toBe(3);
+    expect(clampPoolSize('999', 1, 4)).toBe(1); // over max → fallback, not clamp-to-max
   });
 });

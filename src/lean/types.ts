@@ -27,6 +27,10 @@ export interface LeanGoalState {
   hyps: LeanHyp[];
   /** Tagged pretty-print of the target type (after ⊢). */
   targetTagged: TaggedText;
+  /** Whether the target is a Prop (a claim to prove) as opposed to data (a
+   *  value to choose, e.g. `⊢ ℝ` after `apply ltLeTrans`). Absent on output
+   *  from an extractor built before this field existed. */
+  isProp?: boolean;
   /** Plain-text rendering (fallback / copy). */
   plain: string;
 }
@@ -36,6 +40,10 @@ export interface LeanGoal {
   startCol: number;
   endLine: number;
   endCol: number;
+  /** Case tags of goals whose metavariable occurs in a sibling goal's type —
+   *  values to CHOOSE (e.g. the `b` midpoint of `apply ltLeTrans`). Recorded
+   *  by the extractor at the split itself, so it survives later assignment. */
+  valueCaseTags?: string[];
   /** The open goal states at this tactic position. */
   goals: LeanGoalState[];
 }

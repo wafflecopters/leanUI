@@ -54,47 +54,91 @@ function conclusionOf(prettyType: string): string {
   return rest.trim();
 }
 
+/** A binder group antecedent — `(a b : ℝ)`, `{R : Real}`, `[Inst α]`, `⦃x : T⦄`.
+ *  Returns the bracket and the bound names, or null when the antecedent is an
+ *  ordinary premise (`0 < a`) rather than a binder. */
+function asBinderGroup(antecedent: string): { bracket: string; names: string[] } | null {
+  const s = antecedent.trim();
+  const pairs: Array<[string, string]> = [['(', ')'], ['{', '}'], ['[', ']'], ['⦃', '⦄']];
+  const pair = pairs.find(([o, c]) => s.startsWith(o) && s.endsWith(c));
+  if (!pair) return null;
+  const inner = s.slice(pair[0].length, s.length - pair[1].length);
+  const colon = splitTopLevel(inner, ' : ');
+  if (!colon) return null; // `(0 < a)` — a parenthesized premise, not a binder
+  const names = colon[0].trim().split(/\s+/).filter(Boolean);
+  if (names.length === 0 || !names.every((n) => /^[A-Za-z_α-ωΑ-Ω][^\s]*$/.test(n))) return null;
+  return { bracket: pair[0], names };
+}
+
+/** Is `name` used in `text` as a standalone token? */
+function mentions(text: string, name: string): boolean {
+  return text.split(/[^A-Za-z0-9_'α-ωΑ-Ω]+/).includes(name);
+}
+
 /**
- * How many subgoals `apply <name>` is likely to produce — the count of top-level
- * `→` antecedents in the lemma's type (after stripping ∀-bound implicits). An
- * estimate (some antecedents may be unified away), but far better than assuming 1
- * on the Lean backend where there's no kernel to ask. Returns 1 if unknown.
+ * How many GOALS a backwards step through this type leaves.
+ *
+ * `apply`/`rw` unify the lemma's CONCLUSION with the goal, which solves every
+ * argument the conclusion mentions. What's left over becomes a goal. So:
+ *
+ *   - an ordinary premise (`0 < a`) is always a goal;
+ *   - an explicit binder `(a b : ℝ)` contributes a goal per name the conclusion
+ *     does NOT mention — `leLtTrans : (a b c : ℝ) → a ≤ b → b < c → a < c`
+ *     leaves the middle point `b` open, which is exactly the `ℝ` goal Lean
+ *     reports;
+ *   - implicit `{…}` and instance `[…]` binders contribute nothing: Lean
+ *     determines them from the types of the other arguments, which the printed
+ *     conclusion doesn't show.
+ *
+ * An estimate — the trial-validated suggestions carry Lean's true count — but
+ * one that matches Lean on the ordinary shapes, where counting every `→`
+ * antecedent (the previous rule) turned each lemma's own binder list into
+ * phantom goals.
+ */
+function premiseCount(prettyType: string): number {
+  let rest = stripForall(prettyType);
+  const antecedents: string[] = [];
+  for (;;) {
+    const split = splitTopLevel(rest, ' → ');
+    if (!split) break;
+    antecedents.push(split[0]);
+    rest = stripForall(split[1]);
+  }
+  const conclusion = rest;
+  let count = 0;
+  for (const a of antecedents) {
+    const binder = asBinderGroup(a);
+    if (!binder) {
+      count++;
+    } else if (binder.bracket === '(') {
+      count += binder.names.filter((n) => !mentions(conclusion, n)).length;
+    }
+  }
+  return count;
+}
+
+/**
+ * How many subgoals `apply <name>` is likely to produce. Floored at 1: an apply
+ * node always has at least one child branch, even when the lemma closes the
+ * goal outright. Returns 1 if the name is unknown.
  */
 export function applySubgoalCount(declarations: readonly LeanDeclaration[], name: string): number {
   const d = declarations.find((x) => x.name === name);
   if (!d) return 1;
-  let rest = stripForall(d.prettyType);
-  let count = 0;
-  for (;;) {
-    const split = splitTopLevel(rest, ' → ');
-    if (!split) break;
-    count++;
-    rest = stripForall(split[1]);
-  }
-  return Math.max(1, count);
+  return Math.max(1, premiseCount(d.prettyType));
 }
 
 /**
- * How many SIDE GOALS `rw [name]` is likely to leave — the count of top-level
- * `→` antecedents (the lemma's premises) after stripping ∀-bound binders. The
- * equality conclusion is unified with the goal by `rw`; each remaining premise
- * becomes a side goal (e.g. `summationSplit : ∀ i n, i ≤ n → ∀ f, … = …` leaves
- * the one `i ≤ n` premise). Unlike `applySubgoalCount` this is NOT floored at 1:
- * a premise-free lemma like `plusComm` leaves 0 side goals. An estimate (some
- * premises may unify away), matching the apply-counter's philosophy.
+ * How many SIDE GOALS `rw [name]` is likely to leave — the lemma's premises.
+ * The equality conclusion is unified with the goal by `rw`; each remaining
+ * premise becomes a side goal (e.g. `summationSplit : ∀ i n, i ≤ n → ∀ f, … = …`
+ * leaves the one `i ≤ n` premise). Unlike `applySubgoalCount` this is NOT
+ * floored at 1: a premise-free lemma like `plusComm` leaves 0 side goals.
  */
 export function rewriteSideGoalCount(declarations: readonly LeanDeclaration[], name: string): number {
   const d = declarations.find((x) => x.name === name);
   if (!d) return 0;
-  let rest = stripForall(d.prettyType);
-  let count = 0;
-  for (;;) {
-    const split = splitTopLevel(rest, ' → ');
-    if (!split) break;
-    count++;
-    rest = stripForall(split[1]);
-  }
-  return count;
+  return premiseCount(d.prettyType);
 }
 
 /** Does the type take an equality as a hypothesis? (congruence/symm/trans-style
@@ -109,10 +153,31 @@ function takesEqualityHypothesis(prettyType: string): boolean {
   }
 }
 
-/** Symbol tokens for overlap ranking; split on `.` so `a.succ`/`n.succ` share `succ`. */
+/**
+ * The TARGET of a goal, given text that may be a whole goal state.
+ *
+ * Lean's plain rendering of a goal is `<hyp>\n…\n⊢ <target>`. Ranking against
+ * all of that is wrong — the hypotheses' operators drown out the target's (a
+ * context carrying `limF : lim⟦x0⟧ f = L` made a `0 < ε / 2` goal read as an
+ * EQUALITY, so every `<` lemma was filtered out). Everything after the last
+ * `⊢` is the target; text without a `⊢` is already a bare expression.
+ */
+export function targetOfGoalText(text: string): string {
+  const at = text.lastIndexOf('⊢');
+  return (at === -1 ? text : text.slice(at + 1)).trim();
+}
+
+/**
+ * Symbol tokens for overlap ranking; split on `.` so `a.succ`/`n.succ` share
+ * `succ`.
+ *
+ * NUMERALS count. Without them `0 ≤ 1` tokenizes to just `{≤}` — the same as
+ * every other ≤ statement in the file — so a lemma whose conclusion IS the goal
+ * scores no better than an unrelated one and gets lost under the cap.
+ */
 function tokens(s: string): Set<string> {
   const out = new Set<string>();
-  for (const m of s.matchAll(/[A-Za-z_][A-Za-z0-9_']*|[+\-*/≤<>∑∏·]/g)) out.add(m[0]);
+  for (const m of s.matchAll(/[A-Za-z_][A-Za-z0-9_']*|\d+|[+\-*/≤<>∑∏·]/g)) out.add(m[0]);
   return out;
 }
 
@@ -173,7 +238,7 @@ export function equalityLemmas(
 export function unfoldableDefs(
   declarations: readonly LeanDeclaration[],
   currentDeclName?: string,
-  cap = 20,
+  cap = 40,
 ): string[] {
   const out: string[] = [];
   for (const d of declarations) {
@@ -182,12 +247,64 @@ export function unfoldableDefs(
     // Skip noise: auto-generated instances (instOfNat…) and structure
     // projections (Semiring.add) — not useful unfold targets.
     if (d.name.startsWith('inst') || d.name.includes('.')) continue;
-    if (splitTopLevel(conclusionOf(d.prettyType), ' = ')) continue; // equality lemma, not an unfold target
+    // A LEMMA is not an unfold target. Anything concluding in a relation
+    // (`= `, `≤`, `<`) is a proof about terms, not a definition of one —
+    // `unfold zeroLeOne` is meaningless, and before this filter the list was
+    // mostly such lemmas, crowding out the actual definitions under the cap.
+    if (headOp(conclusionOf(d.prettyType)) !== null) continue;
     out.push(d.name);
     if (out.length >= cap) break;
   }
   return out;
 }
+
+/** Every name a declaration binds in its own telescope (∀-groups and arrows). */
+function binderNames(prettyType: string): Set<string> {
+  const names = new Set<string>();
+  let rest = prettyType.trim();
+  for (;;) {
+    while (rest.startsWith('∀')) {
+      const comma = splitTopLevel(rest, ', ');
+      if (!comma) break;
+      for (const g of comma[0].slice(1).matchAll(/[({[⦃]([^:()[\]{}⦃⦄]*):/g)) {
+        for (const n of g[1].trim().split(/\s+/)) if (n) names.add(n);
+      }
+      rest = comma[1].trim();
+    }
+    const split = splitTopLevel(rest, ' → ');
+    if (!split) break;
+    const binder = asBinderGroup(split[0]);
+    if (binder) for (const n of binder.names) names.add(n);
+    rest = split[1].trim();
+  }
+  return names;
+}
+
+/**
+ * Is this lemma a STRUCTURAL move rather than a specific fact?
+ *
+ * `leLtTrans : (a b c : ℝ) → a ≤ b → b < c → a < c` concludes `a < c` — built
+ * only from its own binders, so it fits ANY `<` goal. `zeroLtTwo : 0 < 2` fits
+ * exactly one.
+ *
+ * The distinction matters because ranking by token overlap systematically
+ * buries the general ones: a conclusion made of bound variables shares almost
+ * nothing with a concrete goal, so transitivity loses to every lemma that
+ * happens to mention a `0`. Those are the moves a user reaches for when the
+ * direct lemma isn't what they want, so a few slots are held for them.
+ */
+function isStructural(prettyType: string): boolean {
+  const conclusion = conclusionOf(prettyType);
+  // A concrete NUMERAL makes the conclusion specific: `divPos`'s `0 < a / b` is
+  // about zero, not about any two terms, even though its variables are bound.
+  if (/\d/.test(conclusion)) return false;
+  const binders = binderNames(prettyType);
+  const idents = [...conclusion.matchAll(/[A-Za-z_α-ωΑ-Ω][A-Za-z0-9_'α-ωΑ-Ω]*/g)].map((m) => m[0]);
+  return idents.length > 0 && idents.every((id) => binders.has(id));
+}
+
+/** Slots held for structural moves, so they are always reachable. */
+const STRUCTURAL_SLOTS = 3;
 
 /**
  * File lemmas whose CONCLUSION is shaped like the goal — candidates for
@@ -202,10 +319,11 @@ export function applyCandidates(
   currentDeclName?: string,
   cap = 8,
 ): string[] {
-  const goalHead = headOp(goalText);
+  const target = targetOfGoalText(goalText);
+  const goalHead = headOp(target);
   if (!goalHead) return [];
-  const goalTokens = tokens(goalText);
-  const scored: Array<{ name: string; score: number }> = [];
+  const goalTokens = tokens(target);
+  const scored: Array<{ name: string; score: number; structural: boolean }> = [];
   for (const d of declarations) {
     if (d.name === currentDeclName) continue;
     if (d.kind !== 'def' && d.kind !== 'theorem') continue;
@@ -213,10 +331,31 @@ export function applyCandidates(
     if (headOp(concl) !== goalHead) continue;
     let score = 0;
     for (const t of tokens(concl)) if (goalTokens.has(t)) score++;
-    scored.push({ name: d.name, score });
+    scored.push({ name: d.name, score, structural: isStructural(d.prettyType) });
   }
   scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, cap).map((s) => s.name);
+
+  // Best matches first — but keep a few slots for the structural moves, which
+  // score near zero by construction and would otherwise never be offered.
+  const picked = scored.slice(0, cap);
+  const have = new Set(picked.map((p) => p.name));
+  const missing = STRUCTURAL_SLOTS - picked.filter((p) => p.structural).length;
+  if (missing > 0) {
+    const extras = scored.filter((p) => p.structural && !have.has(p.name)).slice(0, missing);
+    for (const extra of extras) {
+      // Displace the lowest-scoring NON-structural pick, never another
+      // structural one.
+      for (let i = picked.length - 1; i >= 0; i--) {
+        if (!picked[i].structural) {
+          picked.splice(i, 1);
+          break;
+        }
+      }
+      picked.push(extra);
+    }
+    picked.sort((a, b) => b.score - a.score);
+  }
+  return picked.map((s) => s.name);
 }
 
 /**
@@ -228,8 +367,9 @@ export function rankByGoalOverlap(
   goalText: string,
   cap = 12,
 ): RewriteCandidate[] {
-  const goalTokens = tokens(goalText);
-  const goalHead = headOp(goalText);
+  const target = targetOfGoalText(goalText);
+  const goalTokens = tokens(target);
+  const goalHead = headOp(target);
   const scored = candidates.map((c) => {
     const lt = tokens(c.lhs);
     let overlap = 0;

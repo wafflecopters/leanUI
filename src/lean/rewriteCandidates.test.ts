@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { equalityLemmas, rankByGoalOverlap, unfoldableDefs } from './rewriteCandidates';
+import { applyCandidates, equalityLemmas, rankByGoalOverlap, unfoldableDefs } from './rewriteCandidates';
 import type { LeanDeclaration } from './types';
 
 function decl(name: string, prettyType: string, kind: LeanDeclaration['kind'] = 'def'): LeanDeclaration {
@@ -44,6 +44,21 @@ describe('unfoldableDefs', () => {
       decl('triangleSum', 'MyNat → MyNat'),
     ];
     expect(unfoldableDefs(decls, 'triangleSum')).toEqual(['sum', 'plus']);
+  });
+
+  // `unfold zeroLeOne` is meaningless — a lemma is a proof ABOUT terms, not a
+  // definition of one. Before this filter the list was mostly lemmas, crowding
+  // the actual definitions out from under the cap (in the real-analysis preset
+  // `rtwo` — the thing behind a displayed `2` — sat at position 64 of 137).
+  test('lemmas are not unfold targets; definitions are', () => {
+    const decls = [
+      decl('zeroLeOne', '(R : Real) → 0 ≤ 1'),
+      decl('leTrans', '{R : Real} → (a b c : ℝ) → a ≤ b → b ≤ c → a ≤ c'),
+      decl('plusComm', '∀ (n m : MyNat), n + m = m + n'),
+      decl('rtwo', '(R : Real) → ℝ'),
+      decl('radd', '{R : Real} → ℝ → ℝ → ℝ'),
+    ];
+    expect(unfoldableDefs(decls)).toEqual(['rtwo', 'radd']);
   });
 
   test('respects the cap', () => {
@@ -104,5 +119,108 @@ describe('applyCandidates (the core-Lean apply? stand-in)', () => {
   test('no head operator in the goal → no candidates', async () => {
     const { applyCandidates } = await import('./rewriteCandidates');
     expect(applyCandidates([] as any, 'Limit f x0 L')).toEqual([]);
+  });
+
+  // Regression: the panel used to pass `cursorGoal.plain` — the WHOLE goal
+  // state, hypotheses included. At `0 < ε / 2` the context carries
+  // `limF : lim⟦x0⟧ f = L`, whose ` = ` made headOp read the goal as an
+  // EQUALITY, so every `<` lemma (divTwoPos, divPos, …) was filtered out and
+  // the pills were eight equality lemmas that all failed validation.
+  test('a full goal state ranks against the target, not the hypotheses', async () => {
+    const { applyCandidates } = await import('./rewriteCandidates');
+    const decls = [
+      { name: 'divTwoPos', kind: 'def', prettyType: '{R : Real} → (e : ℝ) → 0 < e → 0 < e / 2', line: 1, col: 0 },
+      { name: 'divPos', kind: 'def', prettyType: '{R : Real} → (a b : ℝ) → 0 < a → 0 < b → 0 < a / b', line: 2, col: 0 },
+      { name: 'limitExt', kind: 'def', prettyType: '{R : Real} → (f g : ℝ → ℝ) → f = g', line: 3, col: 0 },
+    ] as any;
+    const plain = [
+      'R : Real',
+      'f g : ℝ → ℝ',
+      'limF : lim⟦x0⟧ f = L',
+      'ε : ℝ',
+      'epsPos : 0 < ε',
+      '⊢ 0 < ε / 2',
+    ].join('\n');
+    const c = applyCandidates(decls, plain, 'limitAdd');
+    expect(c[0]).toBe('divTwoPos');
+    expect(c).toContain('divPos');
+    expect(c).not.toContain('limitExt'); // the hypotheses' ` = ` must not win
+  });
+
+  // Numerals are meaningful symbols in these goals. Without them `0 ≤ 1`
+  // tokenizes to just {≤} — the same as every other ≤ statement in the file —
+  // so the lemma whose conclusion IS the goal scores no better than an
+  // unrelated one and gets lost under the cap.
+  test('a lemma whose conclusion IS the goal wins on the numerals', async () => {
+    const { applyCandidates } = await import('./rewriteCandidates');
+    const decls = [
+      { name: 'addLeRight', kind: 'def', prettyType: '{R : Real} → (a b c : ℝ) → a ≤ b → a + c ≤ b + c', line: 1, col: 0 },
+      { name: 'absNonneg', kind: 'def', prettyType: '{R : Real} → (a : ℝ) → 0 ≤ |a|', line: 2, col: 0 },
+      { name: 'zeroLeOne', kind: 'def', prettyType: '(R : Real) → 0 ≤ 1', line: 3, col: 0 },
+      { name: 'oneLeTwo', kind: 'def', prettyType: '(R : Real) → 1 ≤ 2', line: 4, col: 0 },
+    ] as any;
+    expect(applyCandidates(decls, '0 ≤ 1', 'x')[0]).toBe('zeroLeOne');
+  });
+});
+
+describe('applyCandidates reserves room for the general moves', () => {
+  // Ranking by token overlap systematically buries STRUCTURAL lemmas: a
+  // conclusion made of bound variables (`a < c`) shares almost nothing with a
+  // concrete goal, so transitivity loses to every lemma that mentions a `0` and
+  // falls off the cap. Those are exactly the moves a user reaches for when the
+  // direct lemma isn't the path they want.
+  const specific = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      name: `fact${i}`,
+      kind: 'def',
+      prettyType: `(R : Real) → 0 < ${i + 3}`,
+      line: i,
+      col: 0,
+    }));
+  const decls = [
+    ...specific(12),
+    { name: 'zeroLtTwo', kind: 'def', prettyType: '(R : Real) → 0 < 2', line: 90, col: 0 },
+    { name: 'leLtTrans', kind: 'def', prettyType: '{R : Real} → (a b c : ℝ) → a ≤ b → b < c → a < c', line: 91, col: 0 },
+    { name: 'ltLeTrans', kind: 'def', prettyType: '{R : Real} → (a b c : ℝ) → a < b → b ≤ c → a < c', line: 92, col: 0 },
+  ] as any;
+
+  test('the exact match still leads', () => {
+    expect(applyCandidates(decls, '0 < 2', 'x')[0]).toBe('zeroLtTwo');
+  });
+
+  test('transitivity survives the cap even with many better-scoring facts', () => {
+    const got = applyCandidates(decls, '0 < 2', 'x');
+    expect(got).toContain('leLtTrans');
+    expect(got).toContain('ltLeTrans');
+  });
+
+  // `divPos : 0 < a / b` is ABOUT zero — it fits `0 < …` goals, not any `<`
+  // goal — so it competes on overlap like any other specific fact.
+  test('a conclusion carrying a numeral is specific, not structural', () => {
+    const withDivPos = [
+      ...specific(12),
+      { name: 'divPos', kind: 'def', prettyType: '{R : Real} → (a b : ℝ) → 0 < a → 0 < b → 0 < a / b', line: 93, col: 0 },
+      { name: 'leLtTrans', kind: 'def', prettyType: '{R : Real} → (a b c : ℝ) → a ≤ b → b < c → a < c', line: 94, col: 0 },
+    ] as any;
+    // The structural slot goes to transitivity, not to divPos.
+    expect(applyCandidates(withDivPos, '5 < 9', 'x')).toContain('leLtTrans');
+  });
+});
+
+describe('targetOfGoalText', () => {
+  test('strips a goal-state prelude (hypotheses + ⊢)', async () => {
+    const { targetOfGoalText } = await import('./rewriteCandidates');
+    expect(targetOfGoalText('n : Nat\n⊢ n + 0 = n')).toBe('n + 0 = n');
+    expect(targetOfGoalText('⊢ a')).toBe('a');
+  });
+
+  test('a multi-line target keeps all its lines', async () => {
+    const { targetOfGoalText } = await import('./rewriteCandidates');
+    expect(targetOfGoalText('n : Nat\n⊢ foo n →\n  bar n')).toBe('foo n →\n  bar n');
+  });
+
+  test('plain expression text passes through untouched', async () => {
+    const { targetOfGoalText } = await import('./rewriteCandidates');
+    expect(targetOfGoalText('0 < ε / 2')).toBe('0 < ε / 2');
   });
 });

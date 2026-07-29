@@ -16,12 +16,15 @@ panel renders. Auto-generated constants (recursors, constructors, internal
 detail names) are filtered out.
 
 Usage:
-  lean --run lean/Extract.lean <file.lean> [mathlib]
+  lean --run lean/Extract.lean <file.lean>
+  Extract --serve            -- one request per stdin line, env cache resident
 
-The optional `mathlib` arg additionally imports Mathlib (requires running under
-`lake env` in the Mathlib-enabled package). Without it we import only `Init`
-(core Lean). NOTE: for v1 the user's own `import` lines are ignored — the import
-set is fixed (Init [+ Mathlib]); this keeps each invocation deterministic.
+Imports come from the FILE'S OWN header (`headerToImports`), so `import Mathlib`
+works exactly like any other import — provided Mathlib's build dir is on
+LEAN_PATH. That is the only thing Mathlib mode needs, and the bridge supplies it
+by asking `lake env` once (see `mathlibEnv` in server/lean-bridge.ts) rather than
+running Lean under `lake`. An extra trailing argument is accepted and ignored,
+for compatibility with older callers that passed a literal `mathlib`.
 
 Lines are 1-based, columns 0-based (Lean's native convention).
 -/
@@ -139,15 +142,40 @@ unsafe def analyzeFile (cache : EnvCache) (path : String) : IO Json := do
                 [("names", Json.arr (h.names.map Json.str)),
                  ("type", taggedToJson h.type)]
             let plain := toString (← Meta.ppGoal g)
+            -- Prop targets are claims to PROVE; non-Prop targets (ℝ, ℕ, a
+            -- function…) are values to CHOOSE. The UI words them differently,
+            -- and only Lean can tell them apart reliably.
+            let isProp ← try Meta.isProp (← g.getType) catch _ => pure true
             pure <| Json.mkObj <|
               (match ig.userName? with
                | some n => [("case", Json.str n)]
                | none => []) ++
               [("hyps", Json.arr hypsJson),
                ("targetTagged", taggedToJson ig.type),
+               ("isProp", Json.bool isProp),
                ("plain", Json.str plain)]
+        -- Value goals (a term to CHOOSE, not a claim to prove): a goal whose
+        -- metavariable occurs in a SIBLING goal's type — e.g. the midpoint `?b`
+        -- after `apply ltLeTrans`, mentioned by `0 < ?b` and `?b ≤ ε/2`.
+        -- Computed from goalsAfter under mctxAfter, i.e. at the instant the
+        -- tactic split its goals: later lines assign the metavariable (and it
+        -- vanishes from the siblings' pretty-printed text), but THIS record
+        -- never goes stale. Reported as case tags so the UI can match them to
+        -- the branches. (`isProp` can't express this: from-scratch presets
+        -- state claims in Type, so EVERY goal there is non-Prop.)
+        let ciAfter := { ci with mctx := ti.mctxAfter }
+        let valueTags ← ciAfter.runMetaM {} do
+          ti.goalsAfter.filterMapM fun g => do
+            let dependedOn ← ti.goalsAfter.anyM fun g2 => do
+              if g2 == g then pure false else do
+                let t ← instantiateMVars (← g2.getType)
+                pure (t.find? (fun e => e.isMVar && e.mvarId! == g) |>.isSome)
+            if !dependedOn then pure none else do
+              let tag ← g.getTag
+              pure (if tag.isAnonymous then none else some (Json.str tag.toString))
         goals := goals.push <| Json.mkObj <|
           ("goals", Json.arr renderedGoals.toArray) ::
+          (if valueTags.isEmpty then [] else [("valueCaseTags", Json.arr valueTags.toArray)]) ++
           mkRangeFields sp.line sp.column ep.line ep.column
 
   -- Declarations ------------------------------------------------------------

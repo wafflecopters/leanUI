@@ -30,13 +30,21 @@ function cleanHypName(n: string): string {
   return n.split(DAGGER)[0];
 }
 
-/** Make names unique (a cleaned `a✝`/`a✝¹` could both become `a`). */
-function uniquify(names: string[]): string[] {
-  const seen = new Map<string, number>();
+/** Make names unique — against each other (a cleaned `a✝`/`a✝¹` could both
+ *  become `a`) AND against `taken` (hypotheses already in scope): a cleaned
+ *  name that shadows an existing hypothesis strands every later reference to
+ *  it (the second `cases` on a DPair would hide the first pair's `fst`). */
+function uniquify(names: string[], taken: ReadonlySet<string> = new Set()): string[] {
+  const used = new Set(taken);
   return names.map((n) => {
-    const count = seen.get(n) ?? 0;
-    seen.set(n, count + 1);
-    return count === 0 ? n : `${n}${count}`;
+    if (!used.has(n)) {
+      used.add(n);
+      return n;
+    }
+    let i = 1;
+    while (used.has(`${n}${i}`)) i++;
+    used.add(`${n}${i}`);
+    return `${n}${i}`;
   });
 }
 
@@ -59,7 +67,13 @@ export function enrichInductionCaseNames(
       return body === c.body ? c : { ...c, body };
     }
     const info = goalMap.get(c.id);
-    const ctorName = info?.caseLabelLatex;
+    // Lean COMPOSES case tags when goals nest: `cases hF` inside a goal already
+    // tagged `eps_delta` (a `constructor` on Limit) reports `eps_delta.mk`. A
+    // `with |` alternative must be the constructor's OWN tag — Lean rejects the
+    // composed form ("Invalid alternative name `eps_delta.mk`: Expected `mk`")
+    // — so keep only the last component.
+    const fullTag = info?.caseLabelLatex;
+    const ctorName = isLeanCtorName(fullTag) ? fullTag.split('.').pop() : undefined;
     if (!isLeanCtorName(ctorName)) {
       return body === c.body ? c : { ...c, body };
     }
@@ -69,6 +83,7 @@ export function enrichInductionCaseNames(
     const caseHyps = info?.hypotheses ?? [];
     const introduced = uniquify(
       caseHyps.filter((h) => !parentHypNames.has(h.name)).map((h) => cleanHypName(h.name)),
+      parentHypNames,
     );
     const { args, ihNames } = splitCaseParams(introduced);
     changed = true;

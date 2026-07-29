@@ -29,6 +29,13 @@ export interface LeanSuggestion {
    *  transforms the goal into (empty if it closes the goal). Filled by the
    *  validation round-trip. */
   preview?: string;
+  /** LaTeX of EVERY goal the tactic leaves, in the order the editor will
+   *  present them (see `orderGoalsForDisplay`) — so a pill for a goal-splitting
+   *  tactic shows all its obligations (`apply divPos` → `0 < ε`, `0 < 2`), not
+   *  just the first. Empty when the tactic closes the goal. `preview` still
+   *  wins when set: for a subterm-scoped rewrite it's the smaller, more legible
+   *  delta. */
+  previews?: string[];
   /** True when applying this tactic CLOSES the goal (no goals remain). */
   closes?: boolean;
   /** Number of goals remaining after the tactic (from the validation trial).
@@ -63,12 +70,34 @@ export function orderedSubgoalTags(
   return [...data, ...dependent].map((g) => g.tag!);
 }
 
+/**
+ * The goals a tactic leaves, in the order the editor will PRESENT them: the
+ * `subgoalTags` order when we have one (applying prints `case <tag> =>` blocks
+ * in that order), else Lean's own. Keeping previews and bullets in a single
+ * order means a pill's Nth preview line is the Nth branch you actually get.
+ * Falls back to Lean's order if the tags don't cover the goals exactly.
+ */
+export function orderGoalsForDisplay<T extends { case?: string }>(
+  goals: readonly T[],
+  subgoalTags: readonly string[] | null | undefined,
+): T[] {
+  if (!subgoalTags) return [...goals];
+  const byTag = new Map(goals.map((g) => [g.case, g] as const));
+  const ordered = subgoalTags.map((t) => byTag.get(t)).filter((g): g is T => g !== undefined);
+  return ordered.length === goals.length ? ordered : [...goals];
+}
+
 /** Discovery tactics we try at a hole, in priority order (cheapest/most-closing
  *  first). NOTE: `rw?` is Mathlib-only (absent in core Lean) — file rewrites are
  *  surfaced via the dedicated rewrite-candidate trials instead. */
 export const DISCOVERY_TACTICS: ReadonlyArray<{ kind: LeanSuggestion['kind']; tactic: string }> = [
   { kind: 'exact', tactic: 'exact?' },
   { kind: 'simp', tactic: 'simp?' },
+  // `rw?` exists only with Mathlib. It's listed anyway: where it's absent it
+  // fails like any other candidate and yields nothing, and where it's present
+  // it's the best rewrite search available — far better than ranking the
+  // file's own lemmas by token overlap. Availability is trialed, not assumed.
+  { kind: 'rw', tactic: 'rw?' },
   // `apply?` dropped: its `refine <lemma> ?_ ?_` results were mostly noise
   // (any lemma whose conclusion unifies, e.g. leqAntisym/succInj on an equality)
   // and don't carry their subgoals into the structured editor.

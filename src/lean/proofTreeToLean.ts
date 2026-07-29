@@ -45,6 +45,9 @@ class Emitter {
   holes = new Set<ProofNodeId>();
   /** Write-back mode: drop a chaining tactic's lone-hole continuation. */
   omitTrailingHoles = false;
+  /** Write-back mode: the holes Lean reports NO goal at. When set, only these
+   *  trailing holes are dropped — an OPEN one still writes its `sorry`. */
+  closedHoles?: ReadonlySet<ProofNodeId>;
   /** When set, a hole with this id emits `holeOverrideTactic` instead of `sorry`. */
   holeOverrideId?: ProofNodeId;
   holeOverrideTactic = '';
@@ -92,7 +95,13 @@ function rewriteTerm(node: { name: string; reverse: boolean }): string {
 
 /** Emit a chaining tactic's continuation child, honoring omitTrailingHoles. */
 function emitChild(em: Emitter, child: ProofNode, depth: number): void {
-  if (em.omitTrailingHoles && child.tag === 'hole') return;
+  // A trailing hole is dropped only when we KNOW the goal is closed. Without
+  // that knowledge (no `closedHoles` supplied) every trailing hole is treated
+  // as the parser's fabrication, which is right for a proof read back from a
+  // finished file — but wrong mid-edit, where dropping the `sorry` turns an
+  // unfinished proof into an "unsolved goals" ERROR instead of a warning.
+  const closed = em.closedHoles ? em.closedHoles.has(child.id) : true;
+  if (em.omitTrailingHoles && child.tag === 'hole' && closed) return;
   emitNode(em, child, depth);
 }
 
@@ -154,7 +163,9 @@ function emitNode(em: Emitter, node: ProofNode, depth: number): void {
     case 'simp': {
       const lemmas = node.lemmas.filter((l) => l.trim().length > 0);
       const kw = node.only ? 'simp only' : 'simp';
-      em.emit(depth, lemmas.length ? `${kw} [${lemmas.join(', ')}]` : kw, node.id);
+      const simp = lemmas.length ? `${kw} [${lemmas.join(', ')}]` : kw;
+      // Subterm-scoped simp → `conv in (pat) => simp …`; else plain simp.
+      em.emit(depth, node.convPattern ? `conv in (${node.convPattern}) => ${simp}` : simp, node.id);
       emitChild(em, node.child, depth);
       return;
     }
@@ -169,7 +180,7 @@ function emitNode(em: Emitter, node: ProofNode, depth: number): void {
       // a Lean author writes a multi-goal constructor (DPair: body + witness).
       if (node.children.length === 1) {
         emitChild(em, node.children[0], depth);
-      } else if (node.raw && node.childTags && node.childTags.length === node.children.length) {
+      } else if (node.childTags && node.childTags.length === node.children.length) {
         // Tagged children print as `case <tag> =>` blocks — Lean selects goals
         // BY NAME, so the proof can present them in a different order than
         // Lean produced them (witness before dependent body).
@@ -177,12 +188,12 @@ function emitNode(em: Emitter, node: ProofNode, depth: number): void {
           em.emit(depth, `case ${node.childTags![i]} =>`);
           emitNode(em, child, depth + 1);
         });
-      } else if (node.raw) {
-        for (const child of node.children) emitBullet(em, child, depth);
       } else {
-        for (const child of node.children) {
-          emitNode(em, child, depth);
-        }
+        // Bullets. `apply divPos`'s two premises are branches for the same
+        // reason `constructor`'s fields are: a flat tactic sequence cannot say
+        // "these N chains prove N different goals", so printing them flat would
+        // lose the structure on the way back in.
+        for (const child of node.children) emitBullet(em, child, depth);
       }
       return;
     }
@@ -299,10 +310,21 @@ export function proofTreeToLean(
  * child would otherwise write `simp\n  sorry` — which Lean rejects as "no goals
  * to be solved". A standalone unfinished hole still becomes `sorry` so the user
  * keeps a visible obligation.
+ *
+ * Pass `closedHoles` — the holes Lean reports no goal at — to make that precise.
+ * Without it every trailing hole is assumed fabricated, which is correct for a
+ * complete proof round-tripped from a file, but wrong for one still being
+ * built: `apply divTwoPos` followed by a dropped `sorry` writes a file whose
+ * remaining obligation reads as an ERROR rather than a warning.
  */
-export function proofTreeToSource(root: ProofNode, baseDepth = 1): string {
+export function proofTreeToSource(
+  root: ProofNode,
+  baseDepth = 1,
+  opts: { closedHoles?: ReadonlySet<ProofNodeId> } = {},
+): string {
   const em = new Emitter();
   em.omitTrailingHoles = true;
+  em.closedHoles = opts.closedHoles;
   emitNode(em, root, baseDepth);
   return em.lines.join('\n');
 }

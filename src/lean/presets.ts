@@ -820,6 +820,31 @@ def absElim {R : Real} (a : Carrier R) (C : Carrier R → Sort w)
     (fun h => pos h) (fun h => neg h)
     ((fieldOf R).leTotal (rzero R) a)
 
+-- Minimum (defined from leTotal via eitherElim, like rabs — not axiomatized).
+-- The ε-δ workhorse: two deltas become one via δ := min δ₁ δ₂.
+def rmin {R : Real} (a b : Carrier R) : Carrier R :=
+  eitherElim (fun _ => a) (fun _ => b) ((fieldOf R).leTotal a b)
+
+def minElim {R : Real} (a b : Carrier R) (C : Carrier R → Sort w)
+    (left : rle a b → C a) (right : rle b a → C b) : C (rmin a b) :=
+  eitherElimDep (fun e => C (eitherElim (fun _ => a) (fun _ => b) e))
+    (fun h => left h) (fun h => right h)
+    ((fieldOf R).leTotal a b)
+
+def minLeLeft {R : Real} (a b : Carrier R) : rle (rmin a b) a :=
+  minElim a b (fun z => rle z a) (fun _ => (fieldOf R).leRefl a) (fun h => h)
+
+def minLeRight {R : Real} (a b : Carrier R) : rle (rmin a b) b :=
+  minElim a b (fun z => rle z b) (fun h => h) (fun _ => (fieldOf R).leRefl b)
+
+def ltMin {R : Real} (c a b : Carrier R) (ha : rlt c a) (hb : rlt c b) :
+    rlt c (rmin a b) :=
+  minElim a b (fun z => rlt c z) (fun _ => ha) (fun _ => hb)
+
+def minPos {R : Real} (a b : Carrier R) (ha : rlt (rzero R) a) (hb : rlt (rzero R) b) :
+    rlt (rzero R) (rmin a b) :=
+  ltMin (rzero R) a b ha hb
+
 def realOfRat (R : Real) : MyRat → Carrier R
   | .mkRat n (.succ .zero) _ => realOfInt R n
   | .mkRat n d _ => rdiv (realOfInt R n) (realOfNat R d)
@@ -853,7 +878,45 @@ notation:50 "lim⟦" x0 "⟧ " f " = " L => Limit f x0 L
 ------------------------------------------------------------
 
 -- TACTIC-MODE in source (erw); kept faithful as statement, body sorried.
-def addZeroLeft {R : Real} (a : Carrier R) : (radd (rzero R) a) = a := sorry
+------------------------------------------------------------
+-- The order axioms, usable BY NAME
+--
+-- The axioms live inside the CompleteOrderedField structure, where they read
+-- as "self.le self.zero self.one" — raw projections, in terms of the structure
+-- fields rather than this file's notation. That makes them invisible to anyone
+-- (human or suggestion engine) looking for something shaped like 0 ≤ 1.
+-- These wrappers restate each one in the notation the goals actually use, so
+-- an ordered-field axiom is reachable exactly like any other lemma here.
+------------------------------------------------------------
+
+def zeroLeOne (R : Real) : rle (rzero R) (rone R) := (fieldOf R).zeroLeOne
+
+def zeroNeOne (R : Real) : (rzero R) = (rone R) → MyVoid := (fieldOf R).zeroNeOne
+
+def leRefl {R : Real} (a : Carrier R) : rle a a := (fieldOf R).leRefl a
+
+def leTrans {R : Real} (a b c : Carrier R) (hab : rle a b) (hbc : rle b c) : rle a c :=
+  (fieldOf R).leTrans a b c hab hbc
+
+def leAntisym {R : Real} (a b : Carrier R) (hab : rle a b) (hba : rle b a) : a = b :=
+  (fieldOf R).leAntisym a b hab hba
+
+def leTotal {R : Real} (a b : Carrier R) : Either (rle a b) (rle b a) :=
+  (fieldOf R).leTotal a b
+
+def addLeLeft {R : Real} (a b c : Carrier R) (h : rle a b) : rle (radd c a) (radd c b) :=
+  (fieldOf R).addLeLeft a b c h
+
+def mulNonneg {R : Real} (a b : Carrier R) (ha : rle (rzero R) a) (hb : rle (rzero R) b) :
+    rle (rzero R) (rmul a b) :=
+  (fieldOf R).mulNonneg a b ha hb
+
+def invNonneg {R : Real} (a : Carrier R) (ha : rle (rzero R) a)
+    (hne : a = (rzero R) → MyVoid) : rle (rzero R) (rinv a) :=
+  (fieldOf R).invPos a ha hne
+
+def addZeroLeft {R : Real} (a : Carrier R) : (radd (rzero R) a) = a :=
+  eqTrans ((fieldOf R).addComm (rzero R) a) ((fieldOf R).addZeroRight a)
 
 def addRealOfNat (R : Real) : (n m : MyNat) →
     (radd (realOfNat R n) (realOfNat R m)) = (realOfNat R (plus n m))
@@ -862,8 +925,8 @@ def addRealOfNat (R : Real) : (n m : MyNat) →
       eqTrans ((fieldOf R).addAssoc (rone R) (realOfNat R n) (realOfNat R m))
         (eqCong (fun z => radd (rone R) z) (addRealOfNat R n m))
 
--- TACTIC-MODE in source (erw).
-def negLeft {R : Real} (a : Carrier R) : (radd (rneg a) a) = (rzero R) := sorry
+def negLeft {R : Real} (a : Carrier R) : (radd (rneg a) a) = (rzero R) :=
+  eqTrans ((fieldOf R).addComm (rneg a) a) ((fieldOf R).negRight a)
 
 def addNegRight {R : Real} (a : Carrier R) : (radd a (rneg a)) = (rzero R) :=
   (fieldOf R).negRight a
@@ -915,11 +978,15 @@ def ltLeTrans {R : Real} (a b c : Carrier R) (hab : rlt a b) (hbc : rle b c) : r
 
 -- TACTIC-MODE in source (erw).
 def addCancelRightHelper {R : Real} (x c : Carrier R) :
-    (radd (radd x c) (rneg c)) = x := sorry
+    (radd (radd x c) (rneg c)) = x :=
+  eqTrans ((fieldOf R).addAssoc x c (rneg c))
+    (eqTrans (eqCong (fun z => radd x z) ((fieldOf R).negRight c))
+      ((fieldOf R).addZeroRight x))
 
--- TACTIC-MODE in source (erw).
 def addCancelRight {R : Real} (a b c : Carrier R) (h : (radd a c) = (radd b c)) :
-    a = b := sorry
+    a = b :=
+  eqTrans (eqSym (addCancelRightHelper a c))
+    (eqTrans (eqCong (fun z => radd z (rneg c)) h) (addCancelRightHelper b c))
 
 def addLeRightCancel {R : Real} (a b c : Carrier R) (h : rle (radd a c) (radd b c)) : rle a b :=
   replace (fun z => rle z b) (addCancelRightHelper a c)
@@ -930,6 +997,27 @@ def addLeLeftCancel {R : Real} (a b c : Carrier R) (h : rle (radd c a) (radd c b
   addLeRightCancel a b c
     (replace (fun z => rle (radd a c) z) ((fieldOf R).addComm c b)
       (replace (fun z => rle z (radd c b)) ((fieldOf R).addComm c a) h))
+
+-- Cancellation, the STRICT version. a < b is (a ≤ b) paired with (a ≠ b), so
+-- both halves come straight from the ≤ version and congruence.
+--
+-- Read BACKWARDS this is the "add the same thing to both sides" move: applying
+-- it to a goal like 1 < 2 asks you to choose a shift c and then show
+-- 1 + c < 2 + c. The ≤-only cancellation couldn't express that on a < goal.
+def addLtRightCancel {R : Real} (a b c : Carrier R) (h : rlt (radd a c) (radd b c)) : rlt a b :=
+  Pair.mk (addLeRightCancel a b c (Pair.fst h))
+    (fun e => Pair.snd h (eqCong (fun z => radd z c) e))
+
+def addLtLeftCancel {R : Real} (a b c : Carrier R) (h : rlt (radd c a) (radd c b)) : rlt a b :=
+  Pair.mk (addLeLeftCancel a b c (Pair.fst h))
+    (fun e => Pair.snd h (eqCong (fun z => radd c z) e))
+
+-- The forward direction on the left, to match addLtRight.
+def addLtLeft {R : Real} (a b c : Carrier R) (h : rlt a b) : rlt (radd c a) (radd c b) :=
+  Pair.mk ((fieldOf R).addLeLeft a b c (Pair.fst h))
+    (fun e => Pair.snd h (addCancelRight a b c
+      (replace (fun z => (radd a c) = z) ((fieldOf R).addComm c b)
+        (replace (fun z => z = (radd c b)) ((fieldOf R).addComm c a) e))))
 
 def addLtBothNe {R : Real} (a b c d : Carrier R) (leab : rle a b) (neab : a = b → MyVoid)
     (lecd : rle c d) (eq : (radd a c) = (radd b d)) : MyVoid :=
@@ -972,6 +1060,17 @@ instance {R : Real} : OfNat (Carrier R) 2 := ⟨rtwo R⟩
   | \`($_ $_) => \`(2)
   | _ => throw ()
 
+-- The instances above mean every goal holds numerals in ONE of two forms: a
+-- user-typed literal is \`OfNat.ofNat 2\` while a lemma-substituted one is
+-- \`rtwo R\` — same display, DIFFERENT terms, and simp/rw matching is syntactic.
+-- A lemma stated about \`rtwo R\` silently misses literal goals (and vice
+-- versa). These @[simp] bridges normalize literals to the constants, so plain
+-- \`simp\` — the editor's "Compute" move — sees one representation. rfl-true:
+-- the instances ARE the constants.
+@[simp] def litZero {R : Real} : (0 : Carrier R) = rzero R := rfl
+@[simp] def litOne {R : Real} : (1 : Carrier R) = rone R := rfl
+@[simp] def litTwo {R : Real} : (2 : Carrier R) = rtwo R := rfl
+
 def rhalf (R : Real) : Carrier R := rinv (rtwo R)
 
 def oneLeTwo (R : Real) : rle (rone R) (rtwo R) :=
@@ -984,16 +1083,40 @@ def twoNeZero (R : Real) (eq : (rtwo R) = (rzero R)) : MyVoid :=
       ((fieldOf R).zeroLeOne)
       (replace (fun z => rle (rone R) z) eq (oneLeTwo R)))
 
--- TACTIC-MODE in source (erw).
-def halfPlusHalf (R : Real) : (radd (rhalf R) (rhalf R)) = (rone R) := sorry
+-- ½ + ½ = ½·1 + ½·1 = ½·(1+1) = ½·2 = 1 (the last step is inv·a = 1, with
+-- ½·2 ≡ (inv 2)·2 and 1+1 ≡ 2 definitionally).
+def halfPlusHalf (R : Real) : (radd (rhalf R) (rhalf R)) = (rone R) :=
+  eqTrans (eqCong (fun z => radd z (rhalf R)) (eqSym ((fieldOf R).mulOneRight (rhalf R))))
+    (eqTrans (eqCong (fun z => radd (rmul (rhalf R) (rone R)) z)
+        (eqSym ((fieldOf R).mulOneRight (rhalf R))))
+      (eqTrans (eqSym ((fieldOf R).distribLeft (rhalf R) (rone R) (rone R)))
+        (eqTrans (eqSym ((fieldOf R).mulComm (rtwo R) (rinv (rtwo R))))
+          ((fieldOf R).mulInvRight (rtwo R) (twoNeZero R)))))
 
--- TACTIC-MODE in source (erw).
 def halfMulEps {R : Real} (e : Carrier R) :
-    (radd (rmul (rhalf R) e) (rmul (rhalf R) e)) = e := sorry
+    (radd (rmul (rhalf R) e) (rmul (rhalf R) e)) = e :=
+  eqTrans (eqSym ((fieldOf R).distribRight (rhalf R) (rhalf R) e))
+    (eqTrans (eqCong (fun z => rmul z e) (halfPlusHalf R))
+      ((fieldOf R).mulOneLeft e))
 
 def zeroLeTwo (R : Real) : rle (rzero R) (rtwo R) :=
   (fieldOf R).leTrans (rzero R) (rone R) (rtwo R)
     ((fieldOf R).zeroLeOne) (oneLeTwo R)
+
+-- 1 ≠ 2. Since 2 is 1 + 1, "1 = 2" says "0 + 1 = 1 + 1"; cancelling the 1 on
+-- the right leaves "0 = 1", which the ordered field forbids.
+def oneNeTwo (R : Real) (eq : (rone R) = (rtwo R)) : MyVoid :=
+  (fieldOf R).zeroNeOne
+    (addCancelRight (rzero R) (rone R) (rone R)
+      (eqTrans (addZeroLeft (rone R)) eq))
+
+-- The strict versions: a < b is (a ≤ b) paired with (a ≠ b), and both halves
+-- are right above.
+def oneLtTwo (R : Real) : rlt (rone R) (rtwo R) :=
+  Pair.mk (oneLeTwo R) (oneNeTwo R)
+
+def zeroLtTwo (R : Real) : rlt (rzero R) (rtwo R) :=
+  Pair.mk (zeroLeTwo R) (fun eq => twoNeZero R (eqSym eq))
 
 def halfPos (R : Real) : rle (rzero R) (rhalf R) :=
   (fieldOf R).invPos (rtwo R) (zeroLeTwo R) (twoNeZero R)
@@ -1008,27 +1131,106 @@ def halfMulEpsNe {R : Real} (e : Carrier R) (hle : rle (rzero R) e)
     (eqTrans (eqCong (fun z => radd z z) heq) (halfMulEps e)))
 
 -- TACTIC-MODE in source (constructor).
+------------------------------------------------------------
+-- STRICT POSITIVITY: products, inverses, quotients
+--
+-- Everything here reduces to two ordered-field facts — mulNonneg (a product of
+-- nonnegatives is nonnegative) and invPos (the inverse of a nonnegative nonzero
+-- is nonnegative) — plus the observation that a < b is (a ≤ b) paired with
+-- (a ≠ b). The ≠ halves are where the field structure does the work: in a
+-- field, a product of nonzeros is nonzero, because you can multiply by an
+-- inverse and cancel.
+------------------------------------------------------------
+
+-- c * 0 = 0. Not an axiom: distributivity gives c*0 = c*0 + c*0, and
+-- cancelling one copy leaves 0.
+def mulZeroRight {R : Real} (c : Carrier R) : (rmul c (rzero R)) = (rzero R) :=
+  eqSym (addCancelRight (rzero R) (rmul c (rzero R)) (rmul c (rzero R))
+    (eqTrans (addZeroLeft (rmul c (rzero R)))
+      (eqTrans (eqSym (eqCong (fun z => rmul c z) ((fieldOf R).addZeroRight (rzero R))))
+        ((fieldOf R).distribLeft c (rzero R) (rzero R)))))
+
+-- 1/a * a = 1 (the field axiom is stated the other way round).
+def mulInvLeft {R : Real} (a : Carrier R) (ane : a = (rzero R) → MyVoid) :
+    (rmul (rinv a) a) = (rone R) :=
+  eqTrans (eqSym ((fieldOf R).mulComm a (rinv a))) ((fieldOf R).mulInvRight a ane)
+
+-- A product of nonzeros is nonzero: if a * b = 0 then multiplying by 1/a and
+-- cancelling gives b = 0.
+def mulNeZero {R : Real} (a b : Carrier R) (ane : a = (rzero R) → MyVoid)
+    (bne : b = (rzero R) → MyVoid) (eq : (rmul a b) = (rzero R)) : MyVoid :=
+  bne
+    (eqTrans (eqSym ((fieldOf R).mulOneLeft b))
+      (eqTrans (eqCong (fun z => rmul z b) (eqSym (mulInvLeft a ane)))
+        (eqTrans ((fieldOf R).mulAssoc (rinv a) a b)
+          (eqTrans (eqCong (fun z => rmul (rinv a) z) eq) (mulZeroRight (rinv a))))))
+
+-- 1/b is nonzero: if it were 0 then b * (1/b) = 0, but that product is 1.
+def invNeZero {R : Real} (b : Carrier R) (bne : b = (rzero R) → MyVoid)
+    (eq : (rinv b) = (rzero R)) : MyVoid :=
+  (fieldOf R).zeroNeOne
+    (eqSym (eqTrans (eqSym ((fieldOf R).mulInvRight b bne))
+      (eqTrans (eqCong (fun z => rmul b z) eq) (mulZeroRight b))))
+
+-- The nonzero half of a strict positivity, the way round the field wants it.
+def posNeZero {R : Real} (a : Carrier R) (ha : rlt (rzero R) a) :
+    a = (rzero R) → MyVoid :=
+  fun z => Pair.snd ha (eqSym z)
+
+-- 0 < a and 0 < b give 0 < a * b.
+def mulPos {R : Real} (a b : Carrier R) (ha : rlt (rzero R) a) (hb : rlt (rzero R) b) :
+    rlt (rzero R) (rmul a b) :=
+  Pair.mk ((fieldOf R).mulNonneg a b (Pair.fst ha) (Pair.fst hb))
+    (fun eq => mulNeZero a b (posNeZero a ha) (posNeZero b hb) (eqSym eq))
+
+-- 0 < b gives 0 < 1/b.
+def invPosStrict {R : Real} (b : Carrier R) (hb : rlt (rzero R) b) :
+    rlt (rzero R) (rinv b) :=
+  Pair.mk ((fieldOf R).invPos b (Pair.fst hb) (posNeZero b hb))
+    (fun eq => invNeZero b (posNeZero b hb) (eqSym eq))
+
+def halfPosStrict (R : Real) : rlt (rzero R) (rhalf R) :=
+  invPosStrict (rtwo R) (zeroLtTwo R)
+
 def halfMulEpsPos {R : Real} (e : Carrier R) (hlt : rlt (rzero R) e) :
-    rlt (rzero R) (rmul (rhalf R) e) := sorry
+    rlt (rzero R) (rmul (rhalf R) e) :=
+  mulPos (rhalf R) e (halfPosStrict R) hlt
 
 ------------------------------------------------------------
 -- Negation distributes over addition: -(a+b) = (-a)+(-b)
 ------------------------------------------------------------
 
--- TACTIC-MODE in source (erw).
-def addSumNeg {R : Real} (a b : Carrier R) : (radd (radd a b) (rneg a)) = b := sorry
+-- (a + b) + -a = b: commute the inner sum, reassociate, cancel, drop the zero.
+@[simp] def addSumNeg {R : Real} (a b : Carrier R) : (radd (radd a b) (rneg a)) = b :=
+  eqTrans (eqCong (fun z => radd z (rneg a)) ((fieldOf R).addComm a b))
+    (eqTrans ((fieldOf R).addAssoc b a (rneg a))
+      (eqTrans (eqCong (fun z => radd b z) ((fieldOf R).negRight a))
+        ((fieldOf R).addZeroRight b)))
 
--- TACTIC-MODE in source (erw).
+-- 2 + -1 computes to 1 (2 is DEFINED as 1 + 1, so this is addSumNeg at 1 1).
+-- @[simp] so the editor's "Compute" move reduces displayed arithmetic; stated
+-- on the constants, with the literal forms reached via the lit* bridges.
+@[simp] def twoAddNegOne {R : Real} : (radd (rtwo R) (rneg (rone R))) = (rone R) :=
+  addSumNeg (rone R) (rone R)
+
 def negAddCancel {R : Real} (a b : Carrier R) :
-    (radd (radd a b) (radd (rneg a) (rneg b))) = (rzero R) := sorry
+    (radd (radd a b) (radd (rneg a) (rneg b))) = (rzero R) :=
+  eqTrans (eqSym ((fieldOf R).addAssoc (radd a b) (rneg a) (rneg b)))
+    (eqTrans (eqCong (fun z => radd z (rneg b)) (addSumNeg a b))
+      ((fieldOf R).negRight b))
 
--- TACTIC-MODE in source (erw).
+-- b is THE additive inverse of a: anything that sums to zero with a is -a.
 def negUnique {R : Real} (a b : Carrier R) (h : (radd a b) = (rzero R)) :
-    b = (rneg a) := sorry
+    b = (rneg a) :=
+  eqTrans (eqSym (addZeroLeft b))
+    (eqTrans (eqCong (fun z => radd z b) (eqSym (negLeft a)))
+      (eqTrans ((fieldOf R).addAssoc (rneg a) a b)
+        (eqTrans (eqCong (fun z => radd (rneg a) z) h)
+          ((fieldOf R).addZeroRight (rneg a)))))
 
--- TACTIC-MODE in source (erw).
 def negAdd {R : Real} (a b : Carrier R) :
-    (rneg (radd a b)) = (radd (rneg a) (rneg b)) := sorry
+    (rneg (radd a b)) = (radd (rneg a) (rneg b)) :=
+  eqSym (negUnique (radd a b) (radd (rneg a) (rneg b)) (negAddCancel a b))
 
 def negNeg {R : Real} (a : Carrier R) : (rneg (rneg a)) = a :=
   eqSym (negUnique (rneg a) a (negLeft a))
@@ -1055,9 +1257,19 @@ def addOnePlusOneShuffle (R : Real) (m n : MyNat) :
 def fourTermRearrange {R : Real} (a b c d : Carrier R) :
     (radd (radd a b) (radd c d)) = (radd (radd a c) (radd b d)) := sorry
 
--- TACTIC-MODE in source (erw).
+-- Middle-four exchange: (a+b)+(c+d) = (a+c)+(b+d).
+def addAddSwap {R : Real} (a b c d : Carrier R) :
+    (radd (radd a b) (radd c d)) = (radd (radd a c) (radd b d)) :=
+  eqTrans ((fieldOf R).addAssoc a b (radd c d))
+    (eqTrans (eqCong (fun z => radd a z) (eqSym ((fieldOf R).addAssoc b c d)))
+      (eqTrans (eqCong (fun z => radd a (radd z d)) ((fieldOf R).addComm b c))
+        (eqTrans (eqCong (fun z => radd a z) ((fieldOf R).addAssoc c b d))
+          (eqSym ((fieldOf R).addAssoc a c (radd b d))))))
+
 def subAddSub {R : Real} (a b c d : Carrier R) :
-    (rsub (radd a b) (radd c d)) = (radd (rsub a c) (rsub b d)) := sorry
+    (rsub (radd a b) (radd c d)) = (radd (rsub a c) (rsub b d)) :=
+  eqTrans (eqCong (fun z => radd (radd a b) z) (negAdd c d))
+    (addAddSwap a b (rneg c) (rneg d))
 
 ------------------------------------------------------------
 -- Multiplication-negation lemmas (needed for abs properties)
@@ -1070,8 +1282,6 @@ def mulZeroLeft {R : Real} (a : Carrier R) : (rmul (rzero R) a) = (rzero R) :=
         (eqSym (addZeroLeft (rmul (rzero R) a)))))
 
 -- TACTIC-MODE in source (erw).
-def mulZeroRight {R : Real} (c : Carrier R) : (rmul c (rzero R)) = (rzero R) := sorry
-
 def mulRealOfNat (R : Real) : (n m : MyNat) →
     (rmul (realOfNat R n) (realOfNat R m)) = (realOfNat R (mult n m))
   | .zero, m => mulZeroLeft (realOfNat R m)
@@ -1131,7 +1341,11 @@ def rzeroAsRealOfRat (R : Real) :
     (rzero R) = (realOfRat R (.mkRat (.intOfNat .zero) (.succ .zero) (.isSucc .zero))) := rfl
 
 -- TACTIC-MODE in source (constructor).
-def zeroLtOne (R : Real) : rlt (rzero R) (rone R) := sorry
+-- Not an extra axiom: an ordered field already asserts 0 ≤ 1 (zeroLeOne) and
+-- 0 ≠ 1 (zeroNeOne), and a < b is defined as exactly that pair. So strict
+-- positivity of 1 is just those two axioms put together.
+def zeroLtOne (R : Real) : rlt (rzero R) (rone R) :=
+  Pair.mk ((fieldOf R).zeroLeOne) ((fieldOf R).zeroNeOne)
 
 def realOfNatNonneg (R : Real) : (n : MyNat) → rle (rzero R) (realOfNat R n)
   | .zero => (fieldOf R).leRefl (rzero R)
@@ -1155,9 +1369,6 @@ def realOfNatSuccNeZero (R : Real) (n : MyNat) (eq : (realOfNat R (.succ n)) = (
   Pair.snd (realOfNatSuccPos R n) (eqSym eq)
 
 -- TACTIC-MODE in source (apply / erw).
-def mulNeZero {R : Real} (a b : Carrier R) (ane : a = (rzero R) → MyVoid)
-    (bne : b = (rzero R) → MyVoid) (eq : (rmul a b) = (rzero R)) : MyVoid := sorry
-
 -- TACTIC-MODE in source (erw).
 def mulInvMulInv {R : Real} (a b : Carrier R) (ane : a = (rzero R) → MyVoid)
     (bne : b = (rzero R) → MyVoid) :
@@ -1340,7 +1551,8 @@ def divTwoPos {R : Real} (e : Carrier R) (hlt : rlt (rzero R) e) :
 -- belongs in the toolkit (statement faithful; body sorried like the other
 -- ports of TT tactic proofs — the sorry surfaces as a warning, not an error).
 def divPos {R : Real} (a b : Carrier R) (ha : rlt (rzero R) a) (hb : rlt (rzero R) b) :
-    rlt (rzero R) (rdiv a b) := sorry
+    rlt (rzero R) (rdiv a b) :=
+  mulPos a (rinv b) ha (invPosStrict b hb)
 
 def divTwoAddEq {R : Real} (e : Carrier R) :
     (radd (rdiv e (rtwo R)) (rdiv e (rtwo R))) = e :=
@@ -1799,9 +2011,13 @@ def derivBound {R : Real} (g : Carrier R → Carrier R) (y0 Lg : Carrier R)
     DPair (Carrier R)
       (fun delta => DerivBoundWitness R g y0 Lg eta delta) := sorry
 
--- TACTIC-MODE in source (constructor).
+-- Translation invariance, the STRICT version. The ordered field gives it for ≤
+-- (addLeLeft); a < b is (a ≤ b) paired with (a ≠ b), and the ≠ half is exactly
+-- right-cancellation.
 def addLtRight {R : Real} (a b c : Carrier R) (h : rlt a b) :
-    rlt (radd a c) (radd b c) := sorry
+    rlt (radd a c) (radd b c) :=
+  Pair.mk (addLeRight a b c (Pair.fst h))
+    (fun eq => Pair.snd h (addCancelRight a b c eq))
 
 def absSubAdd {R : Real} (a b : Carrier R) :
     rle (rabs a) (radd (rabs (rsub a b)) (rabs b)) :=
@@ -1921,6 +2137,19 @@ example (n : ℕ) : ∑ i ∈ Finset.range n, (i : ℚ) = n * (n - 1) / 2 := by
   induction n with
   | zero => simp
   | succ k ih => rw [Finset.sum_range_succ, ih]; push_cast; ring
+
+-- The SAME obligation the from-scratch Real Analysis preset needs, where it
+-- costs a chain of ~20 hand-proved lemmas up from the ordered-field axioms.
+-- Here it is one suggestion, and the editor finds it without being told Mathlib
+-- is loaded: "positivity" is offered on every goal and simply fails to validate
+-- where it doesn't exist.
+theorem halfPos (ε : ℝ) (hε : 0 < ε) : 0 < ε / 2 := by
+  sorry
+
+-- Likewise "linarith" for the arithmetic the from-scratch preset had to build
+-- translation-invariance lemmas for.
+theorem shiftLt (a b c : ℝ) (h : a < b) : a + c < b + c := by
+  sorry
 `;
 
 export const LEAN_PRESETS: LeanPreset[] = [

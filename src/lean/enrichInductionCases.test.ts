@@ -73,3 +73,64 @@ describe('enrichInductionCaseNames', () => {
     expect(ind.cases[1].constructorParamNames).toEqual(['a', 'a1']);
   });
 });
+
+describe('composed case tags (cases under an outer named goal)', () => {
+  // REGRESSION: `constructor` on `Limit` leaves a goal tagged `eps_delta`;
+  // `cases hF` inside it reports the COMPOSED tag `eps_delta.mk`. A `with |`
+  // alternative must be the constructor's own tag — Lean rejects the composed
+  // form with "Invalid alternative name `eps_delta.mk`: Expected `mk`".
+  test('uses only the last tag component as the constructor name', () => {
+    const goalMap = mkGoalMap([
+      [1, { hypotheses: [{ name: 'hF', type: '∃ δ, W δ' }] }],
+      [3, { caseLabelLatex: 'eps_delta.mk', hypotheses: [
+        { name: 'fst✝', type: 'ℝ' },
+        { name: 'snd✝', type: 'W fst✝' },
+      ] }],
+    ]);
+    const one: ProofNode = {
+      tag: 'induction',
+      id: 1,
+      scrutinee: 'hF',
+      collapsed: false,
+      isCases: true,
+      cases: [{ tag: 'case', id: 3, label: 'case', body: { tag: 'hole', id: 2 }, collapsed: false }],
+    } as ProofNode;
+    const { root, changed } = enrichInductionCaseNames(one, goalMap);
+    expect(changed).toBe(true);
+    const ind = root as Extract<ProofNode, { tag: 'induction' }>;
+    expect(ind.cases[0].constructorName).toBe('mk');
+    expect(ind.cases[0].constructorParamNames).toEqual(['fst', 'snd']);
+  });
+});
+
+describe('shadowing avoidance', () => {
+  // The SECOND `cases` on a DPair introduces `fst✝/snd✝` again; cleaning the
+  // daggers to `fst/snd` would shadow the first pair and strand the proof
+  // (the witness needs BOTH deltas: `rmin fst fst1`).
+  test('cleaned names never shadow hypotheses already in scope', () => {
+    const goalMap = mkGoalMap([
+      [1, { hypotheses: [
+        { name: 'hG', type: '∃ δ, W δ' },
+        { name: 'fst', type: 'ℝ' },
+        { name: 'snd', type: 'W fst' },
+      ] }],
+      [3, { caseLabelLatex: 'mk', hypotheses: [
+        { name: 'fst', type: 'ℝ' },
+        { name: 'snd', type: 'W fst' },
+        { name: 'fst✝', type: 'ℝ' },
+        { name: 'snd✝', type: 'V fst✝' },
+      ] }],
+    ]);
+    const one: ProofNode = {
+      tag: 'induction',
+      id: 1,
+      scrutinee: 'hG',
+      collapsed: false,
+      isCases: true,
+      cases: [{ tag: 'case', id: 3, label: 'case', body: { tag: 'hole', id: 2 }, collapsed: false }],
+    } as ProofNode;
+    const { root } = enrichInductionCaseNames(one, goalMap);
+    const ind = root as Extract<ProofNode, { tag: 'induction' }>;
+    expect(ind.cases[0].constructorParamNames).toEqual(['fst1', 'snd1']);
+  });
+});

@@ -4,6 +4,7 @@ import { SyntaxRegistry } from '../math-editor/syntax-registry';
 import { mkConstTT } from '../compiler/surface';
 import { type DefinitionsMap } from '../compiler/term';
 import { normalizeBinderNameInput } from './name-latex';
+import { parseHaveInput } from './haveInput';
 import { runSimp } from '../tactics/simp-tactic';
 import {
   TypedProofContext,
@@ -19,6 +20,7 @@ import {
   editIntroName,
   findCase,
   findNode,
+  mkExact,
   isCursorInSubtree,
   mkHave,
   mkHole,
@@ -786,6 +788,18 @@ export function applyManualProofTreeTactic(
     case 'exact': {
       const expr = value.trim();
       if (!expr) return null;
+      // Lean backend: no TT kernel — keep the user's expression text VERBATIM.
+      // The TT round-trip (parse → print) rewrites notation into TT spellings
+      // (`ε / 2` → `div ε 2`) that real Lean does not know, so the spliced
+      // source elaborates to `sorry` with an error the user never typed.
+      if (!ctx.typedContext?.kernelGoal) {
+        const node = findNode(state.root, state.cursor.nodeId);
+        if (!node || node.tag !== 'hole') return null;
+        return {
+          root: replaceNode(state.root, state.cursor.nodeId, mkExact(expr)),
+          cursor: state.cursor,
+        };
+      }
       return applyTacticCommandsAtCursor(state, [{ name: 'exact', args: [parseExpr(expr)] }]);
     }
 
@@ -841,13 +855,37 @@ export function applyManualProofTreeTactic(
     }
 
     case 'have': {
-      const trimmed = value.trim();
-      const eqIdx = trimmed.indexOf(':=');
-      if (eqIdx <= 0) return null;
-      const haveName = trimmed.slice(0, eqIdx).trim().split(':')[0].trim();
-      const haveExpr = trimmed.slice(eqIdx + 2).trim();
-      if (!haveName || !haveExpr) return null;
-      return applyTacticCommandsAtCursor(state, buildHaveTacticCommands(haveName, haveExpr));
+      const parsed = parseHaveInput(value);
+      if (!parsed) return null;
+      // A TYPED have (`h1 : 0 < ε / 2`) states an obligation and opens a goal
+      // for it, with the rest of the proof continuing below — the shape an ε-δ
+      // proof is written in, and what hoisting an obligation produces. The
+      // cursor lands on the OBLIGATION: you stated it because you mean to prove
+      // it.
+      if (parsed.kind === 'typed') {
+        const node = findNode(state.root, state.cursor.nodeId);
+        if (!node || node.tag !== 'hole') return null;
+        const obligation = mkHole();
+        const rest = mkHole();
+        const inserted = mkHave(parsed.name, '', rest, parsed.typeExpr, obligation);
+        return {
+          root: replaceNode(state.root, state.cursor.nodeId, inserted),
+          cursor: { nodeId: obligation.id },
+        };
+      }
+      // Lean backend: keep the term-have's expression VERBATIM (see the exact
+      // case above — the TT round-trip rewrites `ε / 2` into `div ε 2`).
+      if (!ctx.typedContext?.kernelGoal) {
+        const node = findNode(state.root, state.cursor.nodeId);
+        if (!node || node.tag !== 'hole') return null;
+        const rest = mkHole();
+        const inserted = mkHave(parsed.name, parsed.expr, rest);
+        return {
+          root: replaceNode(state.root, state.cursor.nodeId, inserted),
+          cursor: { nodeId: rest.id },
+        };
+      }
+      return applyTacticCommandsAtCursor(state, buildHaveTacticCommands(parsed.name, parsed.expr));
     }
 
     case 'simp': {

@@ -11,11 +11,18 @@
  * Lines are 1-based, columns 0-based (we keep them as Lean reports them; the
  * frontend maps to Monaco's 1-based columns).
  *
- * Mathlib mode (opt-in) runs `lake env lean --json <file>` with the bundled
- * Lean package (`/lean`) as cwd so Mathlib is on the import path. That path
- * requires the package to have been built with `-K mathlib=on` first.
+ * Mathlib mode (opt-in, `-K mathlib=on`) is NOT a separate execution path: it
+ * asks `lake env` once for the environment Mathlib needs and then runs through
+ * the same precompiled extractor, resident workers and prefix-olean cache as
+ * core mode. Only when Mathlib isn't built does anything fall back to
+ * interpreting under `lake env`, and then mainly to produce a real error.
  */
-import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import {
+  execFile,
+  spawn,
+  type ChildProcessWithoutNullStreams,
+  type ExecFileException,
+} from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdtemp, writeFile, rm, mkdir, copyFile } from 'node:fs/promises';
@@ -84,18 +91,123 @@ function leanEnv(): NodeJS.ProcessEnv {
   return { ...process.env, PATH: path };
 }
 
+// ── Mathlib environment ──────────────────────────────────────────────────────
+// Mathlib mode used to mean "shell out to `lake env lean`", which re-elaborated
+// the whole file per request and locked Mathlib out of every fast path. It
+// doesn't have to: `lake env` is just a set of environment variables. Ask for
+// them ONCE, then hand them to the same precompiled extractor and the same
+// resident workers core mode uses — so Mathlib gets the olean cache and the
+// ~20ms warm requests too, instead of paying tens of seconds per round-trip.
+//
+// LEAN_PATH is the important one, but NOT the only one: a dependency built with
+// `precompileModules` (ProofWidgets, in Mathlib's tree) is loaded as a native
+// shared library at elaboration time, found via the platform's library path.
+// Capturing LEAN_PATH alone would work until it suddenly didn't, with an error
+// about a missing symbol rather than a missing import — so take the whole set
+// `lake env` actually sets.
+// Deliberately NOT PATH: elan's shim dir has to win so `lean` resolves to the
+// toolchain the extract binary was built with (see `extractEnv`).
+const LAKE_ENV_KEYS = [
+  'LEAN_PATH',
+  'LEAN_SRC_PATH',
+  'DYLD_LIBRARY_PATH', // macOS
+  'LD_LIBRARY_PATH', // Linux
+] as const;
+
+let MATHLIB_ENV_PROMISE: Promise<Record<string, string> | null> | undefined;
+/** The resolved overlay, once known. Read synchronously by `extractEnv`. */
+let MATHLIB_ENV: Record<string, string> | null = null;
+
+/**
+ * The environment `lake env` would set for a Mathlib build, or null when
+ * Mathlib isn't fetched/built.
+ *
+ * Memoized on the PROMISE so concurrent first-requests share one `lake` call.
+ * A null result is remembered too: with Mathlib absent, re-asking on every
+ * request would add a doomed subprocess to each one.
+ */
+function mathlibEnv(): Promise<Record<string, string> | null> {
+  if (!MATHLIB_ENV_PROMISE) {
+    MATHLIB_ENV_PROMISE = (async () => {
+      try {
+        // `-R` forces re-elaboration of the lakefile: the `require mathlib` sits
+        // behind `meta if get_config? mathlib`, and Lake otherwise reuses a
+        // cached lakefile olean elaborated WITHOUT the option — silently
+        // resolving to a Mathlib-less workspace and reporting success.
+        const out = await run('lake', ['-R', '-K', 'mathlib=on', 'env', 'printenv'], {
+          cwd: LEAN_PKG_DIR,
+          timeoutMs: 300_000,
+        });
+        if (out.error) return null;
+        const env: Record<string, string> = {};
+        for (const line of out.stdout.split('\n')) {
+          const eq = line.indexOf('=');
+          if (eq <= 0) continue;
+          const key = line.slice(0, eq);
+          if ((LAKE_ENV_KEYS as readonly string[]).includes(key)) env[key] = line.slice(eq + 1);
+        }
+        // Mathlib absent → LEAN_PATH won't mention it, and treating that as
+        // "ready" would send requests down a fast path that can't resolve
+        // `import Mathlib` and report it as a user error in their file.
+        MATHLIB_ENV = /mathlib/i.test(env.LEAN_PATH ?? '') ? env : null;
+        return MATHLIB_ENV;
+      } catch {
+        return null;
+      }
+    })();
+  }
+  return MATHLIB_ENV_PROMISE;
+}
+
+/**
+ * The LEAN_PATH an extract run should use: the prefix-olean cache, plus Mathlib.
+ *
+ * MONOTONIC by design. Once Mathlib is known it goes on EVERY run, core ones
+ * included — because the resident workers fix their environment at spawn, so a
+ * path that varied per request would make a core warm-up and a Mathlib warm-up
+ * respawn the pool out from under each other, indefinitely. A wider search path
+ * costs a core request nothing: it imports no Mathlib module, so nothing is ever
+ * found there.
+ *
+ * Only a request that actually asks for Mathlib pays to RESOLVE it, so a
+ * core-only session never shells out to `lake` at all.
+ */
+async function searchPath(mathlib: boolean | undefined, prefixDir = PREFIX_CACHE_ROOT): Promise<string> {
+  if (mathlib) await mathlibEnv();
+  return MATHLIB_ENV ? `${prefixDir}:${MATHLIB_ENV.LEAN_PATH}` : prefixDir;
+}
+
+/** The full environment for an extract run — `searchPath` plus whatever else
+ *  `lake env` sets (library paths for precompiled deps). Keyed for worker reuse
+ *  by its LEAN_PATH, which is monotonic, so the rest follows deterministically. */
+async function extractEnv(
+  mathlib: boolean | undefined,
+  prefixDir = PREFIX_CACHE_ROOT,
+): Promise<NodeJS.ProcessEnv> {
+  const LEAN_PATH = await searchPath(mathlib, prefixDir);
+  // leanEnv() last for PATH: elan's shims must win so `lean` resolves to the
+  // toolchain the extract binary was built with.
+  return { ...process.env, ...(MATHLIB_ENV ?? {}), ...leanEnv(), LEAN_PATH };
+}
+
 interface ExecOut {
   stdout: string;
   stderr: string;
-  error?: NodeJS.ErrnoException;
+  /** `execFile`'s failure. Its `code` is `string | number | null` (a signal-kill
+   *  reports a number), which is why this isn't `NodeJS.ErrnoException`. */
+  error?: ExecFileException;
 }
 
-function run(cmd: string, args: string[], opts: { cwd?: string; timeoutMs: number }): Promise<ExecOut> {
+function run(
+  cmd: string,
+  args: string[],
+  opts: { cwd?: string; timeoutMs: number; env?: NodeJS.ProcessEnv },
+): Promise<ExecOut> {
   return new Promise((resolveExec) => {
     execFile(
       cmd,
       args,
-      { cwd: opts.cwd, env: leanEnv(), timeout: opts.timeoutMs, maxBuffer: 32 * 1024 * 1024 },
+      { cwd: opts.cwd, env: opts.env ?? leanEnv(), timeout: opts.timeoutMs, maxBuffer: 32 * 1024 * 1024 },
       (error, stdout, stderr) => {
         // Non-zero exit (Lean found errors) is expected — we still want stdout.
         resolveExec({ stdout: stdout ?? '', stderr: stderr ?? '', error: error ?? undefined });
@@ -145,8 +257,13 @@ export async function checkLeanSource(source: string, opts: CheckOptions = {}): 
     const file = join(dir, 'Main.lean');
     await writeFile(file, source, 'utf8');
 
+    // A Mathlib check is a fresh `lean` importing Mathlib (multi-GB while it
+    // runs) — hold a Mathlib slot so concurrent checks queue instead of
+    // stacking processes. Core checks are ~100MB and stay unthrottled.
     const out = opts.mathlib
-      ? await run('lake', ['env', 'lean', '--json', file], { cwd: LEAN_PKG_DIR, timeoutMs })
+      ? await withMathlibSlot(opts.priority === true, () =>
+          run('lake', ['env', 'lean', '--json', file], { cwd: LEAN_PKG_DIR, timeoutMs }),
+        )
       : await run('lean', ['--json', file], { timeoutMs });
 
     // Spawn-level failures (binary missing, timeout) — surface as bridgeError.
@@ -202,6 +319,9 @@ export interface LeanGoalState {
   hyps: LeanHyp[];
   /** Tagged pretty-print of the target type (the thing after ⊢). */
   targetTagged: TaggedText;
+  /** Whether the target is a Prop (a claim to prove) as opposed to data (a
+   *  value to choose). Absent from pre-`isProp` extractor builds. */
+  isProp?: boolean;
   /** Plain-text rendering (fallback / copy), e.g. "n : Nat\n⊢ n + 0 = n". */
   plain: string;
 }
@@ -214,6 +334,10 @@ export interface LeanGoal {
   endCol: number;
   /** The open goal states at this tactic position. */
   goals: LeanGoalState[];
+  /** Case tags of goals whose metavariable occurs in a sibling goal's type —
+   *  values to CHOOSE (e.g. the `b` midpoint of `apply ltLeTrans`). Recorded
+   *  by the extractor at the split itself, so it survives later assignment. */
+  valueCaseTags?: string[];
 }
 
 /** A top-level declaration the user wrote (def/theorem/inductive/...). */
@@ -302,6 +426,7 @@ export function parseAnalyzeJson(
       ...(typeof gs?.case === 'string' ? { case: gs.case } : {}),
       hyps,
       targetTagged: target,
+      ...(typeof gs?.isProp === 'boolean' ? { isProp: gs.isProp } : {}),
       plain: String(gs?.plain ?? ''),
     };
   };
@@ -311,6 +436,9 @@ export function parseAnalyzeJson(
     endLine: clampInt(g.endLine, clampInt(g.startLine, 1)),
     endCol: clampInt(g.endCol, clampInt(g.startCol)),
     goals: Array.isArray(g.goals) ? g.goals.map(parseGoalState) : [],
+    ...(Array.isArray(g.valueCaseTags) && g.valueCaseTags.length > 0
+      ? { valueCaseTags: g.valueCaseTags.map((t: any) => String(t)) }
+      : {}),
   }));
   const declarations: LeanDeclaration[] = Array.isArray(obj.declarations)
     ? obj.declarations.map((d: any) => {
@@ -382,7 +510,40 @@ export function createAnalyzeLimiter(maxConcurrent: number): AnalyzeLimiter {
   };
 }
 
-const analyzeLimiter = createAnalyzeLimiter(3);
+// ── worker-pool sizing ──────────────────────────────────────────────────────
+// Core and Mathlib requests run through SEPARATE pools sized very differently,
+// because their memory profiles are three orders of magnitude apart: a core
+// worker idles at ~100–200MB, while a worker that has imported Mathlib holds
+// 4–7GB genuinely resident. One shared pool meant every worker (and every
+// busy-spill one-shot) eventually went Mathlib-sized — stacked across the dev
+// server plus parallel test forks, that is the ~100GB blowup of 2026-07-28.
+//
+// Each mode's limiter cap equals its pool size, so an acquired slot always
+// finds a free worker — which is also what keeps the one-shot busy-fallback
+// (another 4–7GB process per spill, in Mathlib mode) unreachable in normal
+// operation: excess requests queue on the limiter instead of spawning.
+/** Parse a pool-size env override; anything not an integer in [1, max] → fallback. */
+export function clampPoolSize(raw: string | undefined, fallback: number, max: number): number {
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 1 && n <= max ? n : fallback;
+}
+const CORE_WORKER_COUNT = clampPoolSize(process.env.LEANUI_EXTRACT_WORKERS, 3, 8);
+const MATHLIB_WORKER_COUNT = clampPoolSize(process.env.LEANUI_MATHLIB_WORKERS, 1, 4);
+
+const analyzeLimiter = createAnalyzeLimiter(CORE_WORKER_COUNT);
+const mathlibLimiter = createAnalyzeLimiter(MATHLIB_WORKER_COUNT);
+
+/** Run `fn` holding a Mathlib concurrency slot — every code path that can make
+ *  a process import Mathlib must go through here (or hold a slot already), so
+ *  the number of Mathlib-resident processes stays bounded by the pool size. */
+async function withMathlibSlot<T>(priority: boolean, fn: () => Promise<T>): Promise<T> {
+  await mathlibLimiter.acquire(priority);
+  try {
+    return await fn();
+  } finally {
+    mathlibLimiter.release();
+  }
+}
 
 // ── persistent extract workers (`extract --serve`) ──────────────────────────
 // One-shot extract runs pay process boot + `importModules` on EVERY request —
@@ -390,8 +551,7 @@ const analyzeLimiter = createAnalyzeLimiter(3);
 // `lean --server` keeps the environment resident. `--serve` mode is our
 // version of the same: a long-lived extract process with an env cache, one
 // file path in per stdin line, one JSON out per stdout line. Warm requests
-// run in ~20ms. Pool size matches the analyze limiter cap, so an acquired
-// slot always finds a free worker.
+// run in ~20ms.
 
 class ExtractWorker {
   private child: ChildProcessWithoutNullStreams | null = null;
@@ -400,12 +560,29 @@ class ExtractWorker {
   private served = 0;
   busy = false;
 
-  private ensure(): boolean {
-    if (this.child) return true;
+  /** The LEAN_PATH this worker's process was spawned with. A worker's search
+   *  path is fixed for the life of the process, so a request needing a wider
+   *  one (the first Mathlib request on a pool started for core) must respawn. */
+  private spawnedPath: string | null = null;
+
+  private ensure(leanPath: string): boolean {
+    if (this.child && this.spawnedPath === leanPath) return true;
+    if (this.child) {
+      // Widening (or narrowing) the search path: recycle. Happens at most once
+      // per pool in practice, since the resolved paths are stable.
+      const old = this.child;
+      this.child = null;
+      for (const w of this.waiters.splice(0)) w(null);
+      old.kill();
+    }
     if (!hasExtractBin()) return false;
     try {
+      this.spawnedPath = leanPath;
       this.child = spawn(EXTRACT_BIN, ['--serve'], {
-        env: { ...leanEnv(), LEAN_PATH: PREFIX_CACHE_ROOT },
+        // Same overlay as `extractEnv`, built synchronously: the caller already
+        // resolved Mathlib (via `searchPath`) to produce `leanPath`, so
+        // MATHLIB_ENV is settled by the time we get here.
+        env: { ...process.env, ...(MATHLIB_ENV ?? {}), ...leanEnv(), LEAN_PATH: leanPath },
         cwd: LEAN_PKG_DIR, // lean-toolchain pin for findSysroot
         stdio: ['pipe', 'pipe', 'pipe'],
       });
@@ -435,9 +612,17 @@ class ExtractWorker {
     return true;
   }
 
+  /** Stop the worker process, if one is running. */
+  stop(): void {
+    const child = this.child;
+    this.child = null;
+    for (const w of this.waiters.splice(0)) w(null);
+    child?.kill();
+  }
+
   /** One request (serial per worker). Null → caller should fall back. */
-  async request(path: string, timeoutMs: number): Promise<string | null> {
-    if (this.busy || !this.ensure()) return null;
+  async request(path: string, timeoutMs: number, leanPath: string = PREFIX_CACHE_ROOT): Promise<string | null> {
+    if (this.busy || !this.ensure(leanPath)) return null;
     this.busy = true;
     try {
       const reply = new Promise<string | null>((res) => this.waiters.push(res));
@@ -457,14 +642,38 @@ class ExtractWorker {
   }
 }
 
-const EXTRACT_WORKERS = [new ExtractWorker(), new ExtractWorker(), new ExtractWorker()];
+const CORE_WORKERS = Array.from({ length: CORE_WORKER_COUNT }, () => new ExtractWorker());
+// Mathlib requests NEVER route to the core pool (and vice versa): the pools
+// share a LEAN_PATH, but only processes that actually elaborate a Mathlib
+// import pay its 4–7GB — so the split keeps that cost confined to this pool.
+const MATHLIB_WORKERS = Array.from({ length: MATHLIB_WORKER_COUNT }, () => new ExtractWorker());
 
-/** Run one analyze through a persistent worker. Null → fall back to one-shot
- *  (worker busy/unavailable, old binary without --serve, crash, timeout). */
-async function requestViaWorker(file: string, timeoutMs: number): Promise<ReturnType<typeof parseAnalyzeJson> | null> {
-  const worker = EXTRACT_WORKERS.find((w) => !w.busy);
+/**
+ * Shut the persistent workers down.
+ *
+ * The long-lived `extract --serve` children are what make warm requests ~20ms,
+ * but they also hold the Node event loop open forever. A server never cares; a
+ * script or a test run does — without this, any headless caller hangs after its
+ * last request instead of exiting.
+ */
+export function shutdownLeanBridge(): void {
+  for (const w of CORE_WORKERS) w.stop();
+  for (const w of MATHLIB_WORKERS) w.stop();
+}
+
+/** Run one analyze through a persistent worker of the mode's pool. Null →
+ *  caller should fall back to one-shot (worker busy/unavailable, old binary
+ *  without --serve, crash, timeout). */
+async function requestViaWorker(
+  file: string,
+  timeoutMs: number,
+  leanPath: string = PREFIX_CACHE_ROOT,
+  mathlib = false,
+): Promise<ReturnType<typeof parseAnalyzeJson> | null> {
+  const pool = mathlib ? MATHLIB_WORKERS : CORE_WORKERS;
+  const worker = pool.find((w) => !w.busy);
   if (!worker) return null;
-  const line = await worker.request(file, timeoutMs);
+  const line = await worker.request(file, timeoutMs, leanPath);
   if (line === null) return null;
   let obj: any;
   try {
@@ -486,6 +695,12 @@ async function requestViaWorker(file: string, timeoutMs: number): Promise<Return
 // ~0.2s per request. The cache dir carries the project's lean-toolchain pin so
 // elan resolves the SAME toolchain the extract binary was built with
 // (mismatched toolchains fail with "incompatible olean header").
+//
+// This works for Mathlib too, and matters far MORE there: `import Mathlib` is
+// tens of seconds to elaborate, so paying it once per prefix — instead of once
+// per goal refresh and once per suggestion trial — is the difference between a
+// usable editor and an unusable one. All it takes is compiling the prefix with
+// Mathlib on LEAN_PATH and importing it back the same way (see `searchPath`).
 interface PrefixModule {
   ok: boolean;
   dir: string;
@@ -502,7 +717,7 @@ function prefixHash(prefix: string): string {
   return createHash('sha256').update(prefix).digest('hex').slice(0, 16);
 }
 
-async function compilePrefixModule(prefix: string): Promise<PrefixModule> {
+async function compilePrefixModule(prefix: string, mathlib?: boolean): Promise<PrefixModule> {
   const hash = prefixHash(prefix);
   const modName = `LeanuiP${hash}`;
   // FLAT layout: every prefix module lives directly in the cache root (names
@@ -518,7 +733,17 @@ async function compilePrefixModule(prefix: string): Promise<PrefixModule> {
     await writeFile(join(dir, `${modName}.lean`), prefix, 'utf8');
     // Pin the toolchain: elan resolves `lean` per-cwd via lean-toolchain.
     await copyFile(join(LEAN_PKG_DIR, 'lean-toolchain'), join(dir, 'lean-toolchain'));
-    const out = await run('lean', ['-o', olean, `${modName}.lean`], { cwd: dir, timeoutMs: 120_000 });
+    // A Mathlib prefix (`import Mathlib…`) only compiles with Mathlib on the
+    // search path — without this the module silently fails to build and every
+    // Mathlib request falls back to the slow whole-file path.
+    const env = await extractEnv(mathlib, dir);
+    const out = await run('lean', ['-o', olean, `${modName}.lean`], {
+      cwd: dir,
+      // Compiling a prefix that imports Mathlib is minutes on a cold cache, not
+      // seconds — and it happens once per distinct prefix.
+      timeoutMs: mathlib ? 900_000 : 120_000,
+      env,
+    });
     // Errors in the prefix (user mid-edit above the decl) → no usable module.
     if (out.error || !existsSync(olean)) return fail;
     return { ok: true, dir, modName, lineCount };
@@ -527,14 +752,19 @@ async function compilePrefixModule(prefix: string): Promise<PrefixModule> {
   }
 }
 
-function getPrefixModule(prefix: string): Promise<PrefixModule> {
-  const hash = prefixHash(prefix);
+function getPrefixModule(prefix: string, mathlib?: boolean): Promise<PrefixModule> {
+  // Keyed by mode as well as text: the same prefix compiles under Mathlib and
+  // fails without it, and a cached `ok` from the other mode would send requests
+  // down the fast path with a search path that can't resolve its imports.
+  const hash = `${mathlib ? 'M' : 'C'}${prefixHash(prefix)}`;
   let entry = PREFIX_CACHE.get(hash);
   if (!entry) {
-    entry = compilePrefixModule(prefix).then((mod) => {
+    entry = compilePrefixModule(prefix, mathlib).then((mod) => {
       // Pre-warm the persistent workers' env caches with the new module, so
       // the FIRST interactive request doesn't pay the ~0.7s import either.
-      if (mod.ok) void warmWorkersForPrefix(mod);
+      // (Mathlib makes this warm-up matter far more: importing it is tens of
+      // seconds, and the whole point is that only the warm-up pays that.)
+      if (mod.ok) void warmWorkersForPrefix(mod, mathlib);
       return mod;
     });
     PREFIX_CACHE.set(hash, entry);
@@ -547,23 +777,30 @@ function getPrefixModule(prefix: string): Promise<PrefixModule> {
 }
 
 /** Fire-and-forget: run a trivial `import <prefix>` file through every worker
- *  so their env caches hold the module before real requests arrive. Each
- *  warm-up holds a NON-priority limiter slot — never competing with real
- *  requests for a worker (the limiter cap equals the pool size, so a real
- *  slot-holder must always find a free worker). */
-async function warmWorkersForPrefix(mod: PrefixModule): Promise<void> {
+ *  of the mode's pool, so their env caches hold the module before real
+ *  requests arrive. Each warm-up holds a NON-priority slot of the SAME
+ *  limiter that guards the pool — never competing with real requests for a
+ *  worker (the limiter cap equals the pool size, so a real slot-holder must
+ *  always find a free worker). Warming only the matching pool is what keeps a
+ *  Mathlib prefix from inflating every core worker to Mathlib size. */
+async function warmWorkersForPrefix(mod: PrefixModule, mathlib?: boolean): Promise<void> {
   let dir: string | undefined;
   try {
     dir = await mkdtemp(join(tmpdir(), 'leanui-warm-'));
     const file = join(dir, 'Warm.lean');
     await writeFile(file, `import ${mod.modName}\n`, 'utf8');
+    const leanPath = await searchPath(mathlib);
+    const pool = mathlib ? MATHLIB_WORKERS : CORE_WORKERS;
+    const limiter = mathlib ? mathlibLimiter : analyzeLimiter;
     await Promise.all(
-      EXTRACT_WORKERS.map(async (w) => {
-        await analyzeLimiter.acquire(false);
+      pool.map(async (w) => {
+        await limiter.acquire(false);
         try {
-          await w.request(file, 120_000); // null if busy → it warms on first real use
+          // Generous: a first Mathlib import is tens of seconds, and paying it
+          // here is exactly the point.
+          await w.request(file, mathlib ? 600_000 : 120_000, leanPath); // null if busy → warms on first real use
         } finally {
-          analyzeLimiter.release();
+          limiter.release();
         }
       }),
     );
@@ -588,6 +825,22 @@ export function shiftAnalyzeLines(
   };
 }
 
+/**
+ * Turn an extractor crash into something the user can act on.
+ *
+ * A half-populated Mathlib build fails as `object file '…/Foo.olean' … does not
+ * exist` — which reads like a corrupt install, not like "your download was
+ * interrupted". It's an easy state to reach: `lake update` runs Mathlib's cache
+ * fetch, and one file missing out of ~8500 is enough. (Hit exactly that while
+ * building this.) The fix is a command, so say the command.
+ */
+function hintFor(detail: string): string {
+  if (/object file .*\.olean.* does not exist/.test(detail)) {
+    return '\nMathlib looks partially built. Run: cd lean && lake -R -K mathlib=on exe cache get && lake -R -K mathlib=on build';
+  }
+  return '';
+}
+
 export interface AnalyzeOptions extends CheckOptions {
   /** Unchanged file prefix (everything before the decl being edited). When
    *  given with `body`, the server compiles it once to a .olean and analyzes
@@ -603,17 +856,19 @@ export async function analyzeLeanSource(source: string, opts: AnalyzeOptions = {
   if (hit && !hit.bridgeError) {
     return { ...hit, durationMs: 0 };
   }
-  await analyzeLimiter.acquire(opts.priority === true);
+  // Mathlib analyzes hold a slot of the (much smaller) Mathlib limiter: only
+  // that many processes can be elaborating a Mathlib import at any moment.
+  const limiter = opts.mathlib ? mathlibLimiter : analyzeLimiter;
+  await limiter.acquire(opts.priority === true);
   let result: AnalyzeResult;
   try {
     // Re-check the cache: an identical request may have completed while queued.
     const hit2 = ANALYZE_CACHE.get(key);
     if (hit2 && !hit2.bridgeError) return { ...hit2, durationMs: 0 };
 
-    // Prefix mode: core (non-mathlib) only — mathlib runs under lake env.
     result = await runViaPrefix(opts) ?? await runAnalyze(source, opts);
   } finally {
-    analyzeLimiter.release();
+    limiter.release();
   }
   if (!result.bridgeError) {
     ANALYZE_CACHE.set(key, result);
@@ -627,9 +882,14 @@ export async function analyzeLeanSource(source: string, opts: AnalyzeOptions = {
 
 /** Try the prefix-olean fast path; null → caller falls back to a full analyze. */
 async function runViaPrefix(opts: AnalyzeOptions): Promise<AnalyzeResult | null> {
-  const { prefix, body } = opts;
-  if (opts.mathlib || !prefix || body === undefined || !hasExtractBin()) return null;
-  const mod = await getPrefixModule(prefix);
+  const { prefix, body, mathlib } = opts;
+  if (!prefix || body === undefined || !hasExtractBin()) return null;
+  // Mathlib mode used to bail here, so every Mathlib round-trip re-elaborated
+  // the whole file under `lake env`. It doesn't have to: `lake env`'s only
+  // contribution is LEAN_PATH, and the prefix module can be compiled and
+  // imported against that path like any other.
+  if (mathlib && (await mathlibEnv()) === null) return null; // not built → slow path reports it
+  const mod = await getPrefixModule(prefix, mathlib);
   if (!mod.ok) return null; // prefix doesn't compile → full analyze reports why
   const started = Date.now();
   let dir: string | undefined;
@@ -640,13 +900,17 @@ async function runViaPrefix(opts: AnalyzeOptions): Promise<AnalyzeResult | null>
     const timeoutMs = opts.timeoutMs ?? 60_000;
 
     // Persistent worker first (~20ms warm); one-shot process as fallback.
-    let parsed = await requestViaWorker(file, timeoutMs);
+    // (The caller holds the mode's limiter slot, so a Mathlib one-shot here —
+    // worker crash/timeout, not busy — is bounded by the Mathlib pool size.)
+    const leanPath = await searchPath(mathlib, mod.dir);
+    let parsed = await requestViaWorker(file, timeoutMs, leanPath, mathlib === true);
     if (!parsed) {
+      const env = await extractEnv(mathlib, mod.dir);
       const out = await new Promise<ExecOut>((resolveExec) => {
         execFile(
           EXTRACT_BIN,
           [file],
-          { env: { ...leanEnv(), LEAN_PATH: mod.dir }, timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 },
+          { env, timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 },
           (error, stdout, stderr) => resolveExec({ stdout: stdout ?? '', stderr: stderr ?? '', error: error ?? undefined }),
         );
       });
@@ -675,12 +939,18 @@ async function runAnalyze(source: string, opts: CheckOptions = {}): Promise<Anal
     const file = join(dir, 'Main.lean');
     await writeFile(file, source, 'utf8');
 
-    // Mathlib mode runs under `lake env` (interpreted) for the import path.
-    // Core mode prefers a persistent --serve worker (env stays resident, ~20ms
-    // warm), then the one-shot precompiled binary (supportInterpreter=true, so
-    // it elaborates correctly), then `lean --run` if not yet built.
-    if (!opts.mathlib && hasExtractBin()) {
-      const parsed = await requestViaWorker(file, timeoutMs);
+    // Prefer a persistent --serve worker (env stays resident, ~20ms warm), then
+    // the one-shot precompiled binary (supportInterpreter=true, so it
+    // elaborates correctly), then `lean --run` if not yet built.
+    //
+    // Mathlib mode goes through the SAME worker, just with Mathlib on its
+    // LEAN_PATH — the binary resolves imports at runtime, so it needs the path,
+    // not a rebuild. Only when Mathlib isn't fetched/built does this fall
+    // through to interpreting Extract.lean under `lake env`, which is ~30s a
+    // call and exists now mainly to produce a real error message.
+    const mathlibPath = opts.mathlib ? await mathlibEnv() : null;
+    if ((!opts.mathlib || mathlibPath) && hasExtractBin()) {
+      const parsed = await requestViaWorker(file, timeoutMs, await searchPath(opts.mathlib), opts.mathlib === true);
       if (parsed) {
         const success = !parsed.messages.some((m) => m.severity === 'error');
         return { success, ...parsed, durationMs: Date.now() - started };
@@ -688,9 +958,18 @@ async function runAnalyze(source: string, opts: CheckOptions = {}): Promise<Anal
     }
     let out: ExecOut;
     let cmdName: string;
-    if (opts.mathlib) {
+    if (opts.mathlib && mathlibPath && hasExtractBin()) {
+      cmdName = 'extract';
+      out = await run(EXTRACT_BIN, [file], {
+        timeoutMs,
+        env: await extractEnv(true),
+      });
+    } else if (opts.mathlib) {
       cmdName = 'lake';
-      out = await run('lake', ['env', 'lean', '--run', EXTRACT_LEAN, file, 'mathlib'], { cwd: LEAN_PKG_DIR, timeoutMs });
+      out = await run('lake', ['-R', '-K', 'mathlib=on', 'env', 'lean', '--run', EXTRACT_LEAN, file, 'mathlib'], {
+        cwd: LEAN_PKG_DIR,
+        timeoutMs,
+      });
     } else if (hasExtractBin()) {
       cmdName = 'extract';
       out = await run(EXTRACT_BIN, [file], { timeoutMs });
@@ -722,7 +1001,7 @@ async function runAnalyze(source: string, opts: CheckOptions = {}): Promise<Anal
         messages: [],
         goals: [],
         declarations: [],
-        bridgeError: `Lean extractor produced no output.${detail ? `\n${detail}` : ''}`,
+        bridgeError: `Lean extractor produced no output.${hintFor(detail)}${detail ? `\n${detail}` : ''}`,
         durationMs: Date.now() - started,
       };
     }

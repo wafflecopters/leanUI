@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { mapLeanGoalsToNodes } from './leanGoalMapping';
-import type { LeanGoal, LeanMessage } from './types';
+import type { LeanGoal, LeanGoalState, LeanMessage } from './types';
 import type { NodeRange } from './proofTreeToLean';
 
 const range = (line: number): NodeRange => ({ startLine: line, startCol: 2, endLine: line, endCol: 10 });
@@ -78,5 +78,128 @@ describe('mapLeanGoalsToNodes', () => {
     const nodeRanges = new Map([[1, range(5)]]);
     const m = mapLeanGoalsToNodes({ nodeRanges, holeNodeIds: new Set(), goals: [], messages: [] });
     expect(m.has(1)).toBe(false);
+  });
+});
+
+// A goal that supplies a VALUE reads differently from one that states a claim.
+// `apply ltLeTrans` leaves `⊢ ℝ` — not something to prove, the midpoint to
+// choose — and Lean says which goal that is: its case tag is the name of the
+// metavariable the siblings are waiting on.
+describe('value goals (choose a term, not prove a claim)', () => {
+  const state = (target: string, caseTag?: string): LeanGoalState => ({
+    ...(caseTag ? { case: caseTag } : {}),
+    hyps: [],
+    targetTagged: { t: 'text' as const, s: target },
+    plain: `⊢ ${target}`,
+  });
+
+  /** All three ltLeTrans goals reported at one hole, as Lean reports them. */
+  const goalsAt = (line: number, states: ReturnType<typeof state>[]) => [
+    { startLine: line, startCol: 2, endLine: line, endCol: 8, goals: states },
+  ];
+
+  test('the goal the siblings depend on is flagged as a value', () => {
+    const ranges = new Map([[1, { startLine: 10, startCol: 2, endLine: 10, endCol: 8 }]]);
+    const map = mapLeanGoalsToNodes({
+      nodeRanges: ranges,
+      holeNodeIds: new Set([1]),
+      goals: goalsAt(10, [state('ℝ', 'hb.b'), state('0 < ?hb.b', 'hb.hab')]),
+      messages: [],
+    });
+    expect(map.get(1)?.isValueType).toBe(true);
+  });
+
+  test('a goal nothing depends on is an ordinary claim', () => {
+    const ranges = new Map([[1, { startLine: 10, startCol: 2, endLine: 10, endCol: 8 }]]);
+    const map = mapLeanGoalsToNodes({
+      nodeRanges: ranges,
+      holeNodeIds: new Set([1]),
+      goals: goalsAt(10, [state('0 < ?hb.b', 'hb.hab'), state('ℝ', 'hb.b')]),
+      messages: [],
+    });
+    expect(map.get(1)?.isValueType).toBeUndefined();
+  });
+
+  test('an untagged goal is never a value goal', () => {
+    const ranges = new Map([[1, { startLine: 10, startCol: 2, endLine: 10, endCol: 8 }]]);
+    const map = mapLeanGoalsToNodes({
+      nodeRanges: ranges,
+      holeNodeIds: new Set([1]),
+      goals: goalsAt(10, [state('ℝ'), state('0 < ?hb.b', 'hb.hab')]),
+      messages: [],
+    });
+    expect(map.get(1)?.isValueType).toBeUndefined();
+  });
+
+  // REGRESSION: the pending-metavar heuristic dies the moment the value is
+  // SUPPLIED — `exact 1` assigns ?hb.b, siblings stop mentioning it, and the
+  // permanent rendering said "We must show ℝ" again. The extractor now records
+  // the dependency at the split itself (`valueCaseTags`), which never goes stale.
+  test('an explicit valueCaseTag marks the goal even with no pending metavar anywhere', () => {
+    const ranges = new Map([[1, { startLine: 10, startCol: 2, endLine: 10, endCol: 8 }]]);
+    const map = mapLeanGoalsToNodes({
+      nodeRanges: ranges,
+      holeNodeIds: new Set([1]),
+      goals: [{ ...goalsAt(10, [state('ℝ', 'hb.b'), state('0 ≤ 1', 'hb.hab')])[0], valueCaseTags: ['hb.b'] }],
+      messages: [],
+    });
+    expect(map.get(1)?.isValueType).toBe(true);
+  });
+
+  // A from-scratch preset states its claims in Type — every goal is non-Prop
+  // there, so non-Prop-ness alone must NOT flag a goal as a value to choose.
+  // Only the sibling-dependency record (valueCaseTags) does.
+  test('a non-Prop goal with no dependency tag stays an ordinary claim', () => {
+    const ranges = new Map([[1, { startLine: 10, startCol: 2, endLine: 10, endCol: 8 }]]);
+    const map = mapLeanGoalsToNodes({
+      nodeRanges: ranges,
+      holeNodeIds: new Set([1]),
+      goals: goalsAt(10, [{ ...state('0 < ε / 2', 'h1'), isProp: false }]),
+      messages: [],
+    });
+    expect(map.get(1)?.isValueType).toBeUndefined();
+  });
+
+  // Lean CLEARS a goal's case tag once its `case b => …` block focuses it, so
+  // the focused goal state is tagless and nothing in Lean's output connects it
+  // back to `valueCaseTags`. The TREE remembers which branch the node proves.
+  test('a tagless focused goal is matched to its branch via the tree', () => {
+    const ranges = new Map([[13, { startLine: 10, startCol: 6, endLine: 10, endCol: 13 }]]);
+    const map = mapLeanGoalsToNodes({
+      nodeRanges: ranges,
+      holeNodeIds: new Set(),
+      goals: [
+        {
+          startLine: 10,
+          startCol: 6,
+          endLine: 10,
+          endCol: 13,
+          valueCaseTags: ['b'],
+          goals: [state('ℝ')], // no `case` — Lean cleared it on focus
+        },
+      ],
+      messages: [],
+      branchTags: new Map([[13, 'b']]),
+    });
+    expect(map.get(13)?.isValueType).toBe(true);
+  });
+
+  test('a metavariable mentioned in a DIFFERENT branch still counts', () => {
+    // Lean reports the remaining goals at each branch, so the value goal's own
+    // position may list only itself — the dependency shows up elsewhere.
+    const ranges = new Map([
+      [1, { startLine: 10, startCol: 2, endLine: 10, endCol: 8 }],
+      [2, { startLine: 20, startCol: 2, endLine: 20, endCol: 8 }],
+    ]);
+    const map = mapLeanGoalsToNodes({
+      nodeRanges: ranges,
+      holeNodeIds: new Set([1, 2]),
+      goals: [
+        ...goalsAt(10, [state('0 < ?hb.b', 'hb.hab')]),
+        ...goalsAt(20, [state('ℝ', 'hb.b')]),
+      ],
+      messages: [],
+    });
+    expect(map.get(2)?.isValueType).toBe(true);
   });
 });

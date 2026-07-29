@@ -125,6 +125,18 @@ function parseTactic(lines: Line[], pos: { i: number }, level: number, text: str
     return mkRewrite(name, continuation(lines, pos, level), reverse, undefined, undefined, undefined, pattern);
   }
 
+  // conv in (pat) => simp  — a subterm-scoped simplification (the Compute
+  // suggestion). A CHAINING step: the rewritten goal continues below it, so it
+  // must NOT fall through to the terminal raw-exact fallback (which would drop
+  // the hole and end the goal chain at this step).
+  m = text.match(/^conv\s+in\s+\((.*)\)\s*=>\s*simp\b\s*(only\b)?\s*(?:\[\s*(.*?)\s*\])?\s*$/);
+  if (m) {
+    const pattern = m[1].trim();
+    const only = !!m[2];
+    const lemmas = m[3] ? m[3].split(',').map((s) => s.trim()).filter(Boolean) : [];
+    return mkSimp(lemmas, [], continuation(lines, pos, level), only, pattern);
+  }
+
   // rw [..]  /  rw [← ..]
   m = text.match(/^rw\s*\[\s*(.*?)\s*\]\s*$/);
   if (m) {
@@ -166,12 +178,21 @@ function parseTactic(lines: Line[], pos: { i: number }, level: number, text: str
   m = text.match(/^unfold\s+(.+?)\s*$/);
   if (m) return mkUnfold(m[1], continuation(lines, pos, level));
 
-  // apply <name>  (children = subsequent deeper lines as one continuation)
+  // apply <name>
   m = text.match(/^apply\s+(.*)$/);
   if (m) {
-    // Subgoals appear as following siblings; treat the next sibling chain as the
-    // single child proof (apply with one continuation covers the common case).
-    return mkApply(m[1].trim(), [continuation(lines, pos, level)]);
+    const name = m[1].trim();
+    // A multi-premise lemma opens one branch per subgoal, exactly like
+    // `constructor`: `case <tag> =>` blocks when the goals are named (so they
+    // can be presented in a different order than Lean produced them), `·`
+    // bullets otherwise. Without this the branches parse back as stray
+    // `exact ·` steps and the proof structure is lost on every round-trip.
+    const tagged = parseCaseTagBlocks(lines, pos, level);
+    if (tagged) return mkApply(name, tagged.children, false, tagged.tags);
+    const branches = parseRewriteBullets(lines, pos, level);
+    if (branches.length > 0) return mkApply(name, branches, false);
+    // The common case: one continuation chain proves the single subgoal.
+    return mkApply(name, [continuation(lines, pos, level)]);
   }
 
   // have h : T := by   |   have h := expr   |   have h : T := expr

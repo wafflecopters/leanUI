@@ -10,7 +10,7 @@
  * - Goal panel showing context + goal at cursor position
  */
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import katex from 'katex';
 import { TTerm } from '../compiler/surface';
 import { TTKTerm } from '../compiler/kernel';
@@ -41,6 +41,7 @@ import {
   findLastInteractiveGoalStepIndex,
   findNextHoleNodeId,
   proseItemShowsVisibleGoal,
+  visibleLatexLength,
 } from '../proof-tree/prose-view-helpers';
 import {
   describeApplyProse,
@@ -210,7 +211,7 @@ function InlineKaTeX({ latex, style, displayMode }: { latex: string; style?: Rea
     } catch {
       ref.current.textContent = latex;
     }
-  }, [latex]);
+  }, [latex, displayMode]);
 
   return <span ref={ref} style={style} />;
 }
@@ -508,7 +509,13 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
     }
   }, [state, moveCursor]);
 
+  const leanCounters = useMemo(
+    () => ({ applySubgoalCount, rewriteSideGoalCount }),
+    [applySubgoalCount, rewriteSideGoalCount],
+  );
+
   return (
+    <LeanCounters.Provider value={leanCounters}>
     <div
       ref={containerRef}
       tabIndex={0}
@@ -624,6 +631,7 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
         />
       </SplitPane>
     </div>
+    </LeanCounters.Provider>
   );
 }
 
@@ -1525,6 +1533,22 @@ const applyBtnStyle: React.CSSProperties = {
 // Node Dispatcher
 // ============================================================================
 
+/**
+ * The Lean-backed subgoal counters, for the TREE view.
+ *
+ * The prose view gets these as props; the tree view drills `ProofNodeView`
+ * through ten call sites, and `HoleView` — the only consumer — sat at the
+ * bottom with no way to reach them. Without them it fell back to the TT kernel
+ * path, which has no kernel on the Lean backend and so answered "1": every
+ * `apply` from the Tactics tab opened a single branch no matter how many
+ * subgoals the lemma actually leaves, and every conditional rewrite lost its
+ * side goals.
+ */
+const LeanCounters = createContext<{
+  applySubgoalCount?: (name: string) => number;
+  rewriteSideGoalCount?: (name: string) => number;
+}>({});
+
 interface NodeViewProps {
   node: ProofNode;
   depth: number;
@@ -1673,6 +1697,7 @@ function TacticRow({
 function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, inductiveMap, registry, kernelType, definitions }: NodeViewProps) {
   const isFocused = cursorId === node.id;
   const inputRef = useRef<HTMLInputElement>(null);
+  const counters = useContext(LeanCounters);
 
   const handleSubmit = useCallback((value: string) => {
     const result = applyManualProofTreeTactic(state, tacticMode, value, {
@@ -1681,12 +1706,16 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
       registry,
       kernelType,
       definitions,
+      leanApply: !!counters.applySubgoalCount,
       computeApplySubgoalCount: (root, cursorNodeId, rootKernelType, defs, name) =>
-        rootKernelType && defs ? computeApplySubgoalCount(root, cursorNodeId, rootKernelType, defs, name) : 1,
+        counters.applySubgoalCount
+          ? counters.applySubgoalCount(name)
+          : (rootKernelType && defs ? computeApplySubgoalCount(root, cursorNodeId, rootKernelType, defs, name) : 1),
+      computeRewriteSideGoalCount: counters.rewriteSideGoalCount,
     });
     if (result) onPushChange(result);
     onTacticMode(null);
-  }, [tacticMode, state, onPushChange, onTacticMode, typedContext, inductiveMap, registry, kernelType, definitions]);
+  }, [tacticMode, state, onPushChange, onTacticMode, typedContext, inductiveMap, registry, kernelType, definitions, counters]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
@@ -1764,6 +1793,7 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
               activeTactic === 'rewrite_rev' ? 'lemma name' :
               activeTactic === 'apply' ? 'lemma name' :
               activeTactic === 'simp' ? '(empty = all @simp lemmas)' :
+              activeTactic === 'have' ? 'h : 0 < \u03b5 / 2   or   h := proof' :
               'proof expression'
             }
             onKeyDown={handleKeyDown}
@@ -2394,7 +2424,11 @@ function ProofProseView({
   const lastGoalStepIdx = findLastInteractiveGoalStepIndex(items);
 
   return (
-    <div>
+    <div className="proof-prose">
+      {/* KaTeX's default .katex-display margin is 1em top+bottom — page-height
+          whitespace between every step. Paper density: a display equation sits
+          close to the sentence that introduces it. */}
+      <style>{'.proof-prose .katex-display { margin: 0.25em 0; }'}</style>
       {items.map((item, idx) => {
         // Deletable items: anything except hole, qed, caseHeader
         const isDeletable = item.kind.tag === 'intro' || item.kind.tag === 'unfold'
@@ -3246,11 +3280,17 @@ function SufficesProseItem({
   return (
     <ProseRow rowStyle={rowStyle} rowHandlers={rowHandlers} deleteBtn={deleteBtn}>
       <span style={prose}>It suffices to show</span>
-      {kind.goalLatex && (
+      {kind.goalLatex && (visibleLatexLength(kind.goalLatex) <= 30 ? (
+        <>
+          <span style={prose}>{' '}</span>
+          <InlineKaTeX latex={kind.goalLatex} style={{ fontSize: '13px' }} />
+          <span style={prose}>,</span>
+        </>
+      ) : (
         <span style={eqBlockStyle}>
           <InlineKaTeX latex={kind.goalLatex} displayMode />
         </span>
-      )}
+      ))}
       {kind.byExprLatex ? (
         <div style={{ paddingLeft: '20px' }}>
           <span style={prose}>since the result then follows from{' '}</span>
@@ -3267,13 +3307,15 @@ function SubgoalHeaderProseItem({
   rowStyle,
   rowHandlers,
   prose,
+  expand,
 }: {
   kind: Extract<ProseItemKind, { tag: 'subgoalHeader' }>;
   rowStyle: React.CSSProperties;
   rowHandlers: ProseRowHandlers;
   prose: React.CSSProperties;
+  expand?: boolean;
 }) {
-  const goalLead = buildProseGoalLead(kind.goalLatex, kind.isValueType);
+  const goalLead = buildProseGoalLead(kind.goalLatex, kind.isValueType, undefined, expand);
   return (
     <div style={{ ...rowStyle, fontWeight: 600, paddingTop: '6px' }} {...rowHandlers}>
       <span style={{ color: '#79c0ff' }}>{kind.label}</span>
@@ -3580,7 +3622,9 @@ function ProseItemView({
   // break to a centered display block for readability.
   function mustShowPrefix(preGoalLatex?: string, isValueType?: boolean): React.ReactNode {
     if (prevShowedGoal) return null;
-    const goalLead = buildProseGoalLead(preGoalLatex, isValueType);
+    // The row being edited expands its goal to a display block (room to read
+    // and to click subterms); everything else stays inline when short.
+    const goalLead = buildProseGoalLead(preGoalLatex, isValueType, undefined, item.isCursor);
     if (!goalLead) return null;
     if (goalLead.inline) {
       return (
@@ -3652,6 +3696,20 @@ function ProseItemView({
       e.stopPropagation();
       onClickNode(nextHoleNodeId);
     } : undefined;
+    // Paper-style density: a short resulting goal reads inline in the
+    // sentence; only long formulas (or the row being edited) earn a display
+    // block. Length is measured in VISIBLE glyphs — see visibleLatexLength.
+    if (!item.isCursor && visibleLatexLength(goalLatex) <= 30) {
+      return (
+        <>
+          <span style={prose}>{prefix}{' '}</span>
+          <span style={{ cursor: goalClick ? 'pointer' : undefined }} onClick={goalClick}>
+            <InlineKaTeX latex={goalLatex} style={{ fontSize: '13px' }} />
+          </span>
+          <span style={prose}>.</span>
+        </>
+      );
+    }
     return (
       <>
         <span style={prose}>{prefix}</span>
@@ -3839,6 +3897,7 @@ function ProseItemView({
           rowStyle={rowStyle}
           rowHandlers={rowHandlers}
           prose={prose}
+          expand={item.isCursor}
         />
       );
 

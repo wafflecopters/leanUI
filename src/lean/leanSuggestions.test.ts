@@ -139,3 +139,26 @@ describe('orderedSubgoalTags', () => {
     expect(orderedSubgoalTags([{ tag: 'fst', target: 'ℝ' }])).toBeNull();
   });
 });
+
+// A pill's Nth preview line must be the Nth bullet applying it produces — so
+// previews are ordered by the same tags the `case <tag> =>` blocks use.
+describe('orderGoalsForDisplay', () => {
+  test('reorders goals to match the subgoal tags', async () => {
+    const { orderGoalsForDisplay } = await import('./leanSuggestions');
+    const goals = [{ case: 'snd', t: 'body' }, { case: 'fst', t: 'witness' }];
+    expect(orderGoalsForDisplay(goals, ['fst', 'snd']).map((g) => g.t)).toEqual(['witness', 'body']);
+  });
+
+  test('no tags → Lean order', async () => {
+    const { orderGoalsForDisplay } = await import('./leanSuggestions');
+    const goals = [{ case: 'ha', t: 'first' }, { case: 'hb', t: 'second' }];
+    expect(orderGoalsForDisplay(goals, null).map((g) => g.t)).toEqual(['first', 'second']);
+    expect(orderGoalsForDisplay(goals, undefined).map((g) => g.t)).toEqual(['first', 'second']);
+  });
+
+  test('tags that do not cover the goals exactly → Lean order (never drops one)', async () => {
+    const { orderGoalsForDisplay } = await import('./leanSuggestions');
+    const goals = [{ case: 'ha', t: 'first' }, { case: undefined, t: 'untagged' }];
+    expect(orderGoalsForDisplay(goals, ['ha']).map((g) => g.t)).toEqual(['first', 'untagged']);
+  });
+});

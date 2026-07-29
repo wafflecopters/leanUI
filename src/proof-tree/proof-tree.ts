@@ -146,6 +146,9 @@ export interface SimpNode {
   readonly child: ProofNode;
   /** `simp only [...]` (restrict to the listed lemmas) vs `simp [...]`. */
   readonly only?: boolean;
+  /** When set, scope the simp to this subterm via `conv in (pat) => simp …`
+   *  (Lean-backend subterm-targeted Compute; mirrors RewriteNode.convPattern). */
+  readonly convPattern?: string;
 }
 
 export interface HaveNode {
@@ -302,9 +305,16 @@ export function mkApply(name: string, children: readonly ProofNode[], raw = fals
   return childTags && childTags.length === children.length ? { ...withRaw, childTags } : withRaw;
 }
 
-export function mkSimp(lemmas: readonly string[], steps: readonly ProofNode[], child: ProofNode, only = false): SimpNode {
+export function mkSimp(
+  lemmas: readonly string[],
+  steps: readonly ProofNode[],
+  child: ProofNode,
+  only = false,
+  convPattern?: string,
+): SimpNode {
   const node: SimpNode = { tag: 'simp', id: freshProofId(), lemmas, steps, collapsed: true, child };
-  return only ? { ...node, only: true } : node;
+  const withOnly = only ? { ...node, only: true as const } : node;
+  return convPattern ? { ...withOnly, convPattern } : withOnly;
 }
 
 /** Format a case label as LaTeX: scrutinee = \text{Ctor}\;p1\;p2 */
