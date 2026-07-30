@@ -42,4 +42,46 @@ describe('spliceTacticBlock', () => {
     // splice the same block back → unchanged
     expect(spliceTacticBlock(src, decl(1), undefined, block)).toBe(src);
   });
+
+  // REGRESSION: the window runs to the NEXT declaration's line, so a comment
+  // introducing that declaration sits inside it. Splicing the whole window
+  // deleted the comment on the first structural edit — silent data loss in the
+  // user's file.
+  test('a comment introducing the next declaration survives write-back', () => {
+    const src = [
+      'theorem a : True := by',
+      '  sorry',
+      '',
+      '-- what the next one is for',
+      '-- (second line)',
+      'theorem b : True := by',
+      '  trivial',
+    ].join('\n');
+    const out = spliceTacticBlock(src, decl(1), 6, '  trivial');
+    expect(out).toBe([
+      'theorem a : True := by',
+      '  trivial',
+      '',
+      '-- what the next one is for',
+      '-- (second line)',
+      'theorem b : True := by',
+      '  trivial',
+    ].join('\n'));
+  });
+
+  test('extract and splice agree on where the body ends', () => {
+    const src = [
+      'theorem a : True := by',
+      '  constructor',
+      '  sorry',
+      '',
+      '-- next up',
+      'theorem b : True := by',
+      '  trivial',
+    ].join('\n');
+    // Extract must not read the comment in as if it were a tactic...
+    expect(extractTacticBlock(src, decl(1), 6)).toBe('  constructor\n  sorry');
+    // ...and splicing the extracted block back must be a no-op.
+    expect(spliceTacticBlock(src, decl(1), 6, extractTacticBlock(src, decl(1), 6)!)).toBe(src);
+  });
 });

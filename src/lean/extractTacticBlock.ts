@@ -1,6 +1,43 @@
 import type { LeanDeclaration } from './types';
 
 /**
+ * Where a declaration's BODY stops, inside the window that runs to the next
+ * declaration's line.
+ *
+ * The window is not the body: a top-level comment introducing the NEXT
+ * declaration sits inside it, and so does any blank space between the two. A
+ * tactic block is always indented under its `by`, so the first non-blank line
+ * back at column 0 is where this declaration ends and the next one's preamble
+ * begins.
+ *
+ * Both directions need the same answer, or they corrupt each other: reading too
+ * far seeds the editor with a comment as if it were a tactic, and WRITING too
+ * far deletes that comment on the first structural edit.
+ *
+ * `lines` are the whole file; `searchFrom` is the index of the line holding the
+ * `:=` marker (its own indentation is the declaration's, so scanning starts
+ * after it). Returns an exclusive end index.
+ */
+export function declarationBodyEnd(
+  lines: readonly string[],
+  searchFrom: number,
+  windowEnd: number,
+): number {
+  let end = windowEnd;
+  for (let i = searchFrom + 1; i < windowEnd; i++) {
+    const line = lines[i];
+    if (line.trim().length === 0) continue;
+    if (!/^\s/.test(line)) {
+      end = i;
+      break;
+    }
+  }
+  // Trailing blank lines belong to the gap between declarations, not the body.
+  while (end > searchFrom + 1 && lines[end - 1].trim().length === 0) end--;
+  return end;
+}
+
+/**
  * Slice a declaration's PROOF/body for the structured editor — the text after
  * `:= by` as a tactic block.
  *
@@ -19,8 +56,15 @@ export function extractTacticBlock(
 ): string | null {
   const lines = source.split('\n');
   const startIdx = Math.max(0, decl.line - 1);
-  const endIdx = nextDeclLine !== undefined ? Math.min(lines.length, nextDeclLine - 1) : lines.length;
+  const windowEnd = nextDeclLine !== undefined ? Math.min(lines.length, nextDeclLine - 1) : lines.length;
   if (startIdx >= lines.length) return null;
+
+  // Locate `:= by` first, so the body scan can start from the line holding it.
+  const windowText = lines.slice(startIdx, windowEnd).join('\n');
+  const byIdx = windowText.match(/:=\s*by\b/)?.index;
+  if (byIdx === undefined) return null;
+  const markerLine = startIdx + windowText.slice(0, byIdx).split('\n').length - 1;
+  const endIdx = declarationBodyEnd(lines, markerLine, windowEnd);
 
   const region = lines.slice(startIdx, endIdx);
   const joined = region.join('\n');

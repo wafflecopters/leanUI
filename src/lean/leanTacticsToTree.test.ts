@@ -199,6 +199,16 @@ describe('leanTacticsToTree', () => {
     expect(tree.child.tag).toBe('exact');
   });
 
+  // REGRESSION: a term-proved have with a TYPE ANNOTATION printed back as the
+  // weaker inferred form (`have h2 := e`), silently rewriting the user's proof —
+  // and a seeded preset proof — on its first round-trip. The annotation states
+  // what the step establishes, which is the reason for writing it that way.
+  test('a typed have keeps its annotation when the proof is a term', () => {
+    resetProofIds();
+    const src = '  have h2 : 0 < \u03b5 / 2 := divTwoPos \u03b5 epsPos\n  sorry';
+    expect(roundTrip(src)).toBe(src);
+  });
+
   // Round-trip stability: printing a parsed tree reproduces the canonical form.
   describe('parse → print round-trip is stable', () => {
     const cases: Array<[string, string]> = [
@@ -212,6 +222,22 @@ describe('leanTacticsToTree', () => {
       ['conv-scoped rewrite', '  conv in (a.succ + 1) => rw [plusComm]\n  sorry'],
       ['conv-scoped reverse rewrite', '  conv in (sum i n f) => rw [← summationSplit]\n  sorry'],
       ['conv-scoped simp', '  conv in (2 + -1) => simp\n  sorry'],
+      ['typed have with a term proof', '  have h : 0 < e := divTwoPos e hp\n  sorry'],
+      [
+        'the seeded limitAdd prefix (nested cases under a have)',
+        [
+          '  constructor',
+          '  intro \u03b5 epsPos',
+          '  have h2 : 0 < \u03b5 / 2 := divTwoPos \u03b5 epsPos',
+          '  have hF := limF.eps_delta (\u03b5 / 2) h2',
+          '  cases hF with',
+          '  | mk deltaF fProof =>',
+          '    have hG := limG.eps_delta (\u03b5 / 2) h2',
+          '    cases hG with',
+          '    | mk deltaG gProof =>',
+          '      sorry',
+        ].join('\n'),
+      ],
       ['conv-scoped simp only with lemmas', '  conv in (f x) => simp only [foo]\n  sorry'],
       ['simp only', '  simp only [plusComm, mulComm]\n  sorry'],
       ['terminal tactic (omega)', '  omega'],

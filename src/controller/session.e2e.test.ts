@@ -51,7 +51,7 @@ describe('ProofSession against real Lean', () => {
   test(
     'opening a theorem reports its real goal and context',
     async () => {
-      const s = open('limitAdd');
+      const s = open('limitAddFromScratch');
       await s.refreshGoals();
       const state = s.getState();
       expect(state.error).toBeUndefined();
@@ -72,7 +72,7 @@ describe('ProofSession against real Lean', () => {
   test(
     'constructor is offered on a structure goal, and opens the ε-δ obligation',
     async () => {
-      const s = open('limitAdd');
+      const s = open('limitAddFromScratch');
       await s.refresh();
       expect(labels(s)).toContain('constructor');
       expect(s.insertTactic('constructor')).toEqual({ ok: true });
@@ -89,7 +89,7 @@ describe('ProofSession against real Lean', () => {
     let session: ProofSession;
 
     beforeAll(async () => {
-      session = open('limitAdd');
+      session = open('limitAddFromScratch');
       await session.refreshGoals();
       session.insertTactic('constructor');
       await session.refreshGoals();
@@ -130,7 +130,7 @@ describe('ProofSession against real Lean', () => {
   test(
     'a full obligation can be discharged: apply divTwoPos → assumption',
     async () => {
-      const s = open('limitAdd');
+      const s = open('limitAddFromScratch');
       await s.refreshGoals();
       s.insertTactic('constructor');
       await s.refreshGoals();
@@ -165,7 +165,7 @@ describe('ProofSession against real Lean', () => {
   test(
     'a goal-splitting apply opens one branch per premise, and they round-trip',
     async () => {
-      const s = open('limitAdd');
+      const s = open('limitAddFromScratch');
       await s.refreshGoals();
       s.insertTactic('constructor');
       await s.refreshGoals();
@@ -192,7 +192,7 @@ describe('ProofSession against real Lean', () => {
         analyze,
         source: written,
         declarations: reanalyzed.declarations,
-        declName: 'limitAdd',
+        declName: 'limitAddFromScratch',
         autoRefresh: false,
       });
       expect(reopened.proofSource()).toBe(s.proofSource());
@@ -207,7 +207,7 @@ describe('ProofSession against real Lean', () => {
   test(
     'the midpoint of a transitivity is marked as a value to supply',
     async () => {
-      const s = open('limitAdd');
+      const s = open('limitAddFromScratch');
       await s.refreshGoals();
       s.insertTactic('constructor');
       await s.refreshGoals();
@@ -254,7 +254,7 @@ describe('ProofSession against real Lean', () => {
   test(
     'the write-back is a file Lean still accepts',
     async () => {
-      const s = open('limitAdd');
+      const s = open('limitAddFromScratch');
       await s.refreshGoals();
       s.insertTactic('constructor');
       await s.refreshGoals();
@@ -277,7 +277,7 @@ describe('ProofSession against real Lean', () => {
   test(
     'selecting a subterm re-scopes the offered rewrites',
     async () => {
-      const s = open('limitAdd');
+      const s = open('limitAddFromScratch');
       await s.refreshGoals();
       s.insertTactic('constructor');
       await s.refreshGoals();
@@ -301,7 +301,7 @@ describe('ProofSession against real Lean', () => {
   test(
     'a tactic Lean rejects is never offered',
     async () => {
-      const s = open('limitAdd');
+      const s = open('limitAddFromScratch');
       await s.refresh();
       // At the top-level Limit goal, positivity lemmas cannot apply.
       expect(labels(s).some((l) => l.startsWith('apply div'))).toBe(false);

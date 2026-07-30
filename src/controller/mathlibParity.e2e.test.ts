@@ -78,7 +78,7 @@ describe('the same suggestion engine on both kinds of file', () => {
         analyze: nodeAnalyzer({ timeoutMs: SLOW }),
         source: preset.code,
         declarations: res.declarations,
-        declName: 'limitAdd',
+        declName: 'limitAddFromScratch',
         autoRefresh: false,
       });
       await s.refresh();

@@ -1,4 +1,5 @@
 import type { LeanDeclaration } from './types';
+import { declarationBodyEnd } from './extractTacticBlock';
 
 /**
  * Replace a declaration's tactic block (the text after `:= by`) in the source
@@ -21,8 +22,17 @@ export function spliceTacticBlock(
 ): string {
   const lines = source.split('\n');
   const startIdx = Math.max(0, decl.line - 1);
-  const endIdx = nextDeclLine !== undefined ? Math.min(lines.length, nextDeclLine - 1) : lines.length;
+  const windowEnd = nextDeclLine !== undefined ? Math.min(lines.length, nextDeclLine - 1) : lines.length;
   if (startIdx >= lines.length) return source;
+
+  // Find the `:=` marker within the window, then stop at the END OF THIS
+  // DECLARATION rather than at the next one — anything after (a comment
+  // introducing the next declaration, blank lines) is not ours to overwrite.
+  const windowText = lines.slice(startIdx, windowEnd).join('\n');
+  const marker = windowText.match(/:=\s*by\b/) ?? windowText.match(/:=/);
+  if (!marker || marker.index === undefined) return source;
+  const markerLine = startIdx + windowText.slice(0, marker.index).split('\n').length - 1;
+  const endIdx = declarationBodyEnd(lines, markerLine, windowEnd);
 
   const before = lines.slice(0, startIdx);
   const region = lines.slice(startIdx, endIdx);

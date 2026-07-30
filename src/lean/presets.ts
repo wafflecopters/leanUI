@@ -1562,8 +1562,37 @@ def convertEps {R : Real} (epsilon v : Carrier R)
     (hlt : rlt v (radd (rdiv epsilon (rtwo R)) (rdiv epsilon (rtwo R)))) : rlt v epsilon :=
   replace (fun z => rlt v z) (divTwoAddEq epsilon) hlt
 
--- TACTIC-MODE in source (constructor / intros / cases). Statement kept faithful.
+-- THE demo exercise: limitAdd, deliberately unfinished.
+--
+-- Seeded with the setup every ε-δ sum proof opens with, so the interesting part
+-- is what you do NEXT rather than re-deriving the first eight steps by hand on
+-- every reload: split ε in half, pull a δ out of each hypothesis, and destructure
+-- both into a witness and its proof.
+--
+-- What's left at the sorry is the actual idea: deltaF and deltaG are both in
+-- scope, and you have to combine them — δ := rmin deltaF deltaG, whose positivity
+-- is minPos and which is ≤ each side by minLeLeft / minLeRight. From there
+-- absTriangle bounds |(f+g) - (L+M)| by the two halves and convertEps turns
+-- ε/2 + ε/2 back into ε. The full term proof lives in
+-- src/lean/realAnalysisPositivity.e2e.test.ts (verified sorry-free) if you want
+-- to check the destination.
 def limitAdd {R : Real} (f g : Carrier R → Carrier R) (x0 L M : Carrier R)
+    (limF : Limit f x0 L) (limG : Limit g x0 M) :
+    Limit (fun x => radd (f x) (g x)) x0 (radd L M) := by
+  constructor
+  intro ε epsPos
+  have h2 : 0 < ε / 2 := divTwoPos ε epsPos
+  have hF := limF.eps_delta (ε / 2) h2
+  cases hF with
+  | mk deltaF fProof =>
+    have hG := limG.eps_delta (ε / 2) h2
+    cases hG with
+    | mk deltaG gProof =>
+      sorry
+
+-- The same exercise with nothing filled in — for building the whole thing from
+-- the first click (and for the tests that check each of those clicks works).
+def limitAddFromScratch {R : Real} (f g : Carrier R → Carrier R) (x0 L M : Carrier R)
     (limF : Limit f x0 L) (limG : Limit g x0 M) :
     Limit (fun x => radd (f x) (g x)) x0 (radd L M) := sorry
 

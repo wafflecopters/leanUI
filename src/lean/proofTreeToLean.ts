@@ -204,8 +204,14 @@ function emitNode(em: Emitter, node: ProofNode, depth: number): void {
         em.emit(depth, type ? `have ${node.name} : ${type} := by` : `have ${node.name} := by`, node.id);
         emitNode(em, node.proofTree, depth + 1);
       } else {
+        // A term-proved have keeps its type ANNOTATION when it has one:
+        // `have h : 0 < ε / 2 := divTwoPos ε epsPos` states what the step
+        // establishes, which is the whole point of writing it that way. Dropping
+        // it on reprint silently rewrote the user's proof (and a seeded one) into
+        // the weaker inferred form on the first round-trip.
         const expr = node.expr.trim() || 'sorry';
-        em.emit(depth, `have ${node.name} := ${expr}`, node.id);
+        const type = node.typeExpr?.trim();
+        em.emit(depth, type ? `have ${node.name} : ${type} := ${expr}` : `have ${node.name} := ${expr}`, node.id);
       }
       emitChild(em, node.child, depth);
       return;
