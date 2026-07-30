@@ -1,6 +1,4 @@
 import { describe, test, expect, beforeEach } from 'vitest';
-import { mkConstTT } from '../compiler/surface';
-import { parseExpr } from '../parser/parser';
 import { applyTacticCommandsAtCursor, buildApplyTacticCommands } from './tactic-command-bridge';
 import {
   resetProofIds, freshProofId,
@@ -21,11 +19,11 @@ import {
 
 function applyIntros(state: ProofTreeState, names: readonly string[]): ProofTreeState | null {
   const introName = names.length === 1 ? 'intro' : 'intros';
-  return applyTacticCommandsAtCursor(state, [{ name: introName, args: names.map(name => mkConstTT(name)) }]);
+  return applyTacticCommandsAtCursor(state, [{ name: introName, args: [...names] }]);
 }
 
 function applyExact(state: ProofTreeState, expr: string): ProofTreeState | null {
-  return applyTacticCommandsAtCursor(state, [{ name: 'exact', args: [parseExpr(expr)] }]);
+  return applyTacticCommandsAtCursor(state, [{ name: 'exact', args: [expr] }]);
 }
 
 function applyApplyTactic(state: ProofTreeState, name: string, numChildren = 1): ProofTreeState | null {

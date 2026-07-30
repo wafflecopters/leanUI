@@ -1,3 +1,0 @@
-inductive Maybe : Type -> Type where
-  Nothing : {A : Type} -> Maybe A
-  Just : {A : Type} -> A -> Maybe A

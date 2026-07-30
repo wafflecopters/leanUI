@@ -30,6 +30,23 @@ describe('renderStaticLatex', () => {
     expect(renderStaticLatex(row)).toBe(HOLE);
   });
 
+  test('spelled-out Greek names render as Greek symbols', () => {
+    expect(renderStaticLatex(mkRow([mkSymbol('epsilon')])).trim()).toBe('\\varepsilon');
+    expect(renderStaticLatex(mkRow([mkSymbol('delta')])).trim()).toBe('\\delta');
+    expect(renderStaticLatex(mkRow([mkSymbol('pi')])).trim()).toBe('\\pi');
+    expect(renderStaticLatex(mkRow([mkSymbol('Delta')])).trim()).toBe('\\Delta');
+  });
+
+  test('Greek name with a subscript suffix (deltaF, epsilon0)', () => {
+    expect(renderStaticLatex(mkRow([mkSymbol('deltaF')])).trim()).toBe('\\delta_{F}');
+    expect(renderStaticLatex(mkRow([mkSymbol('epsilon0')])).trim()).toBe('\\varepsilon_{0}');
+  });
+
+  test('non-Greek multi-letter names stay upright (no false Greek match)', () => {
+    expect(renderStaticLatex(mkRow([mkSymbol('etale')])).trim()).toBe('\\operatorname{etale}');
+    expect(renderStaticLatex(mkRow([mkSymbol('le')])).trim()).toBe('\\operatorname{le}');
+  });
+
   test('renders fraction', () => {
     const row = mkRow([mkFrac(mkRow([mkSymbol('a')]), mkRow([mkSymbol('b')]))]);
     expect(renderStaticLatex(row)).toBe('\\frac{a}{b}');
@@ -38,6 +55,17 @@ describe('renderStaticLatex', () => {
   test('renders subscript', () => {
     const row = mkRow([mkSub(mkRow([mkSymbol('x')]), mkRow([mkSymbol('2')]))]);
     expect(renderStaticLatex(row)).toBe('{x}_{2}');
+  });
+
+  test('limit-style operators put the subscript BELOW via \\limits', () => {
+    // `\lim_{x → a}` needs the subscript on the bare operator, not a braced
+    // group — else KaTeX trails it. We emit `\lim\limits_{…}`.
+    const sub = mkRow([mkSymbol('x'), mkSymbol('\\to'), mkSymbol('a')]);
+    expect(renderStaticLatex(mkRow([mkSub(mkRow([mkSymbol('\\lim')]), sub)])))
+      .toBe('\\lim\\limits_{x \\to a}');
+    // A normal (non-limits) base still braces the subscript.
+    expect(renderStaticLatex(mkRow([mkSub(mkRow([mkSymbol('x')]), mkRow([mkSymbol('0')]))])))
+      .toBe('{x}_{0}');
   });
 
   test('renders superscript', () => {

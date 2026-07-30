@@ -1,5 +1,0 @@
-@test failure
-@name "Error in argument position of application is detected"
-@import preambles/nat.tt
-
-x = Nat wrongArg

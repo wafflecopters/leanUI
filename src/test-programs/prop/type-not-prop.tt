@@ -1,9 +1,0 @@
-@test failure
-@name "Type is not Prop (sort distinctness)"
-@error "Type"
-
--- Prop and Type are distinct sorts: Prop = Sort 0, Type = Sort 1.
--- Trying to use `Type` where `Prop` is expected must fail.
-
-bogus : Prop
-bogus = Type

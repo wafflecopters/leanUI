@@ -1,3 +1,0 @@
-inductive Fin : Nat -> Type where
-  FZero : {n : Nat} -> Fin (Succ n)
-  FSucc : {n : Nat} -> Fin n -> Fin (Succ n)

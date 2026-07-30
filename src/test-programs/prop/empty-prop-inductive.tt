@@ -1,7 +1,0 @@
-@test success
-@name "inductive False : Prop with no constructors"
-
--- An empty proposition: the simplest Prop-valued inductive.
--- No constructor universe constraints to worry about.
-
-inductive False : Prop where

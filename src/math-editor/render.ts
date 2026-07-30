@@ -129,7 +129,7 @@ function renderNodeInner(node: MathNode, cursor: CursorState, currentPath: RowPa
     case 'Sub': {
       const base = renderRow(node.base, cursor, [...currentPath, { nodeId: node.id, slot: 'base' }]);
       const sub = renderRow(node.sub, cursor, [...currentPath, { nodeId: node.id, slot: 'sub' }]);
-      return `{${base}}_{${sub}}`;
+      return subLatex(base, sub);
     }
 
     case 'Sup': {
@@ -205,16 +205,60 @@ function isGreek(ch: string): boolean {
   return (ch >= 'α' && ch <= 'ω') || (ch >= 'Α' && ch <= 'Ω');
 }
 
+/** Spelled-out Greek names → LaTeX. Lets identifiers written in ASCII (e.g.
+ *  `epsilon`, `delta` — common when a source can't use unicode) render as real
+ *  Greek symbols, matching how unicode `ε`/`δ` already render. */
+const GREEK_WORD_TO_LATEX: Record<string, string> = {
+  alpha: '\\alpha', beta: '\\beta', gamma: '\\gamma', delta: '\\delta',
+  epsilon: '\\varepsilon', zeta: '\\zeta', eta: '\\eta', theta: '\\theta',
+  iota: '\\iota', kappa: '\\kappa', lambda: '\\lambda', mu: '\\mu',
+  nu: '\\nu', xi: '\\xi', pi: '\\pi', rho: '\\rho', sigma: '\\sigma',
+  tau: '\\tau', upsilon: '\\upsilon', phi: '\\varphi', chi: '\\chi',
+  psi: '\\psi', omega: '\\omega',
+  Gamma: '\\Gamma', Delta: '\\Delta', Theta: '\\Theta', Lambda: '\\Lambda',
+  Xi: '\\Xi', Pi: '\\Pi', Sigma: '\\Sigma', Phi: '\\Phi', Psi: '\\Psi', Omega: '\\Omega',
+};
+
+/** A spelled-out Greek name, optionally with a trailing subscript run
+ *  (`delta` → \delta, `epsilon0` → \varepsilon_{0}, `deltaF` → \delta_{F}). The
+ *  suffix is a digit run or a single letter (the δ₀/δF convention in analysis),
+ *  not an arbitrary word — so `etale` or `pii` aren't mistaken for Greek. */
+function greekWord(value: string): string | null {
+  if (GREEK_WORD_TO_LATEX[value]) return `${GREEK_WORD_TO_LATEX[value]} `;
+  const m = value.match(/^([A-Za-z]+?)(\d+|[A-Z])$/);
+  if (m && GREEK_WORD_TO_LATEX[m[1]]) return `${GREEK_WORD_TO_LATEX[m[1]]}_{${m[2]}} `;
+  return null;
+}
+
+/** Operators that take their subscript BELOW (limits style), like `\lim_{x→a}`.
+ *  KaTeX only does this when the subscript attaches directly to the operator
+ *  (`\lim_{…}`), not to a braced group (`{\lim}_{…}` trails it). So for these we
+ *  emit `op\limits_{sub}`, which forces the subscript below in any mode. */
+const LIMITS_OPS = new Set([
+  '\\lim', '\\sup', '\\inf', '\\max', '\\min', '\\limsup', '\\liminf',
+  '\\gcd', '\\det', '\\Pr', '\\arg', '\\bigcup', '\\bigcap',
+]);
+
+/** Render a subscript node, using `\limits` for limit-style operators so the
+ *  subscript sits UNDER the operator instead of trailing it. */
+function subLatex(base: string, sub: string): string {
+  if (LIMITS_OPS.has(base.trim())) return `${base.trim()}\\limits_{${sub}}`;
+  return `{${base}}_{${sub}}`;
+}
+
 /** Render a symbol value — most are passed through as-is. */
 function renderSymbol(value: string): string {
   // Unicode Greek letters → LaTeX commands (δ → \delta, ε → \varepsilon)
   if (value.length === 1 && GREEK_TO_LATEX[value]) {
     return `${GREEK_TO_LATEX[value]} `;
   }
-  // Greek letter + digits: subscript (δ1 → \delta_{1}, ε0 → \varepsilon_{0})
-  if (value.length >= 2 && GREEK_TO_LATEX[value[0]] && /^\d+$/.test(value.slice(1))) {
+  // Unicode Greek + subscript run: δ1 → \delta_{1}, δF → \delta_{F}.
+  if (value.length >= 2 && GREEK_TO_LATEX[value[0]] && /^(\d+|[A-Z])$/.test(value.slice(1))) {
     return `${GREEK_TO_LATEX[value[0]]}_{${value.slice(1)}}`;
   }
+  // Spelled-out Greek names (epsilon, delta, deltaF, epsilon0 → ε, δ, δ_F, ε_0).
+  const gw = greekWord(value);
+  if (gw) return gw;
   // Single chars just pass through: 'x', '+', '2', etc.
   // LaTeX commands like '\alpha', '\in' also pass through
   // Operators that need surrounding spaces for readability
@@ -283,7 +327,7 @@ function renderNodeStatic(node: MathNode): string {
     case 'Frac':
       return `\\frac{${renderRowStatic(node.numer)}}{${renderRowStatic(node.denom)}}`;
     case 'Sub':
-      return `{${renderRowStatic(node.base)}}_{${renderRowStatic(node.sub)}}`;
+      return subLatex(renderRowStatic(node.base), renderRowStatic(node.sub));
     case 'Sup':
       return `{${renderRowStatic(node.base)}}^{${renderRowStatic(node.sup)}}`;
     case 'SubSup':

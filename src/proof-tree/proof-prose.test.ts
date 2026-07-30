@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach } from 'vitest';
 import { generateProofProse, ProseItem } from './proof-prose';
 import { ProofNode, resetProofIds, freshProofId } from './proof-tree';
-import { NodeGoalInfo } from './goal-computation';
+import { NodeGoalInfo } from './goal-types';
 
 beforeEach(() => {
   resetProofIds(100);
@@ -68,6 +68,14 @@ describe('generateProofProse', () => {
     expect(items).toHaveLength(1);
     expect((items[0].kind as any).solved).toBe(false);
     expect((items[0].kind as any).error).toBeUndefined();
+  });
+
+  test('exact surfaces a Lean round-trip tacticError (shows red in the editor)', () => {
+    const exact: ProofNode = { tag: 'exact', id: 1, expr: '.refl' };
+    // The Lean path reports failures via tacticError (not validation).
+    const goalMap = mkGoalMap([[1, { tacticError: 'Type mismatch: Eq.refl ...' }]]);
+    const items = generateProofProse(exact, 1, goalMap);
+    expect((items[0].kind as any).error).toBe('Type mismatch: Eq.refl ...');
   });
 
   test('intros with typed hypotheses renders grouped LaTeX', () => {
@@ -256,6 +264,36 @@ describe('generateProofProse', () => {
     expect(items[4].depth).toBe(2);
   });
 
+  test('Lean bullet-cases: goal hyps distinguish base case from inductive step', () => {
+    // The Lean path emits `induction n` + `·` bullets with NO constructorParamNames,
+    // so isBaseCase must be recovered from the goal state: the inductive step
+    // introduces hypotheses (predecessor + IH) absent from the induction's goal.
+    const zeroHole: ProofNode = { tag: 'hole', id: 2 };
+    const succHole: ProofNode = { tag: 'hole', id: 4 };
+    const induction: ProofNode = {
+      tag: 'induction',
+      id: 1,
+      scrutinee: 'n',
+      collapsed: false,
+      cases: [
+        { tag: 'case', id: 3, label: 'case', body: zeroHole, collapsed: false },
+        { tag: 'case', id: 5, label: 'case', body: succHole, collapsed: false },
+      ],
+    };
+    const goalMap = mkGoalMap([
+      [1, { hypotheses: [{ name: 'n', type: 'MyNat' }] }], // induction's incoming goal
+      [3, { caseLabelLatex: 'zero', hypotheses: [] }], // base: no new hyps
+      [5, { caseLabelLatex: 'succ', hypotheses: [{ name: 'a', type: 'MyNat' }, { name: 'a_ih', type: 'P a' }] }],
+    ]);
+    const items = generateProofProse(induction, 999, goalMap);
+    const caseHeaders = items.filter((it) => it.kind.tag === 'caseHeader');
+    expect(caseHeaders).toHaveLength(2);
+    expect((caseHeaders[0].kind as any).labelLatex).toBe('zero');
+    expect((caseHeaders[0].kind as any).isBaseCase).toBe(true);
+    expect((caseHeaders[1].kind as any).labelLatex).toBe('succ');
+    expect((caseHeaders[1].kind as any).isBaseCase).toBe(false); // inductive step
+  });
+
   test('case without constructorParamNames is base case', () => {
     const hole: ProofNode = { tag: 'hole', id: 10 };
     const induction: ProofNode = {
@@ -417,5 +455,47 @@ describe('generateProofProse', () => {
     // Since all children are `exact`, the compact proofExprs form is used
     // rather than subgoalHeader — verify no crash and no error.
     expect(items.length).toBeGreaterThan(0);
+  });
+
+  test('a hole Lean reports as solved is flagged (renders ✓, not ?)', () => {
+    const hole: ProofNode = { tag: 'hole', id: 1 };
+    const goalMap = mkGoalMap([[1, { goalLatex: '', validation: { status: 'solved' } }]]);
+    const items = generateProofProse(hole, 999, goalMap); // not at cursor
+    expect(items).toHaveLength(1);
+    expect(items[0].kind.tag).toBe('hole');
+    expect((items[0].kind as any).solved).toBe(true);
+  });
+
+  test('an open hole is not flagged solved', () => {
+    const hole: ProofNode = { tag: 'hole', id: 1 };
+    const goalMap = mkGoalMap([[1, { goalLatex: '0 \\leq a' }]]);
+    const items = generateProofProse(hole, 999, goalMap);
+    expect((items[0].kind as any).solved).toBeFalsy();
+  });
+
+  test('conditional rewrite renders side goal as a labeled branch', () => {
+    // rw [summationSplit] leaves `0 ≤ a` as a side goal (still an open hole).
+    const mainHole: ProofNode = { tag: 'hole', id: 21 };
+    const sideHole: ProofNode = { tag: 'hole', id: 22 };
+    const rw: ProofNode = {
+      tag: 'rewrite', id: 20, name: 'summationSplit', reverse: false,
+      child: mainHole, sideGoals: [sideHole],
+    };
+    const goalMap = mkGoalMap([
+      [20, { goalLatex: '2 \\cdot S = T' }],
+      [21, { goalLatex: 'rewritten' }],
+      [22, { goalLatex: '0 \\leq a' }],
+    ]);
+    const items = generateProofProse(rw, 22, goalMap);
+    // The rewrite step renders, then the main hole, then a "Side goal" header
+    // carrying the side-goal LaTeX, then the side-goal hole itself.
+    expect(items.find(i => i.kind.tag === 'rewrite')).toBeTruthy();
+    const header = items.find(i => i.kind.tag === 'subgoalHeader');
+    expect(header).toBeTruthy();
+    expect((header!.kind as any).label).toBe('Side goal');
+    expect((header!.kind as any).goalLatex).toBe('0 \\leq a');
+    const sideHoleItem = items.find(i => i.kind.tag === 'hole' && (i.kind as any).goalLatex === '0 \\leq a');
+    expect(sideHoleItem).toBeTruthy();
+    expect(sideHoleItem!.isCursor).toBe(true);
   });
 });

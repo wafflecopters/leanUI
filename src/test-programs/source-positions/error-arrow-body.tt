@@ -1,6 +1,0 @@
-@test failure
-@name "Error on body of arrow type is detected"
-
-inductive Nat : Type where
-  Zero : Nat
-  Succ : Nat -> Na

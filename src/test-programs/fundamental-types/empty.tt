@@ -1,4 +1,0 @@
-@test success
-@name "Empty: empty type with no constructors"
-
-inductive Empty : Type where

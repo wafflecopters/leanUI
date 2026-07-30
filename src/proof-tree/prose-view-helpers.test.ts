@@ -6,6 +6,7 @@ import {
   findNextHoleNodeId,
   proseItemCanAnchorInteractiveGoal,
   proseItemShowsVisibleGoal,
+  visibleLatexLength,
 } from './prose-view-helpers';
 
 function makeItem(nodeId: number, kind: ProseItemKind, isCursor = false): ProseItem {
@@ -65,7 +66,7 @@ describe('prose-view-helpers', () => {
     expect(buildProseGoalLead(undefined)).toBeNull();
     expect(buildProseGoalLead('Nat', true)).toEqual({
       goalLatex: 'Nat',
-      lead: 'We need a value of type',
+      lead: 'We must choose a value of type',
       inline: true,
     });
     expect(buildProseGoalLead('A'.repeat(31), false)).toEqual({
@@ -73,5 +74,20 @@ describe('prose-view-helpers', () => {
       lead: 'We must show',
       inline: false,
     });
+  });
+
+  test('inline threshold measures VISIBLE glyphs, not latex markup', () => {
+    // `ℝ` renders as one glyph but its latex is 31 chars of htmlId wrapper —
+    // it must inline. (The regression: every goal rendered as a display block.)
+    expect(visibleLatexLength('\\htmlId{subexpr:/}{\\mathbb{R} }')).toBe(2);
+    expect(buildProseGoalLead('\\htmlId{subexpr:/}{\\mathbb{R} }')!.inline).toBe(true);
+    // `0 < ε/2` with nested wrappers stays inline too.
+    const eps = '\\htmlId{subexpr:/}{0 < \\htmlId{subexpr:/1}{\\frac{\\varepsilon}{2}}}';
+    expect(buildProseGoalLead(eps)!.inline).toBe(true);
+    // A genuinely long formula (>30 visible glyphs) still breaks out to display mode.
+    expect(visibleLatexLength('|f(g(x)) - f(g(x_0))| < \\varepsilon \\wedge |g(x) - g(x_0)| < \\delta_1')).toBeGreaterThan(30);
+    expect(buildProseGoalLead('|f(g(x)) - f(g(x_0))| < \\varepsilon \\wedge |g(x) - g(x_0)| < \\delta_1')!.inline).toBe(false);
+    // The row being edited expands regardless of length.
+    expect(buildProseGoalLead('\\mathbb{R}', false, 30, true)!.inline).toBe(false);
   });
 });

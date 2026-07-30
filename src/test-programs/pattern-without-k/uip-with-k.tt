@@ -1,8 +1,0 @@
--- UIP (Uniqueness of Identity Proofs) is provable with axiom K
-@test success
-@name "UIP should succeed with axiom K"
-@import preambles/equality.tt
-@assumeK=true
-
-uip : {A : Type} -> {x y : A} -> (p q : Equal x y) -> Equal p q
-uip refl refl = refl

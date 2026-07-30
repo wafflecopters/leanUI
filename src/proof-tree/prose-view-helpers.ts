@@ -71,15 +71,37 @@ export function findNextHoleNodeId(items: readonly ProseItem[], startIndex: numb
   return undefined;
 }
 
+/**
+ * Approximate the RENDERED glyph count of a latex string.
+ *
+ * The inline-vs-display decision must depend on what the READER sees. Raw
+ * latex length counts invisible markup — every subexpression is wrapped in
+ * `\htmlId{subexpr:...}{...}` for click-targeting, so a goal as small as `ℝ`
+ * is 31 characters of latex and would never qualify as inline. Strip the
+ * wrappers and count each remaining command (`\varepsilon`, `\mathbb`) as one
+ * glyph, which is what it renders as.
+ */
+export function visibleLatexLength(latex: string): number {
+  return latex
+    .replace(/\\htmlId\{[^{}]*\}/g, '')
+    .replace(/\\[a-zA-Z]+/g, 'X')
+    .replace(/[{}]/g, '')
+    .replace(/\s+/g, '')
+    .length;
+}
+
 export function buildProseGoalLead(
   goalLatex: string | undefined,
   isValueType?: boolean,
   inlineThreshold = 30,
+  /** Force display mode (the row being edited expands for room to work). */
+  expand = false,
 ): ProseGoalLead | null {
   if (!goalLatex) return null;
   return {
     goalLatex,
-    lead: isValueType ? 'We need a value of type' : 'We must show',
-    inline: goalLatex.length <= inlineThreshold,
+    // A data goal is a value to PICK, not a proposition to prove — say so.
+    lead: isValueType ? 'We must choose a value of type' : 'We must show',
+    inline: !expand && visibleLatexLength(goalLatex) <= inlineThreshold,
   };
 }

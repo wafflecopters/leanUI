@@ -1,4 +1,0 @@
-@test failure
-@name "Error in nested parenthesized expressions is detected"
-
-x = ((wrong))

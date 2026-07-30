@@ -62,6 +62,10 @@ export interface ExactNode {
   readonly tag: 'exact';
   readonly id: ProofNodeId;
   readonly expr: string;
+  /** When true, `expr` is a whole tactic (e.g. `omega`, `rfl`) printed verbatim
+   *  rather than as `exact <expr>`. Used for terminal tactics and the
+   *  unrecognized-tactic fallback, so they don't become invalid `exact <tactic>`. */
+  readonly raw?: boolean;
 }
 
 export interface UnfoldNode {
@@ -97,7 +101,18 @@ export interface RewriteNode {
   readonly occurrences?: readonly number[];
   /** Head constant name of the target subterm (for occurrence-targeted rewrites). */
   readonly targetHead?: string;
+  /** When set, scope the rewrite to this subterm via `conv in (pat) => rw [...]`
+   *  (Lean-backend subterm-targeted rewrite). */
+  readonly convPattern?: string;
+  /** Main continuation — proves the rewritten (focused) goal. */
   readonly child: ProofNode;
+  /** Side goals introduced by a conditional rewrite — the lemma's hypotheses
+   *  (e.g. `rw [summationSplit]` leaves `0 ≤ a` from its `i ≤ n` premise). Lean
+   *  focuses the rewritten goal first, then these in order. Absent/empty for a
+   *  plain rewrite (the common case), which keeps the single-child form. When
+   *  present, the printer/parser use `·` bullet branches so the side goals are
+   *  visible immediately rather than surfacing later. */
+  readonly sideGoals?: readonly ProofNode[];
 }
 
 export interface ApplyNode {
@@ -107,6 +122,15 @@ export interface ApplyNode {
   readonly name: string;
   /** Sub-proofs for each subgoal created by apply. */
   readonly children: readonly ProofNode[];
+  /** When true, `name` IS the whole tactic (e.g. `constructor`) printed
+   *  verbatim rather than as `apply <name>`. Used for apply-like tactics that
+   *  open subgoals but aren't spelled with the `apply` keyword. */
+  readonly raw?: boolean;
+  /** Lean goal tags for the children (parallel array), printed as
+   *  `case <tag> =>` blocks. Lets subgoals appear in a DIFFERENT order than
+   *  Lean produces them (e.g. DPair's witness before its body — Lean postpones
+   *  the dependent goal, humans give the witness first). Raw applies only. */
+  readonly childTags?: readonly string[];
 }
 
 export interface SimpNode {
@@ -120,6 +144,11 @@ export interface SimpNode {
   readonly collapsed: boolean;
   /** The continuation proof after simp completes. */
   readonly child: ProofNode;
+  /** `simp only [...]` (restrict to the listed lemmas) vs `simp [...]`. */
+  readonly only?: boolean;
+  /** When set, scope the simp to this subterm via `conv in (pat) => simp …`
+   *  (Lean-backend subterm-targeted Compute; mirrors RewriteNode.convPattern). */
+  readonly convPattern?: string;
 }
 
 export interface HaveNode {
@@ -131,11 +160,9 @@ export interface HaveNode {
   readonly expr: string;
   /** Optional explicit type annotation as source expression (for display fallback). */
   readonly typeExpr?: string;
-  /** Optional kernel-level type term (avoids lossy string roundtrip for proofTree goals). */
-  readonly typeKernel?: import('../compiler/kernel').TTKTerm;
   /** Optional interactive proof subtree (alternative to flat expr string).
-   *  When present, this subtree proves the have's type interactively via tactics.
-   *  The proofTree's goal is the have's type (typeKernel or typeExpr). */
+   *  When present, this subtree proves the have's type interactively via
+   *  tactics; the subtree's goal is the have's type (`typeExpr`). */
   readonly proofTree?: ProofNode;
   /** The continuation proof after have introduces the binding. */
   readonly child: ProofNode;
@@ -162,15 +189,20 @@ export interface CaseNode {
   readonly collapsed: boolean;
   /** Constructor name (e.g., 'Zero', 'Succ') — set when induction knows the inductive type */
   readonly constructorName?: string;
-  /** Names for constructor parameters (e.g., ['k'] for Succ) */
+  /** Names for constructor parameters (e.g., ['k'] for Succ) — the data the
+   *  constructor carries, shown in the case label. Does NOT include induction
+   *  hypotheses. */
   readonly constructorParamNames?: readonly string[];
+  /** Induction-hypothesis names introduced for this case (e.g. ['k_ih']). Bound
+   *  in the printed `| ctor args ih… =>` but NOT shown in the case label. */
+  readonly ihNames?: readonly string[];
   /** Pre-rendered LaTeX for the case label (e.g., "n = 0" rendered through structured pipeline) */
   readonly labelLatex?: string;
   /** Original (pre-desugar) nested pattern structure, for branches written like
    *  `| MkDPair δF (MkPair posF boundF) =>`. Used by the replay layer to render
    *  the case label through the @syntax registry (so MkDPair can pick up the
    *  user's `\text{witness} $x, \text{and} $y` notation). */
-  readonly casePatterns?: readonly import('../compiler/surface').CasePattern[];
+  readonly casePatterns?: readonly import('./tactic-command').CasePattern[];
 }
 
 /** Info needed to create a case with constructor metadata. */
@@ -220,12 +252,13 @@ export function mkInduction(scrutinee: string, cases: readonly CaseNode[], isCas
   return { tag: 'induction', id: freshProofId(), scrutinee, cases, collapsed: false, isCases };
 }
 
-export function mkExact(expr: string): ExactNode {
-  return { tag: 'exact', id: freshProofId(), expr };
+export function mkExact(expr: string, raw = false): ExactNode {
+  const node: ExactNode = { tag: 'exact', id: freshProofId(), expr };
+  return raw ? { ...node, raw: true } : node;
 }
 
-export function mkHave(name: string, expr: string, child: ProofNode, typeExpr?: string, proofTree?: ProofNode, typeKernel?: import('../compiler/kernel').TTKTerm): HaveNode {
-  return { tag: 'have', id: freshProofId(), name, expr, child, typeExpr, proofTree, typeKernel };
+export function mkHave(name: string, expr: string, child: ProofNode, typeExpr?: string, proofTree?: ProofNode): HaveNode {
+  return { tag: 'have', id: freshProofId(), name, expr, child, typeExpr, proofTree };
 }
 
 export function mkSuffices(name: string, typeExpr: string, child: ProofNode, byProof?: ProofNode): SufficesNode {
@@ -240,23 +273,62 @@ export function mkFold(name: string, child: ProofNode, occurrence?: number): Fol
   return { tag: 'fold', id: freshProofId(), name, child, occurrence };
 }
 
-export function mkRewrite(name: string, child: ProofNode, reverse = false, occurrences?: readonly number[], targetHead?: string, enhanced?: boolean): RewriteNode {
+export function mkRewrite(name: string, child: ProofNode, reverse = false, occurrences?: readonly number[], targetHead?: string, enhanced?: boolean, convPattern?: string, sideGoals?: readonly ProofNode[]): RewriteNode {
   const node: RewriteNode = { tag: 'rewrite', id: freshProofId(), name, reverse, child };
   if (occurrences !== undefined) (node as any).occurrences = occurrences;
   if (targetHead !== undefined) (node as any).targetHead = targetHead;
   if (enhanced) (node as any).enhanced = true;
+  if (convPattern !== undefined) (node as any).convPattern = convPattern;
+  if (sideGoals !== undefined && sideGoals.length > 0) (node as any).sideGoals = sideGoals;
   return node;
 }
 
-export function mkApply(name: string, children: readonly ProofNode[]): ApplyNode {
-  return { tag: 'apply', id: freshProofId(), name, children };
+/** A rewrite's side-goal subproofs (empty for a plain rewrite). */
+export function rewriteSideGoals(node: RewriteNode): readonly ProofNode[] {
+  return node.sideGoals ?? [];
 }
 
-export function mkSimp(lemmas: readonly string[], steps: readonly ProofNode[], child: ProofNode): SimpNode {
-  return { tag: 'simp', id: freshProofId(), lemmas, steps, collapsed: true, child };
+/** Attach `count` fresh side-goal holes to a rewrite node (for a conditional
+ *  rewrite). No-op if count ≤ 0 or it already has side goals. Preserves the
+ *  node's id (so cursor/ranges stay stable). */
+export function withRewriteSideGoals(node: RewriteNode, count: number): RewriteNode {
+  if (count <= 0 || node.sideGoals) return node;
+  const sideGoals = Array.from({ length: count }, () => mkHole());
+  return { ...node, sideGoals };
+}
+
+export function mkApply(name: string, children: readonly ProofNode[], raw = false, childTags?: readonly string[]): ApplyNode {
+  const node: ApplyNode = { tag: 'apply', id: freshProofId(), name, children };
+  const withRaw = raw ? { ...node, raw: true as const } : node;
+  return childTags && childTags.length === children.length ? { ...withRaw, childTags } : withRaw;
+}
+
+export function mkSimp(
+  lemmas: readonly string[],
+  steps: readonly ProofNode[],
+  child: ProofNode,
+  only = false,
+  convPattern?: string,
+): SimpNode {
+  const node: SimpNode = { tag: 'simp', id: freshProofId(), lemmas, steps, collapsed: true, child };
+  const withOnly = only ? { ...node, only: true as const } : node;
+  return convPattern ? { ...withOnly, convPattern } : withOnly;
 }
 
 /** Format a case label as LaTeX: scrutinee = \text{Ctor}\;p1\;p2 */
+/** Is `name` an induction hypothesis (Lean names them `<arg>_ih` / `ih`)? */
+export function isInductionHypothesisName(name: string): boolean {
+  return /(?:^|_)ih$/.test(name);
+}
+
+/** Split induction-case binder names into constructor args vs induction hyps. */
+export function splitCaseParams(names: readonly string[]): { args: string[]; ihNames: string[] } {
+  const args: string[] = [];
+  const ihNames: string[] = [];
+  for (const n of names) (isInductionHypothesisName(n) ? ihNames : args).push(n);
+  return { args, ihNames };
+}
+
 export function formatCaseLabelLatex(scrutinee: string, ctorName: string, paramNames: readonly string[]): string {
   const escName = (n: string) => n.length === 1 ? n : `\\text{${n}}`;
   const ctorLatex = `\\text{${ctorName}}`;
@@ -269,7 +341,7 @@ export function mkCase(
   label: string, body: ProofNode,
   constructorName?: string, constructorParamNames?: readonly string[],
   labelLatex?: string,
-  casePatterns?: readonly import('../compiler/surface').CasePattern[],
+  casePatterns?: readonly import('./tactic-command').CasePattern[],
 ): CaseNode {
   const node: CaseNode = { tag: 'case', id: freshProofId(), label, body, collapsed: false };
   if (constructorName !== undefined) (node as any).constructorName = constructorName;
@@ -298,8 +370,16 @@ export function findNode(root: ProofNode, id: ProofNodeId): ProofNode | null {
     case 'intros':
     case 'unfold':
     case 'fold':
-    case 'rewrite':
       return findNode(root.child, id);
+    case 'rewrite': {
+      const found = findNode(root.child, id);
+      if (found) return found;
+      for (const sg of rewriteSideGoals(root)) {
+        const f = findNode(sg, id);
+        if (f) return f;
+      }
+      return null;
+    }
     case 'have': {
       if (root.proofTree) {
         const found = findNode(root.proofTree, id);
@@ -345,8 +425,16 @@ export function findCase(root: ProofNode, id: ProofNodeId): CaseNode | null {
     case 'intros':
     case 'unfold':
     case 'fold':
-    case 'rewrite':
       return findCase(root.child, id);
+    case 'rewrite': {
+      const found = findCase(root.child, id);
+      if (found) return found;
+      for (const sg of rewriteSideGoals(root)) {
+        const f = findCase(sg, id);
+        if (f) return f;
+      }
+      return null;
+    }
     case 'have': {
       if (root.proofTree) {
         const found = findCase(root.proofTree, id);
@@ -394,8 +482,10 @@ export function isCursorInSubtree(node: ProofNode, cursorId: ProofNodeId): boole
     case 'intros':
     case 'unfold':
     case 'fold':
-    case 'rewrite':
       return isCursorInSubtree(node.child, cursorId);
+    case 'rewrite':
+      return isCursorInSubtree(node.child, cursorId) ||
+        rewriteSideGoals(node).some(sg => isCursorInSubtree(sg, cursorId));
     case 'have':
       return (!!node.proofTree && isCursorInSubtree(node.proofTree, cursorId)) || isCursorInSubtree(node.child, cursorId);
     case 'suffices':
@@ -437,8 +527,11 @@ function linearizeImpl(node: ProofNode, depth: number, out: LinearEntry[]): void
     case 'intros':
     case 'unfold':
     case 'fold':
+      linearizeImpl(node.child, depth + 1, out);
+      break;
     case 'rewrite':
       linearizeImpl(node.child, depth + 1, out);
+      for (const sg of rewriteSideGoals(node)) linearizeImpl(sg, depth + 1, out);
       break;
     case 'have':
       if (node.proofTree) linearizeImpl(node.proofTree, depth + 1, out);
@@ -487,10 +580,20 @@ export function replaceNode(root: ProofNode, targetId: ProofNodeId, replacement:
       return root;
     case 'intros':
     case 'unfold':
-    case 'fold':
-    case 'rewrite': {
+    case 'fold': {
       const newChild = replaceNode(root.child, targetId, replacement);
       return newChild === root.child ? root : { ...root, child: newChild };
+    }
+    case 'rewrite': {
+      const newChild = replaceNode(root.child, targetId, replacement);
+      let sgChanged = false;
+      const newSideGoals = rewriteSideGoals(root).map(sg => {
+        const r = replaceNode(sg, targetId, replacement);
+        if (r !== sg) sgChanged = true;
+        return r;
+      });
+      if (newChild === root.child && !sgChanged) return root;
+      return { ...root, child: newChild, ...(root.sideGoals ? { sideGoals: newSideGoals } : {}) };
     }
     case 'have': {
       const newProof = root.proofTree ? replaceNode(root.proofTree, targetId, replacement) : undefined;
@@ -546,10 +649,20 @@ export function updateCase(
       return root;
     case 'intros':
     case 'unfold':
-    case 'fold':
-    case 'rewrite': {
+    case 'fold': {
       const newChild = updateCase(root.child, caseId, updater);
       return newChild === root.child ? root : { ...root, child: newChild };
+    }
+    case 'rewrite': {
+      const newChild = updateCase(root.child, caseId, updater);
+      let sgChanged = false;
+      const newSideGoals = rewriteSideGoals(root).map(sg => {
+        const r = updateCase(sg, caseId, updater);
+        if (r !== sg) sgChanged = true;
+        return r;
+      });
+      if (newChild === root.child && !sgChanged) return root;
+      return { ...root, child: newChild, ...(root.sideGoals ? { sideGoals: newSideGoals } : {}) };
     }
     case 'have': {
       const newProof = root.proofTree ? updateCase(root.proofTree, caseId, updater) : undefined;
@@ -606,12 +719,15 @@ export function applyInduction(
   state: ProofTreeState,
   scrutinee: string,
   caseLabels: readonly string[],
+  /** `cases` (destructure) vs `induction` — they print differently, so the
+   *  caller's choice has to survive into the node. */
+  tacticName: 'induction' | 'cases' = 'induction',
 ): ProofTreeState | null {
   const node = findNode(state.root, state.cursor.nodeId);
   if (!node || node.tag !== 'hole') return null;
 
   const cases = caseLabels.map(label => mkCase(label, mkHole()));
-  const induction = mkInduction(scrutinee, cases);
+  const induction = mkInduction(scrutinee, cases, tacticName === 'cases');
   const newRoot = replaceNode(state.root, state.cursor.nodeId, induction);
 
   // Cursor → first case's body hole
@@ -773,6 +889,15 @@ export function editExact(
   return { root: newRoot, cursor: state.cursor };
 }
 
+export function editHaveExpr(
+  state: ProofTreeState, nodeId: ProofNodeId, newExpr: string,
+): ProofTreeState | null {
+  const node = findNode(state.root, nodeId);
+  if (!node || node.tag !== 'have') return null;
+  const newRoot = replaceNode(state.root, nodeId, { ...node, expr: newExpr });
+  return { root: newRoot, cursor: state.cursor };
+}
+
 export function editCaseLabel(
   state: ProofTreeState, caseId: ProofNodeId, newLabel: string,
 ): ProofTreeState {
@@ -797,8 +922,16 @@ export function editCaseParamName(
       case 'intros':
       case 'unfold':
       case 'fold':
-      case 'rewrite':
         return findInductionParent(root.child, targetCaseId);
+      case 'rewrite': {
+        const r = findInductionParent(root.child, targetCaseId);
+        if (r) return r;
+        for (const sg of rewriteSideGoals(root)) {
+          const rr = findInductionParent(sg, targetCaseId);
+          if (rr) return rr;
+        }
+        return null;
+      }
       case 'have': {
         if (root.proofTree) {
           const r = findInductionParent(root.proofTree, targetCaseId);
@@ -916,8 +1049,18 @@ function computeContextImpl(
 
     case 'unfold':
     case 'fold':
-    case 'rewrite':
       return computeContextImpl(node.child, cursorId, hypotheses);
+
+    case 'rewrite': {
+      const r = computeContextImpl(node.child, cursorId, hypotheses);
+      if (r) return r;
+      // Side goals share the rewrite's hypothesis context (no new binders).
+      for (const sg of rewriteSideGoals(node)) {
+        const rr = computeContextImpl(sg, cursorId, hypotheses);
+        if (rr) return rr;
+      }
+      return null;
+    }
 
     case 'have': {
       // proofTree proves the have's type — h is NOT in scope yet

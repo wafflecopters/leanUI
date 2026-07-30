@@ -1,0 +1,367 @@
+/**
+ * Parse a Lean tactic block into a ProofNode tree (inverse of proofTreeToLean).
+ *
+ * Seeds the structured editor from the user's actual Lean proof, so the WYSIWYG
+ * shows the existing proof (then the user edits it structurally). This is a
+ * pragmatic, indentation-aware parser for the common tactic forms the editor
+ * produces and round-trips: intro, exact, rw, simp, unfold, apply, have,
+ * suffices, induction/cases … with | ctor params => …, and `sorry` holes.
+ *
+ * Anything unrecognized becomes an `exact <verbatim>` node so no proof text is
+ * silently dropped — it remains visible and editable.
+ */
+import {
+  type ProofNode,
+  type CaseNode,
+  mkHole,
+  mkIntros,
+  mkExact,
+  mkUnfold,
+  mkRewrite,
+  mkSimp,
+  mkApply,
+  mkHave,
+  mkSuffices,
+  mkInduction,
+  mkCase,
+  splitCaseParams,
+} from '../proof-tree/proof-tree';
+
+interface Line {
+  indent: number;
+  text: string;
+}
+
+function lex(block: string): Line[] {
+  const out: Line[] = [];
+  for (const raw of block.split('\n')) {
+    const trimmedEnd = raw.replace(/\s+$/, '');
+    if (trimmedEnd.trim() === '') continue; // skip blank lines
+    const indent = trimmedEnd.length - trimmedEnd.trimStart().length;
+    out.push({ indent, text: trimmedEnd.trim() });
+  }
+  return out;
+}
+
+/** Parse a chain of sibling tactics at >= `minIndent`, returning a linked ProofNode. */
+function parseSeq(lines: Line[], pos: { i: number }, minIndent: number): ProofNode {
+  // Collect the consecutive lines at exactly this block's indent (the first one
+  // sets the level). Returns the head of the chain; chained tactics nest via
+  // their `child`.
+  if (pos.i >= lines.length || lines[pos.i].indent < minIndent) {
+    return mkHole();
+  }
+  const level = lines[pos.i].indent;
+  return parseChainAt(lines, pos, level);
+}
+
+function parseChainAt(lines: Line[], pos: { i: number }, level: number): ProofNode {
+  if (pos.i >= lines.length || lines[pos.i].indent !== level) {
+    return mkHole();
+  }
+  const line = lines[pos.i];
+  pos.i++;
+  const node = parseTactic(lines, pos, level, line.text);
+  return node;
+}
+
+/** Build the continuation (next sibling at the same level) as a ProofNode. */
+function continuation(lines: Line[], pos: { i: number }, level: number): ProofNode {
+  if (pos.i < lines.length && lines[pos.i].indent === level) {
+    return parseChainAt(lines, pos, level);
+  }
+  return mkHole();
+}
+
+/** Split a `rw [...]` rule list on commas, respecting `←` prefixes. */
+function splitRwRules(inner: string): string[] {
+  return inner
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+function parseTactic(lines: Line[], pos: { i: number }, level: number, text: string): ProofNode {
+  // sorry / hole
+  if (text === 'sorry' || text === 'admit') return mkHole();
+
+  // intro a b c   (also `intros`)
+  let m = text.match(/^intros?\b\s*(.*)$/);
+  if (m) {
+    const names = m[1].trim().length ? m[1].trim().split(/\s+/) : [];
+    return mkIntros(names, continuation(lines, pos, level));
+  }
+
+  // exact <expr>
+  m = text.match(/^exact\s+(.*)$/);
+  if (m) return mkExact(m[1].trim());
+
+  // Terminal/closing tactics with no args — printed verbatim (NOT `exact <tac>`).
+  if (/^(rfl|omega|decide|native_decide|ring|ring_nf|trivial|assumption|ac_rfl|norm_num|simp_all|done)\b\s*$/.test(text)) {
+    return mkExact(text.trim(), true);
+  }
+
+  // `constructor` opens the goal's constructor and leaves its fields as
+  // subgoals (e.g. Limit.mk's eps_delta; DPair's body + witness) — a CHAINING
+  // tactic, not a terminal one. `·` bullet branches following it are its
+  // subgoal proofs (the printer's multi-subgoal form); otherwise the plain
+  // continuation is its single subgoal.
+  if (/^constructor\s*$/.test(text)) {
+    // `case <tag> =>` blocks select subgoals BY NAME (possibly reordered —
+    // witness before dependent body); `·` bullets take them in Lean's order.
+    const tagged = parseCaseTagBlocks(lines, pos, level);
+    if (tagged) return mkApply('constructor', tagged.children, true, tagged.tags);
+    const branches = parseRewriteBullets(lines, pos, level);
+    if (branches.length > 0) return mkApply('constructor', branches, true);
+    return mkApply('constructor', [continuation(lines, pos, level)], true);
+  }
+
+  // conv in (pat) => rw [lemma]  — a subterm-scoped rewrite.
+  m = text.match(/^conv\s+in\s+\((.*)\)\s*=>\s*rw\s*\[\s*(.*?)\s*\]\s*$/);
+  if (m) {
+    const pattern = m[1].trim();
+    const reverse = m[2].startsWith('←') || m[2].startsWith('<-');
+    const name = m[2].replace(/^(←|<-)\s*/, '').trim();
+    return mkRewrite(name, continuation(lines, pos, level), reverse, undefined, undefined, undefined, pattern);
+  }
+
+  // conv in (pat) => simp  — a subterm-scoped simplification (the Compute
+  // suggestion). A CHAINING step: the rewritten goal continues below it, so it
+  // must NOT fall through to the terminal raw-exact fallback (which would drop
+  // the hole and end the goal chain at this step).
+  m = text.match(/^conv\s+in\s+\((.*)\)\s*=>\s*simp\b\s*(only\b)?\s*(?:\[\s*(.*?)\s*\])?\s*$/);
+  if (m) {
+    const pattern = m[1].trim();
+    const only = !!m[2];
+    const lemmas = m[3] ? m[3].split(',').map((s) => s.trim()).filter(Boolean) : [];
+    return mkSimp(lemmas, [], continuation(lines, pos, level), only, pattern);
+  }
+
+  // rw [..]  /  rw [← ..]
+  m = text.match(/^rw\s*\[\s*(.*?)\s*\]\s*$/);
+  if (m) {
+    const rules = splitRwRules(m[1]);
+    // A single-lemma `rw` followed by `·` bullets is a CONDITIONAL rewrite: the
+    // first bullet proves the rewritten goal, the rest its side goals (premises).
+    if (rules.length === 1) {
+      const saved = pos.i;
+      const branches = parseRewriteBullets(lines, pos, level);
+      if (branches.length >= 2) {
+        const reverse = rules[0].startsWith('←') || rules[0].startsWith('<-');
+        const name = rules[0].replace(/^(←|<-)\s*/, '').trim();
+        const [main, ...sides] = branches;
+        return mkRewrite(name, main, reverse, undefined, undefined, undefined, undefined, sides);
+      }
+      pos.i = saved; // not the bulleted form — fall through to plain handling
+    }
+    // `rw [a, ← b, c]` is multiple rewrites; model as a chain of RewriteNodes so
+    // each lemma is an editable step and the whole list round-trips.
+    const cont = continuation(lines, pos, level);
+    let chain = cont;
+    for (let r = rules.length - 1; r >= 0; r--) {
+      const reverse = rules[r].startsWith('←') || rules[r].startsWith('<-');
+      const name = rules[r].replace(/^(←|<-)\s*/, '').trim();
+      chain = mkRewrite(name, chain, reverse);
+    }
+    return rules.length > 0 ? chain : mkRewrite('', cont, false);
+  }
+
+  // simp [..]  /  simp only [..]  /  simp
+  m = text.match(/^simp\b\s*(only\b)?\s*(?:\[\s*(.*?)\s*\])?\s*$/);
+  if (m) {
+    const only = !!m[1];
+    const lemmas = m[2] ? m[2].split(',').map((s) => s.trim()).filter(Boolean) : [];
+    return mkSimp(lemmas, [], continuation(lines, pos, level), only);
+  }
+
+  // unfold <name…>  (Lean allows several space-separated names)
+  m = text.match(/^unfold\s+(.+?)\s*$/);
+  if (m) return mkUnfold(m[1], continuation(lines, pos, level));
+
+  // apply <name>
+  m = text.match(/^apply\s+(.*)$/);
+  if (m) {
+    const name = m[1].trim();
+    // A multi-premise lemma opens one branch per subgoal, exactly like
+    // `constructor`: `case <tag> =>` blocks when the goals are named (so they
+    // can be presented in a different order than Lean produced them), `·`
+    // bullets otherwise. Without this the branches parse back as stray
+    // `exact ·` steps and the proof structure is lost on every round-trip.
+    const tagged = parseCaseTagBlocks(lines, pos, level);
+    if (tagged) return mkApply(name, tagged.children, false, tagged.tags);
+    const branches = parseRewriteBullets(lines, pos, level);
+    if (branches.length > 0) return mkApply(name, branches, false);
+    // The common case: one continuation chain proves the single subgoal.
+    return mkApply(name, [continuation(lines, pos, level)]);
+  }
+
+  // have h : T := by   |   have h := expr   |   have h : T := expr
+  m = text.match(/^have\s+(\S+)\s*(?::\s*(.*?))?\s*:=\s*(by)?\s*(.*)$/);
+  if (m) {
+    const name = m[1];
+    const typeExpr = m[2]?.trim();
+    const isBy = m[3] === 'by';
+    const tailExpr = m[4]?.trim() ?? '';
+    if (isBy) {
+      const sub = parseSeq(lines, pos, level + 1);
+      return mkHave(name, '', continuation(lines, pos, level), typeExpr, sub);
+    }
+    return mkHave(name, tailExpr, continuation(lines, pos, level), typeExpr);
+  }
+
+  // suffices h : T by  ...
+  m = text.match(/^suffices\s+(\S+)\s*:\s*(.*?)\s*by\s*$/);
+  if (m) {
+    const by = parseSeq(lines, pos, level + 1);
+    return mkSuffices(m[1], m[2].trim(), continuation(lines, pos, level), by);
+  }
+
+  // induction x with   |   cases x with
+  m = text.match(/^(induction|cases)\s+(\S+)\s+with\s*$/);
+  if (m) {
+    const isCases = m[1] === 'cases';
+    const scrutinee = m[2];
+    const cases: CaseNode[] = [];
+    // Case alternatives are `| ctor params => …` lines at the induction's indent
+    // or deeper (our printer aligns them with `induction`; Lean also allows them
+    // indented further).
+    while (pos.i < lines.length && lines[pos.i].indent >= level && lines[pos.i].text.startsWith('|')) {
+      cases.push(parseCase(lines, pos));
+    }
+    return mkInduction(scrutinee, cases, isCases);
+  }
+
+  // Bare `induction x` / `cases x` (no `with`) followed by `·` bullet cases —
+  // the form our printer uses when constructor names aren't known. Each `·` (or
+  // `.`) bullet at this indent or deeper starts a case body.
+  m = text.match(/^(induction|cases)\s+(\S+)\s*$/);
+  if (m) {
+    const isCases = m[1] === 'cases';
+    const scrutinee = m[2];
+    const cases: CaseNode[] = [];
+    while (
+      pos.i < lines.length &&
+      lines[pos.i].indent >= level &&
+      (lines[pos.i].text === '·' || lines[pos.i].text === '.' || lines[pos.i].text.startsWith('· ') || lines[pos.i].text.startsWith('. '))
+    ) {
+      cases.push(parseBulletCase(lines, pos));
+    }
+    // No bullets parsed → keep the bare `induction x` verbatim.
+    if (cases.length === 0) return mkExact(text, true);
+    return mkInduction(scrutinee, cases, isCases);
+  }
+
+  // Fallback: an unrecognized tactic. Keep it as a RAW exact so it prints
+  // verbatim (valid Lean) rather than the invalid `exact <tactic>`.
+  return mkExact(text, true);
+}
+
+function parseCase(lines: Line[], pos: { i: number }): CaseNode {
+  const line = lines[pos.i];
+  pos.i++;
+  const caseLevel = line.indent;
+  // `| ctor p1 p2 => [inline tactic]`
+  const m = line.text.match(/^\|\s*(\S+)((?:\s+\S+)*?)\s*=>\s*(.*)$/);
+  const ctor = m ? m[1] : line.text.replace(/^\|\s*/, '');
+  const params = m && m[2].trim().length ? m[2].trim().split(/\s+/) : [];
+  const inline = m ? m[3].trim() : '';
+
+  let body: ProofNode;
+  if (inline.length > 0) {
+    // Inline body: parse it as a single tactic (may itself chain on next lines
+    // only if deeper — rare; treat as standalone).
+    const innerPos = { i: 0 };
+    const innerLines: Line[] = [{ indent: caseLevel + 2, text: inline }];
+    body = parseChainAt(innerLines, innerPos, caseLevel + 2);
+  } else {
+    body = parseSeq(lines, pos, caseLevel + 1);
+  }
+  // `| succ a a_ih =>` binds both the ctor arg and the induction hypothesis;
+  // keep them apart so the label shows `succ a` (not `succ (a, a_ih)`).
+  const { args, ihNames } = splitCaseParams(params);
+  const node = mkCase(ctor, body, ctor, args);
+  return ihNames.length ? { ...node, ihNames } : node;
+}
+
+/** Parse a `·` bullet case body. Bullet may be `·` alone (body on next lines)
+ *  or `· <inline tactic>`. Label is a placeholder (no constructor name known). */
+function parseBulletCase(lines: Line[], pos: { i: number }): CaseNode {
+  const line = lines[pos.i];
+  pos.i++;
+  const caseLevel = line.indent;
+  const inline = line.text.replace(/^[·.]\s*/, '').trim();
+  let body: ProofNode;
+  if (inline.length > 0) {
+    const innerPos = { i: 0 };
+    body = parseChainAt([{ indent: caseLevel + 2, text: inline }], innerPos, caseLevel + 2);
+  } else {
+    body = parseSeq(lines, pos, caseLevel + 1);
+  }
+  // No constructor name (bullet form) — label is a display placeholder only.
+  return mkCase('case', body);
+}
+
+/** Consecutive `case <tag> => …` goal-selection blocks at `level` (bodies on
+ *  following deeper lines, or inline after `=>`). Null unless at least one
+ *  block is present. Used for a raw apply's (constructor's) tagged subgoals. */
+function parseCaseTagBlocks(
+  lines: Line[],
+  pos: { i: number },
+  level: number,
+): { children: ProofNode[]; tags: string[] } | null {
+  const children: ProofNode[] = [];
+  const tags: string[] = [];
+  for (;;) {
+    if (pos.i >= lines.length || lines[pos.i].indent !== level) break;
+    const m = lines[pos.i].text.match(/^case\s+(\S+)\s*=>\s*(.*)$/);
+    if (!m) break;
+    pos.i++;
+    tags.push(m[1]);
+    const inline = m[2].trim();
+    if (inline.length > 0) {
+      const innerPos = { i: 0 };
+      children.push(parseChainAt([{ indent: level + 2, text: inline }], innerPos, level + 2));
+    } else {
+      children.push(parseSeq(lines, pos, level + 1));
+    }
+  }
+  return children.length > 0 ? { children, tags } : null;
+}
+
+/** Is this line a `·`/`.` bullet at the given indent? */
+function isBulletLine(line: Line, level: number): boolean {
+  return line.indent === level &&
+    (line.text === '·' || line.text === '.' ||
+      line.text.startsWith('· ') || line.text.startsWith('. '));
+}
+
+/** Collect consecutive `·` bullet branch bodies at `level` (their bodies live on
+ *  following lines indented deeper, or inline after the bullet). Used for a
+ *  conditional rewrite's main + side-goal branches. */
+function parseRewriteBullets(lines: Line[], pos: { i: number }, level: number): ProofNode[] {
+  const branches: ProofNode[] = [];
+  while (pos.i < lines.length && isBulletLine(lines[pos.i], level)) {
+    const line = lines[pos.i];
+    pos.i++;
+    const bulletLevel = line.indent;
+    const inline = line.text.replace(/^[·.]\s*/, '').trim();
+    if (inline.length > 0) {
+      const innerPos = { i: 0 };
+      branches.push(parseChainAt([{ indent: bulletLevel + 2, text: inline }], innerPos, bulletLevel + 2));
+    } else {
+      branches.push(parseSeq(lines, pos, bulletLevel + 1));
+    }
+  }
+  return branches;
+}
+
+/**
+ * Parse a Lean tactic block (the text after `by`) into a ProofNode tree.
+ * Returns a single hole for an empty block.
+ */
+export function leanTacticsToTree(block: string): ProofNode {
+  const lines = lex(block);
+  if (lines.length === 0) return mkHole();
+  const pos = { i: 0 };
+  return parseSeq(lines, pos, lines[0].indent);
+}

@@ -1,194 +1,71 @@
 # TODO
 
-## Current Focus: Engine Uplift + `lim` Follow-Through
+`status.md` is the live tracker (current focus, recent progress, blockers). This
+file is the longer-range list.
 
-Short-term hardening work underway:
-- [x] Tighten incremental invalidation to use extracted identifier references instead of N×M regex scans
-- [x] Ignore comment-only mentions during incremental dependency tracking
-- [x] Move tactic checker-env creation onto `TacticEngine` instead of patching the prototype
-- [x] Remove the fake kernel `inferType` UI path in favor of shared checker-based contextual inference
-- [x] Fix induction tactic motive abstraction for scrutinees away from de Bruijn index `0`
-- [x] Add regression coverage for named-pattern binder depth in pattern unification
-- [ ] Improve application/implicit-argument diagnostics for partially applied dependent functions
+M5 deleted the custom TT/TTK engine, and with it most of what used to be on this
+list — the parser work, constraint-solver hardening, pattern matching and
+wildcard naming, records, the Prop deep dive, totality checking, the TT tactic
+engine. Those are Lean's problems now. The archived reasoning is in
+[`docs/tt-archive/`](./docs/tt-archive/).
 
-## Real Analysis Focus: `lim` Projection Operator
+## Milestone proofs
 
-See [LIMIT-DESIGN.md](LIMIT-DESIGN.md) for full design document.
+1. [x] **Triangle numbers** — `∑_{i=0}^{n} i = n(n+1)/2` (proved in-preset)
+2. [ ] **Limits add** — `lim f + lim g = lim (f + g)`
+       The math is DONE: a sorry-free hand proof from the preset's own toolkit,
+       pinned in `src/lean/realAnalysisPositivity.e2e.test.ts` (`#print axioms`
+       confirms no `sorryAx`). What remains is making the editor OFFER each step.
+3. [ ] **Chain rule** — `d/dx f(g(x)) = f'(g(x)) · g'(x)`
 
-**Status**: Implementing and testing in the real analysis preset.
+## Editor ergonomics — the limitAdd path
 
-- [x] Design `lim` as type-directed projection extracting `L` from `Limit f x0 L`
-- [x] Define `lim`, `limitConst`, `subSelf`, `zeroLtOne` in real analysis preset
-- [x] Prove `limit_pull_radd`: `lim f + lim g = lim (f + g)` (`refl`)
-- [ ] Prove `limit_pull_scalar`: `c * lim f = lim (c * f)` (needs `limitScalarAll` moved out of block comment)
-- [x] Prove `limit_pull_const_add`: `k + lim f = lim (k + f)` (`refl`)
-- [x] Prove `lim_const`: `k = lim (const k)` (`refl`)
-- [ ] Uncomment derivatives section and move `limitScalarAll` deps outside block comment
+This is the current focus: every step of a proof we can already write by hand
+should be reachable by clicking.
 
-## Upcoming
+- [ ] **Order-compare two reals.** Where `deltaF` and `deltaG` are both in scope,
+      offer the case split (`leTotal` / the `rmin`, `minElim`, `minLeLeft/Right`
+      family) that picking `δ := rmin deltaF deltaG` needs.
+- [ ] **Seed the `limitAdd` preset with the built-up proof prefix**, so iterating
+      on the NEXT step doesn't mean rebuilding the first ten by hand.
+- [ ] Surface `limF.eps_delta` as a chip at the `∃δ` goal (suspected cause:
+      projection candidates can't read the `lim⟦x0⟧`-notation hypothesis type).
+- [ ] Destructure flow for DPair/Pair — the `(δ, witness)` pairs.
+- [ ] Witness-first constructor ordering when the witness is `rmin δ1 δ2`.
 
-- [x] Add inference/checking for `let` expressions ✅
-- [ ] Change parser to parse out a general `identifier` instead of var/const/pctor/pvar so that we can disambiguate during elaboration
-- [x] Add multi-let syntax (`let x := a, y := b in ...`) ✅
-- [ ] Add infix operator syntax (user-defined operators with precedence)
-- [ ] Add custom syntax support (maybe?)
-- [ ] Think about namespaces
-- [ ] Auto-binder creation - e.g. `Type u -> ...` elaborating to `{u : Level} -> Type u -> ...` if `u` not in scope, or `List A -> ...` elaborating to `{A : Type} -> List A -> ...` if `A` not in scope.
+## `lim` as a projection
 
-## Improve Wildcard/Meta Naming in Pattern Matching
+See [LIMIT-DESIGN.md](LIMIT-DESIGN.md) for the design.
 
-Currently, wildcards for implicit function parameters get generic names like `?0`, `?1` instead of meaningful names like `A` or `n`. This makes pretty-printed output confusing (looks like unresolved metas).
+- [ ] Port `limitScalarAll` and prove `limit_pull_scalar`: `c * lim f = lim (c * f)`
+- [ ] Restore the derivatives section (blocked behind the same dependency)
 
-**The Problem:**
-```
-nth : {A : Type} -> {n : Nat} -> Vec A n -> Fin n -> A
-nth (VCons h _) FZero = h
-```
-Pretty-prints as:
-```
-(match ?_scrutinee
-  | ?0 (Succ _) (VCons ?0 _ h n2) (FZero _) => h
-  ...)
-```
-Where `?0` is actually the `A` parameter, not an unresolved meta.
+## Mathlib
 
-**Root Cause:**
-- `freshWildcardName()` in [elab.ts:1318-1349](src/compiler/elab.ts#L1318-L1349) generates `?N` when no parameter info is available
-- `setCurrentTermParamNames()` exists but is **never called** anywhere
-- So top-level implicit params like `{A : Type}` get `?0` names instead of `A0`
+- [ ] Decide whether Mathlib becomes the default preset. `mathlibParity.e2e.test.ts`
+      pins that ONE engine serves both audiences — the from-scratch file where
+      Mathlib tactics must never appear, and the Mathlib file where they must
+      appear AND close the goal.
+- [ ] A Mathlib real-analysis preset: the same `Limit` statement over real ℝ,
+      where `positivity`/`linarith`/`norm_num` close the arithmetic legs.
+- [ ] **Memory is the constraint here.** A Mathlib-loaded Lean process holds
+      4–7GB. Pools are split and capped (`LEANUI_MATHLIB_WORKERS` defaults to 1);
+      always run Lean-heavy suites under `scripts/guarded-run.sh`.
 
-**Fix Approach:**
-1. Before elaborating patterns in `checkMatchClauseFromSurface`, extract param names from the function type
-2. Call `setCurrentTermParamNames(paramNames)` before `elabPatternToKernelWithMap`
-3. Call `setCurrentTermParamNames(null)` after to reset state
+## Editing surface
 
-**Implementation Details:**
-- Use `extractConstructorParamNames()` as reference - similar logic for function types
-- The `ParamInfo` type already has `name` and `typePrefix` fields
-- For `{A : Type}`, should yield `ParamInfo { name: 'A', typePrefix: null }`
-- Wildcards would then be named `A0` instead of `?0`
+- [ ] MathRow → Lean source for type/value edits — editing a declaration's
+      STATEMENT, not just its proof. (The proof direction round-trips today.)
+- [ ] Type-at-cursor in the text editor (Lean reports it; needs wiring).
+- [ ] Keyboard shortcut to comment/uncomment.
+- [ ] Keyboard shortcut to toggle the binder at the cursor between `()` and `{}`.
 
-**Files to modify:**
-- `src/compiler/compile.ts` - call `setCurrentTermParamNames` around pattern elaboration
-- Possibly `src/compiler/elab.ts` - add helper to extract param names from function type
+## Rendering parity
 
-## UI/Text Editor
+The battery lives in the render regression tests; keep it green as new notation
+lands: `\lim` with under-subscript, ℝ via the `Carrier` unexpander, spelled-out
+Greek (`epsilon` → ε), `∀ x ∈ T` binder prose, implication chains, `f(x)`
+application style, display-math sizing.
 
-- [ ] Keyboard shortcut in text editor to comment/uncomment code
-- [ ] Keyboard shortcut to toggle binder at cursor between `()` vs `{}`
-- [ ] Implement type-at in the editor (show type of expression under cursor)
-
-## Big Projects
-
-- [ ] **Records** (mostly complete)
-  - [x] Parser for record definitions (including `extends` syntax)
-  - [x] Elaboration + checking for record definitions
-  - [x] Projection generation
-  - [x] Type class instance creation (e.g., `maybeFunctor = MkFunctor Maybe mapMaybe`)
-  - [x] **`extends` field inlining** - implemented in `processRecordDeclaration()` in [compile.ts](src/compiler/compile.ts)
-    - Parent fields are prepended to child record fields
-    - Field name clash detection for inherited vs local fields
-    - Note: parameterized parent records not yet tested
-  - [x] Eta expansion rule: `MkRecord (proj1 r) (proj2 r) = r` - implemented in [whnf.ts](src/compiler/whnf.ts)
-  - [x] Pattern match on parameterized records with implicit type args
-  - [ ] Dot notation for projections (e.g., `point.x` instead of `Point.x point`)
-  - [ ] Record construction via field names (e.g., `{ x := 1, y := 2 }`)
-
-- [ ] **Prop deep dive**
-  - [ ] Split out Prop to be independent AST-wise instead of being `Sort 0`
-    - Currently Prop = Type at level 0, but they should be distinct
-    - Prop is impredicative, Type is predicative
-  - [ ] Implement proof irrelevance
-    - Two proofs of the same Prop are definitionally equal
-  - [ ] Implement large elimination restrictions
-    - Can't match on Prop-valued inductive to produce Type-valued result
-    - Exception: singleton elimination (like Eq with only `refl`, or Empty with no constructors)
-  - [ ] Implement subsingleton elimination
-    - Prop-valued inductives with at most one constructor allow elimination into Type
-  - [ ] Review impredicativity rules for Prop
-    - `(A : Type) -> Prop` should be in Prop, not Type
-  - [ ] Prop inference for propositions
-    - Infer that `Equal x y` should be Prop, not Type
-
-- [ ] **Case-of and Pattern Refinement**
-  - [ ] Implement case-of expression syntax
-  - [ ] Nested casing support
-  - [ ] Re-elaboration of hoisted patterns
-  - [ ] Pattern refinement (dependent pattern matching)
-
-- [x] **Pattern Matching without K** ✅ (February 2026)
-  - [x] Implement axiom K prevention (no deletion rule)
-  - [x] Prevent self-unification to avoid weakK
-  - [x] Fix structurally equal terms bug with `containsVars()` helper
-  - [x] Add `@assumeK` directive (default: enabled)
-  - [x] Comprehensive test suite for K-dependent proofs (UIP, Streicher's K, weakK)
-  - [ ] Add `@withoutK` directive for explicitly disabling K
-  - See [AXIOM_K.md](AXIOM_K.md) for details
-
-## Constraint Solver Hardening
-
-The soundness work on implicit argument conflict detection revealed several architectural improvements that would make the constraint solver more robust and simpler.
-
-- [x] **Normalize constraints to meta's creation depth before solving** ~~(Priority 1)~~ DONE
-  - `normalizeConstraintDepth` in `meta.ts` shifts all constraints to the meta's context depth before solving
-  - Comprehensive unit tests in `meta.test.ts` (9 tests for normalization + 3 for cross-depth solving)
-  - No more ad-hoc `depthDiff` shifting in `solveConstraints`
-
-- [x] **Post-solving zonk-then-check pass** DONE
-  - `recheckZonkedTerm` in `compile.ts` now does full re-type-check in a fresh environment after zonking
-  - Phase 1: AST walk for leftover Meta/Hole nodes
-  - Phase 2: Re-type-check with `inferType` in a fresh `TCEnv` with current definitions
-  - Catches type mismatches, wrong de Bruijn indices, and incorrect universe levels
-  - Skips Match values (trusted compilation output) and auxiliary declarations
-
-- [x] **Level meta constraint depth normalization** DONE
-  - Fixed bug where level meta constraints from Pi body unification had Var indices at depth+1
-  - `adjustMetaConstraintDepth` in `unify.ts` shifts metaConstraint rhs terms down by 1 when exiting binders
-  - Unit tests in `checker.test.ts` verify correct depth adjustment
-
-- [ ] **Store richer constraint provenance**
-  - Constraints currently carry `{ meta, rhs, ctx }` — add a `source` field
-  - Sources: `'conv'` (CONV check), `'ctor-arg'` (constructor matching), `'propagated'` (decomposition)
-  - The solver can weight constraints differently (propagated constraints are less reliable)
-  - Would eliminate the need for Sort-type exclusion heuristic in Var conflict check
-
-- [ ] **Separate pattern-variable contexts from rigid contexts**
-  - Track which context bindings came from pattern matching vs. lambdas/pi-binders
-  - Pattern variables may be substitutable; rigid variables are not
-  - Would prevent false positives in with-clause auxiliaries where pattern vars get duplicated
-
-- [ ] **Unify Var-Var conflict detection into a single function**
-  - Currently split between `areTermsDefinitelyDifferent` (inside constructor args only)
-    and the constraint solver's inline Var check
-  - A single well-tested `areVarsDefinitelyDifferent(varA, ctxA, varB, ctxB)` function
-    would reduce bug surface area
-
-## Tactics
-
-See [TACTICS.md](TACTICS.md) for full documentation.
-
-**Integration Milestones:**
-- [x] Nat Semiring — all 12 properties + `Semiring` record instance
-- [ ] Triangle Sum — prove `sum(1..n) = n(n+1)/2` (direct + tactic proofs)
-- [ ] Leq on Nat — define `Leq`, prove reflexivity, transitivity, antisymmetry
-- [ ] `decEqNat` via tactics — decidable equality using nested cases
-
-**Soundness:**
-- [ ] Add Match case to `checkType` so tactic proof terms get end-to-end validation
-- [ ] Unify tactic `cases` / `induction` case-goal computation with proof-tree replay so both use the same generic refinement logic
-
-**New Tactics:**
-- [ ] Multi-tactic branches: `| Succ m => rewrite h; exact refl`
-- [ ] `have` tactic (intermediate lemmas)
-- [ ] `refine` tactic (exact with holes)
-- [ ] `revert` tactic (opposite of intro)
-- [ ] Tactic combinators: `try`, `repeat`, `<;>`, `<|>`
-
-**IDE Integration:**
-- [ ] Syntax highlighting for tactic blocks
-- [ ] Wire InfoTree into hover/cursor system for goal display
-- [ ] Goal display panel in IDE
-
-## Exploration
-
-- [ ] Explore ways to make TCEnv more monadic / more ergonomic
+- [ ] Paper-style density is in (short goals inline, long ones display, the
+      edited row expands) — keep tuning as real proofs get longer.

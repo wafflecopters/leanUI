@@ -1,9 +1,0 @@
-@test success
-@name "Exists : impredicative inductive in Prop (witness lives in Type)"
-
--- The classic test of impredicative inductive: the witness sits in Type
--- but Exists itself lives in Prop. Without impredicative inductive, this
--- would fail the universe constraint (Type's level > Prop's level).
-
-inductive Exists : {A : Type} -> (P : A -> Prop) -> Prop where
-  introExists : {A : Type} -> {P : A -> Prop} -> (witness : A) -> P witness -> Exists P

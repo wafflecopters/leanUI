@@ -2,6 +2,9 @@ import { defineConfig } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 import { pluginTypeCheck } from '@rsbuild/plugin-type-check';
 
+// Lean bridge port — keep in sync with server/index.ts (default 3457, env-overridable).
+const leanBridgePort = process.env.LEAN_BRIDGE_PORT ?? '3457';
+
 export default defineConfig({
   plugins: [
     pluginReact(),
@@ -24,7 +27,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'http://localhost:3001',
+        target: `http://localhost:${leanBridgePort}`,
         changeOrigin: true,
       },
     },

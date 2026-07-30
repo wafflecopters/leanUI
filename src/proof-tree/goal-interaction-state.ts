@@ -1,17 +1,7 @@
-import type { DefinitionsMap } from '../compiler/term';
-import type { GoalPath, InteractiveGoal } from './interactive-goal';
-import type { TypedProofContext, InductiveMap } from './goal-computation';
+import type { GoalPath } from './interactive-goal-types';
 import type { IntroToken } from './proof-prose';
 import type { ProofNodeId } from './proof-tree';
-import {
-  computeSelectedBinderSuggestionsForToken,
-  computeSelectedHypSuggestions,
-  computeTacticSuggestions,
-  mergeGoalSuggestions,
-  type KernelGoalInfo,
-  type RewriteProgress,
-  type TacticSuggestion,
-} from './tactic-suggestions';
+import type { TacticSuggestion } from './suggestion-types';
 
 /** A binder selected by clicking a variable name in the proof prose view. */
 export interface SelectedBinder {
@@ -118,45 +108,12 @@ export function updateGoalInteractionEditingNames(
   };
 }
 
-export function computeGoalInteractionSuggestions(
-  state: GoalInteractionState,
-  interactiveGoal: InteractiveGoal | null,
-  definitions: DefinitionsMap | undefined,
-  kernelGoal: KernelGoalInfo | undefined,
-  inductiveMap?: InductiveMap,
-  rewriteProgress?: RewriteProgress | null,
-): readonly TacticSuggestion[] {
-  if (state.selectedBinder) {
-    return computeSelectedBinderSuggestionsForToken(
-      state.selectedBinder.token.name,
-      state.selectedBinder.token.rawType,
-      kernelGoal,
-      inductiveMap,
-    );
-  }
-
-  if (!state.selectedPath || !interactiveGoal) return [];
-  const syncSuggestions = computeTacticSuggestions(
-    state.selectedPath,
-    interactiveGoal,
-    definitions,
-    kernelGoal,
-  );
-  return mergeGoalSuggestions([], syncSuggestions, rewriteProgress?.suggestions ?? []);
-}
-
-export function computeGoalInteractionHypothesisSuggestions(
-  state: GoalInteractionState,
-  context: TypedProofContext | null,
-  definitions: DefinitionsMap | undefined,
-): readonly TacticSuggestion[] {
-  if (state.selectedHyp === null || !context?.kernelGoal || !definitions) return [];
-  const hyp = context.hypotheses[state.selectedHyp];
-  if (!hyp) return [];
-  return computeSelectedHypSuggestions(
-    hyp.name,
-    state.selectedHyp,
-    context.kernelGoal,
-    definitions,
-  );
-}
+/**
+ * Suggestions at the selected subterm / hypothesis used to be computed HERE, by
+ * ranking and trialling candidates against the in-process TT kernel. The Lean
+ * backend does it properly instead — `src/controller/candidates.ts` proposes and
+ * `validate.ts` trials each one at the real cursor, so only tactics Lean
+ * actually accepts are offered — and hands the results to the view. This module
+ * is now purely the SELECTION state: what the user clicked, and what they are
+ * editing.
+ */

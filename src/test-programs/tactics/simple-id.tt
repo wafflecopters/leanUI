@@ -1,6 +1,0 @@
-@test success
-@name "Simple identity with tactics"
-
-simpleId : {A : Type} -> A -> A := by
-  intros A a
-  exact a

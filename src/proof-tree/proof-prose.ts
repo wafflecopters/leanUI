@@ -8,8 +8,7 @@
  */
 
 import { ProofNode, ProofNodeId, CaseNode, ExactNode } from './proof-tree';
-import { NodeGoalInfo, TypedHypothesis } from './goal-computation';
-import { TTerm } from '../compiler/surface';
+import { NodeGoalInfo, TypedHypothesis } from './goal-types';
 import { renderNameLatex } from './name-latex';
 
 /** Walk a byProof subtree to extract the proof expression string.
@@ -41,7 +40,6 @@ export interface IntroToken {
   readonly nameLatex: string;   // e.g., "n" or "\\mathit{ih}"
   readonly nameIndex: number;   // index into IntrosNode.names (for editIntroName)
   readonly typeLatex: string;   // shared type LaTeX for the group
-  readonly rawType?: TTerm;     // for extractTypeHead → induction check
 }
 
 /** A group of variables sharing the same type in an intro line. */
@@ -59,8 +57,8 @@ export type ProseItemKind =
   | { tag: 'inductionHeader'; scrutinee: string; scrutineeLatex?: string; isCases?: boolean }
   | { tag: 'caseHeader'; labelLatex: string; isBaseCase: boolean; constructorParamNames?: readonly string[]; constructorName?: string; scrutinee?: string; isCases?: boolean }
   | { tag: 'exact'; exprLatex: string; solved: boolean; goalLatex?: string; error?: string; proofExprLatex?: string; isValueType?: boolean }
-  | { tag: 'hole'; goalLatex?: string; isValueType?: boolean }
-  | { tag: 'simp'; lemmas: readonly string[]; stepCount: number; preGoalLatex?: string; goalLatex?: string }
+  | { tag: 'hole'; goalLatex?: string; isValueType?: boolean; solved?: boolean }
+  | { tag: 'simp'; lemmas: readonly string[]; stepCount: number; preGoalLatex?: string; goalLatex?: string; error?: string }
   | { tag: 'have'; name: string; expr: string; typeLatex?: string; proofExprLatex?: string; preGoalLatex?: string; goalLatex?: string; error?: string; hasProofTree?: boolean }
   | { tag: 'suffices'; name: string; goalLatex?: string; byExprLatex?: string }
   | { tag: 'subgoalHeader'; label: string; goalLatex?: string; isValueType?: boolean }
@@ -144,7 +142,7 @@ function renderIntroLatex(
 
 /**
  * Build structured intro groups with per-variable metadata for clickable tokens.
- * Each group contains variables sharing the same type, with rawType for induction checks.
+ * Each group contains the variables sharing one type.
  */
 function buildIntroGroups(
   parentHyps: readonly TypedHypothesis[],
@@ -163,7 +161,6 @@ function buildIntroGroups(
         nameLatex: texName(name),
         nameIndex: nameIdx,
         typeLatex: g.typeLatex,
-        rawType: hyp?.rawType,
       };
       nameIdx++;
       return token;
@@ -190,6 +187,9 @@ function isSyntheticNestedInduction(node: ProofNode): boolean {
 // ============================================================================
 
 function isChainNode(node: ProofNode): node is (ProofNode & { tag: 'unfold' | 'fold' | 'rewrite' }) {
+  // A conditional rewrite (with side goals) is NOT a plain chain step — it
+  // renders as its own item with branches, so it must terminate the chain.
+  if (node.tag === 'rewrite' && node.sideGoals && node.sideGoals.length > 0) return false;
   return node.tag === 'unfold' || node.tag === 'fold' || node.tag === 'rewrite';
 }
 
@@ -251,13 +251,18 @@ export function generateProofProse(
 
     switch (node.tag) {
       case 'hole': {
-        emit(node.id, depth, { tag: 'hole', goalLatex: info?.goalLatex, isValueType: info?.isValueType });
+        // A hole whose goal Lean reports as already closed (e.g. the
+        // continuation after a `simp` that solved the goal) is DONE, not an open
+        // obligation — flag it so the view shows ✓ rather than a stray `?`.
+        emit(node.id, depth, { tag: 'hole', goalLatex: info?.goalLatex, isValueType: info?.isValueType, solved: info?.validation?.status === 'solved' });
         break;
       }
 
       case 'exact': {
         const solved = info?.validation?.status === 'solved';
-        const error = info?.validation?.status === 'error' ? info.validation.message : undefined;
+        // Error from the TT validator (validation) OR the Lean round-trip
+        // (tacticError) — so a failing `exact` shows red in the structured editor.
+        const error = (info?.validation?.status === 'error' ? info.validation.message : undefined) ?? info?.tacticError;
         emit(node.id, depth, { tag: 'exact', exprLatex: node.expr, solved, goalLatex: info?.goalLatex, error, proofExprLatex: info?.proofExprLatex, isValueType: info?.isValueType });
         if (solved) {
           emit(node.id, depth, { tag: 'qed' });
@@ -286,6 +291,31 @@ export function generateProofProse(
       case 'unfold':
       case 'fold':
       case 'rewrite': {
+        // A CONDITIONAL rewrite leaves side goals (the lemma's premises). Render
+        // it as a single step, then the rewritten goal continues inline, and
+        // each side goal becomes a labeled branch — so the obligation (e.g.
+        // `0 ≤ a` from summationSplit's `i ≤ n`) is visible right here rather
+        // than surfacing later. (Not flattened into a calc chain.)
+        if (node.tag === 'rewrite' && node.sideGoals && node.sideGoals.length > 0) {
+          const childInfo = goalMap.get(node.child.id);
+          emit(node.id, depth, {
+            tag: 'rewrite',
+            name: node.name,
+            reverse: node.reverse,
+            occurrences: node.occurrences,
+            equationLatex: info?.unifiedEquationLatex,
+            preGoalLatex: info?.goalLatex,
+            goalLatex: childInfo?.goalLatex,
+            error: info?.tacticError,
+          });
+          walk(node.child, depth); // rewritten (main) goal continues inline
+          const many = node.sideGoals.length > 1;
+          node.sideGoals.forEach((sg, i) => {
+            const sgInfo = goalMap.get(sg.id);
+            walkBranch(node.id, many ? `Side goal ${i + 1}` : 'Side goal', sgInfo?.goalLatex, sg, depth, sgInfo?.isValueType);
+          });
+          break;
+        }
         const { steps, tail } = collectChain(node, goalMap);
         const tailInfo = goalMap.get(tail.id);
 
@@ -421,7 +451,18 @@ export function generateProofProse(
         emit(node.id, depth, { tag: 'inductionHeader', scrutinee: node.scrutinee, scrutineeLatex: info?.scrutineeLatex, isCases: node.isCases });
         for (let i = 0; i < node.cases.length; i++) {
           const c = node.cases[i];
-          const isBaseCase = !c.constructorParamNames || c.constructorParamNames.length === 0;
+          let isBaseCase = !c.constructorParamNames || c.constructorParamNames.length === 0;
+          // The Lean path produces bullet-cases with no recorded constructor
+          // params, so the heuristic above would call every case a "base case".
+          // Recover the distinction generically (no hard-coded constructor names)
+          // from the goal state: a case that introduces hypotheses NOT present in
+          // the induction's incoming goal (the constructor's recursive args / the
+          // induction hypothesis) is the inductive step, not a base case.
+          if (isBaseCase) {
+            const parentHyps = new Set((info?.hypotheses ?? []).map((h) => h.name));
+            const caseHyps = goalMap.get(c.id)?.hypotheses ?? [];
+            if (caseHyps.some((h) => !parentHyps.has(h.name))) isBaseCase = false;
+          }
           // Prefer the registry-aware label computed by goal-computation
           // (so nested `@syntax` like `MkDPair → witness ...` applies).
           const registryLabel = goalMap.get(c.id)?.caseLabelLatex;
@@ -506,6 +547,7 @@ export function generateProofProse(
           stepCount: node.steps.length,
           preGoalLatex: info?.goalLatex,
           goalLatex: childGoalLatex,
+          error: info?.tacticError,
         });
         // Steps are already replayed by the engine; just recurse into child
         walk(node.child, depth);

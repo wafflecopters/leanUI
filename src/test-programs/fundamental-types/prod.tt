@@ -1,5 +1,0 @@
-@test success
-@name "Prod: binary product type"
-
-inductive Prod : Type -> Type -> Type where
-  Pair : (A : Type) -> (B : Type) -> A -> B -> Prod A B

@@ -1,6 +1,0 @@
-@test success
-@name "Nat: basic definition"
-
-inductive Nat : Type where
-  Zero : Nat
-  Succ : Nat -> Nat
