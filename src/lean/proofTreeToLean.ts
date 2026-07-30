@@ -235,6 +235,14 @@ function emitNode(em: Emitter, node: ProofNode, depth: number): void {
       if (named) {
         em.emit(depth, `${kw} ${node.scrutinee} with`, node.id);
         for (const c of node.cases) emitNamedCase(em, c, depth);
+      } else if (node.cases.length === 1) {
+        // A LONE unnamed case is a freshly-inserted split that Lean hasn't
+        // reported on yet. Print its body as a plain continuation, the same
+        // convention bare `constructor` uses — a `·` bullet would FOCUS the
+        // first goal, which hides the others from the trial and makes the
+        // split look like it produced one branch when it produced two.
+        em.emit(depth, `${kw} ${node.scrutinee}`, node.id);
+        emitChild(em, node.cases[0].body, depth);
       } else {
         em.emit(depth, `${kw} ${node.scrutinee}`, node.id);
         for (const c of node.cases) emitBulletCase(em, c, depth);

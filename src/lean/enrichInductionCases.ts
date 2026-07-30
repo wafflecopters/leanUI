@@ -92,6 +92,10 @@ export function enrichInductionCaseNames(
       body,
       constructorName: ctorName,
       constructorParamNames: args,
+      // The DISPLAY label too, not just the printed alternative: a placeholder
+      // case reads "Case ?" in the prose and the outline until something gives
+      // it a name, and the name Lean just told us is that name.
+      ...(c.label === '?' || c.label.trim().length === 0 ? { label: ctorName } : {}),
       ...(ihNames.length ? { ihNames } : {}),
     };
   };

@@ -383,3 +383,110 @@ export function rankByGoalOverlap(
   scored.sort((a, b) => b.score - a.score);
   return scored.filter((s) => s.keep).slice(0, cap).map((s) => s.c);
 }
+
+// ── comparing two values ────────────────────────────────────────────────────
+
+/** A "compare these two" move: `cases <lemma> <a> <b>`. */
+export interface ComparisonSplit {
+  readonly lemma: string;
+  readonly left: string;
+  readonly right: string;
+}
+
+/**
+ * The explicit binder groups and ordinary premises of a function type, in order.
+ */
+function binderShape(prettyType: string): {
+  explicitGroups: Array<{ names: string[]; type: string }>;
+  hasPremise: boolean;
+} {
+  let rest = stripForall(prettyType);
+  const explicitGroups: Array<{ names: string[]; type: string }> = [];
+  let hasPremise = false;
+  for (;;) {
+    const split = splitTopLevel(rest, ' → ');
+    if (!split) break;
+    const antecedent = split[0].trim();
+    const binder = asBinderGroup(antecedent);
+    if (!binder) {
+      hasPremise = true;
+    } else if (binder.bracket === '(') {
+      const inner = antecedent.slice(1, -1);
+      const colon = splitTopLevel(inner, ' : ');
+      explicitGroups.push({ names: binder.names, type: (colon?.[1] ?? '').trim() });
+    }
+    rest = stripForall(split[1]);
+  }
+  return { explicitGroups, hasPremise };
+}
+
+/** The head constant of an application — `Either (a ≤ b) (b ≤ a)` → `Either`. */
+function headConst(s: string): string | null {
+  const m = s.trim().match(/^([A-Za-z_][A-Za-z0-9_.'α-ωΑ-Ω]*)/);
+  return m ? m[1] : null;
+}
+
+/**
+ * "Compare these two values" — the move that turns two things in scope into a
+ * case split on how they relate.
+ *
+ * The canonical instance is `leTotal : (a b : ℝ) → Either (a ≤ b) (b ≤ a)`,
+ * which is how you get from two deltas to a single one: compare them, and in
+ * each branch you know which is smaller. But nothing here knows about `leTotal`,
+ * ordering, or the reals. The SHAPE is the signal — a lemma that takes exactly
+ * two explicit arguments of one type, asks for nothing else, and returns a value
+ * of an inductive type declared in the file. `cases`-ing that value splits the
+ * proof into the ways those two can relate, whatever the relation is.
+ *
+ * Pairs are offered MOST-RECENT-FIRST, because the values you just introduced
+ * are the ones you are working with: at the point where `deltaF` and `deltaG`
+ * have both been destructured out, they are the last two reals in scope, and
+ * `cases leTotal deltaF deltaG` is the first pill — ahead of the five other
+ * reals (`x0`, `L`, `M`, `ε`) that have been sitting there since the statement.
+ */
+export function comparisonCandidates(
+  declarations: readonly LeanDeclaration[],
+  hypotheses: ReadonlyArray<{ name: string; type: string }>,
+  currentDeclName?: string,
+  // Each candidate costs a Lean trial, and the pair you want is almost always
+  // the most recent one — a couple of alternates is plenty.
+  cap = 3,
+): ComparisonSplit[] {
+  const inductives = new Set(
+    declarations.filter((d) => d.kind === 'inductive').map((d) => d.name),
+  );
+  if (inductives.size === 0) return [];
+
+  // Lemmas of the comparison shape, by the type they compare.
+  const byType = new Map<string, string[]>();
+  for (const d of declarations) {
+    if (d.name === currentDeclName) continue;
+    if (d.kind !== 'def' && d.kind !== 'theorem') continue;
+    const { explicitGroups, hasPremise } = binderShape(d.prettyType);
+    if (hasPremise) continue;
+    if (explicitGroups.length !== 1 || explicitGroups[0].names.length !== 2) continue;
+    const head = headConst(conclusionOf(d.prettyType));
+    if (!head || !inductives.has(head)) continue;
+    const type = explicitGroups[0].type;
+    if (!type) continue;
+    byType.set(type, [...(byType.get(type) ?? []), d.name]);
+  }
+  if (byType.size === 0) return [];
+
+  const out: ComparisonSplit[] = [];
+  for (const [type, lemmas] of byType) {
+    const named = hypotheses
+      .map((h, index) => ({ ...h, index }))
+      .filter((h) => h.type.trim() === type);
+    const pairs: Array<{ left: string; right: string; rank: number }> = [];
+    for (let j = 1; j < named.length; j++) {
+      for (let i = 0; i < j; i++) {
+        // Rank by how recently the LATER of the two appeared, then the earlier.
+        pairs.push({ left: named[i].name, right: named[j].name, rank: named[j].index * 1000 + named[i].index });
+      }
+    }
+    pairs.sort((a, b) => b.rank - a.rank);
+    for (const p of pairs) for (const lemma of lemmas) out.push({ lemma, left: p.left, right: p.right });
+  }
+  return out.slice(0, cap);
+}

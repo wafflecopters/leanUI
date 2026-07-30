@@ -312,6 +312,46 @@ describe('ProofSession against real Lean', () => {
     },
     10 * MINUTES,
   );
+
+  // The move a sum proof needs once it has TWO of something and must produce
+  // one: compare them, and each branch knows which is smaller. Nothing in the
+  // engine knows about `leTotal`, ordering, or the reals — the lemma is found by
+  // its SHAPE (two explicit args of one type, no premises, an inductive result).
+  test(
+    'the seeded limitAdd offers "compare deltaF and deltaG", and taking it opens both branches',
+    async () => {
+      const s = open('limitAdd');
+      await s.refresh();
+
+      // The preset opens mid-proof, with both deltas destructured out.
+      const hyps = s.getState().goal!.hypotheses.map((h) => h.name);
+      expect(hyps).toEqual(expect.arrayContaining(['deltaF', 'deltaG']));
+
+      const cmp = s.getState().suggestions.find((x) => x.tactic.startsWith('cases leTotal'));
+      expect(cmp, `offered: ${s.getState().suggestions.map((x) => x.tactic).join(' | ')}`).toBeDefined();
+      // The two most recent values, not `x0`/`L`/`M` sitting there since the
+      // statement — and Lean says the split leaves two goals.
+      expect(cmp!.tactic).toBe('cases leTotal deltaF deltaG');
+      expect(cmp!.subgoals).toBe(2);
+
+      s.applySuggestion(cmp!.id);
+      await s.refresh();
+
+      // BOTH branches exist. Opening only the focused one (a `·` bullet in the
+      // trial hides the rest) left `right` unproven and the proof broken.
+      const split = findByLabel(s.getState().outline, 'cases leTotal deltaF deltaG')!;
+      expect(split.children).toHaveLength(2);
+      // Named from Lean's own tags, with the dotted prefix stripped:
+      // `eps_delta.mk.mk.left` is the goal tag, but `| left =>` is the alternative.
+      expect(split.children.map((c) => c.branch)).toEqual(['case left', 'case right']);
+      expect(s.proofSource()).toContain('| left a =>');
+      expect(s.proofSource()).toContain('| right a =>');
+
+      // And the file Lean gets back is still clean.
+      expect(s.getState().status.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    },
+    10 * MINUTES,
+  );
 });
 
 /** First outline node with the given label. */

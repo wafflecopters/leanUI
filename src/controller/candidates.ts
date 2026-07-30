@@ -14,6 +14,7 @@
 import type { LeanDeclaration } from '../lean/types';
 import {
   applyCandidates,
+  comparisonCandidates,
   equalityLemmas,
   rankByGoalOverlap,
   unfoldableDefs,
@@ -203,6 +204,20 @@ export function tacticCandidates(input: CandidateInput): LeanSuggestion[] {
       ]
     : [];
 
+  // "Compare these two" — split on how two values in scope relate. The move you
+  // reach for when a proof has produced two of something (two deltas) and needs
+  // one. Most-recent pair first; see comparisonCandidates.
+  const comparisons: LeanSuggestion[] = comparisonCandidates(
+    declarations,
+    input.hypotheses,
+    currentDeclName,
+  ).map(({ lemma, left, right }) => ({
+    id: `lean-compare:${lemma}:${left}:${right}`,
+    label: `compare ${left} and ${right}`,
+    tactic: `cases ${lemma} ${left} ${right}`,
+    kind: 'apply' as const,
+  }));
+
   const assumption: LeanSuggestion[] = [
     { id: 'lean-assumption', label: 'assumption', tactic: 'assumption', kind: 'exact' },
   ];
@@ -260,6 +275,10 @@ export function tacticCandidates(input: CandidateInput): LeanSuggestion[] {
     // them is almost always the move, and nothing else can apply until it is.
     ...intros,
     ...assumption,
+    // Before the lemma searches: when the proof has two of something and needs
+    // one, comparing them is the structural move, and no lemma in the file is
+    // shaped like the goal it leaves.
+    ...comparisons,
     // "Close it outright" before "open it up": a solver that discharges the
     // goal beats `constructor`, which only splits it into more work.
     ...solvers,

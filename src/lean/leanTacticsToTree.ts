@@ -217,7 +217,11 @@ function parseTactic(lines: Line[], pos: { i: number }, level: number, text: str
   }
 
   // induction x with   |   cases x with
-  m = text.match(/^(induction|cases)\s+(\S+)\s+with\s*$/);
+  // The scrutinee may be a whole EXPRESSION, not just a hypothesis name — a
+  // dichotomy split is `cases leTotal deltaF deltaG with …`. The tree and the
+  // printer always allowed that; only this regex didn't, so such a proof parsed
+  // back as a stray raw tactic and lost its case structure on reload.
+  m = text.match(/^(induction|cases)\s+(.+?)\s+with\s*$/);
   if (m) {
     const isCases = m[1] === 'cases';
     const scrutinee = m[2];
@@ -234,7 +238,7 @@ function parseTactic(lines: Line[], pos: { i: number }, level: number, text: str
   // Bare `induction x` / `cases x` (no `with`) followed by `·` bullet cases —
   // the form our printer uses when constructor names aren't known. Each `·` (or
   // `.`) bullet at this indent or deeper starts a case body.
-  m = text.match(/^(induction|cases)\s+(\S+)\s*$/);
+  m = text.match(/^(induction|cases)\s+(.+?)\s*$/);
   if (m) {
     const isCases = m[1] === 'cases';
     const scrutinee = m[2];
@@ -246,8 +250,16 @@ function parseTactic(lines: Line[], pos: { i: number }, level: number, text: str
     ) {
       cases.push(parseBulletCase(lines, pos));
     }
-    // No bullets parsed → keep the bare `induction x` verbatim.
-    if (cases.length === 0) return mkExact(text, true);
+    // No bullets: `cases x` is still a CHAINING tactic — it opens goals, and the
+    // tactics below it prove the first one. Modelled as a single unnamed case
+    // holding that continuation, exactly as bare `constructor` is. (Returning a
+    // raw `exact` here instead made the node TERMINAL: the branches never
+    // appeared and the goal chain stopped dead at the split. `enrichInductionCases`
+    // renames the case, and validation's subgoal count adds the missing branches,
+    // once Lean has reported on it.)
+    if (cases.length === 0) {
+      return mkInduction(scrutinee, [mkCase('?', continuation(lines, pos, level))], isCases);
+    }
     return mkInduction(scrutinee, cases, isCases);
   }
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { applyCandidates, equalityLemmas, rankByGoalOverlap, unfoldableDefs } from './rewriteCandidates';
+import { applyCandidates, comparisonCandidates, equalityLemmas, rankByGoalOverlap, unfoldableDefs } from './rewriteCandidates';
 import type { LeanDeclaration } from './types';
 
 function decl(name: string, prettyType: string, kind: LeanDeclaration['kind'] = 'def'): LeanDeclaration {
@@ -222,5 +222,52 @@ describe('targetOfGoalText', () => {
   test('plain expression text passes through untouched', async () => {
     const { targetOfGoalText } = await import('./rewriteCandidates');
     expect(targetOfGoalText('0 < ε / 2')).toBe('0 < ε / 2');
+  });
+});
+
+describe('comparisonCandidates ("compare these two")', () => {
+  // Exactly what the real-analysis preset reports for these.
+  const LIB = [
+    decl('Either', 'Sort u → Sort v → Sort (max (max 1 u) v)', 'inductive'),
+    decl('leTotal', '{R : Real} → (a b : \u211d) → Either (a \u2264 b) (b \u2264 a)'),
+    // Same shape but PREMISED — not a "just compare them" move.
+    decl('ltTotalOf', '{R : Real} → (a b : \u211d) → a \u2260 b → Either (a < b) (b < a)'),
+    // Two args, but returns data rather than a case split.
+    decl('rmin', '{R : Real} → \u211d → \u211d → \u211d'),
+    // One arg.
+    decl('absCases', '{R : Real} → (a : \u211d) → Either (0 \u2264 a) (a \u2264 0)'),
+  ];
+  // The context at the seeded limitAdd sorry, in scope order.
+  const HYPS = [
+    { name: 'x0', type: '\u211d' },
+    { name: 'L', type: '\u211d' },
+    { name: 'M', type: '\u211d' },
+    { name: '\u03b5', type: '\u211d' },
+    { name: 'epsPos', type: '0 < \u03b5' },
+    { name: 'deltaF', type: '\u211d' },
+    { name: 'fProof', type: 'EpsDeltaWitness f x0 L (\u03b5 / 2) deltaF' },
+    { name: 'deltaG', type: '\u211d' },
+  ];
+
+  test('offers the two most recent values first — the ones you are working with', () => {
+    const out = comparisonCandidates(LIB, HYPS, 'limitAdd');
+    expect(out[0]).toEqual({ lemma: 'leTotal', left: 'deltaF', right: 'deltaG' });
+    // Not x0/L, which have been in scope since the statement.
+    expect(out.map((c) => `${c.left},${c.right}`)).not.toContain('x0,L');
+  });
+
+  test('only lemmas of the comparison SHAPE qualify', () => {
+    const lemmas = new Set(comparisonCandidates(LIB, HYPS, 'limitAdd').map((c) => c.lemma));
+    expect(lemmas).toEqual(new Set(['leTotal']));
+  });
+
+  test('needs two values of the same type in scope', () => {
+    expect(comparisonCandidates(LIB, [{ name: 'deltaF', type: '\u211d' }], 'limitAdd')).toEqual([]);
+    expect(comparisonCandidates(LIB, [{ name: 'h', type: '0 < \u03b5' }], 'limitAdd')).toEqual([]);
+  });
+
+  test('nothing to compare with when the file declares no inductives', () => {
+    const noInductives = LIB.filter((d) => d.kind !== 'inductive');
+    expect(comparisonCandidates(noInductives, HYPS, 'limitAdd')).toEqual([]);
   });
 });

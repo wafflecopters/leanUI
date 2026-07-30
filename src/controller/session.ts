@@ -26,6 +26,7 @@ import {
   clearNode,
   findNode,
   linearize,
+  mkCase,
   mkHole,
   pushState,
   redo as redoHistory,
@@ -535,6 +536,27 @@ export class ProofSession {
         subgoalTags && subgoalTags.length === subgoals
           ? { ...replacement, children, childTags: [...subgoalTags] }
           : { ...replacement, children };
+    }
+    // Same for a case split (`cases leTotal a b`): it parses with ONE unnamed
+    // placeholder case, and Lean's count says how many branches it really
+    // opened. Their names arrive separately, from the goal round-trip
+    // (`enrichInductionCases`).
+    if (
+      subgoals !== undefined && subgoals > 1 &&
+      replacement.tag === 'induction' &&
+      replacement.cases.length === 1 && replacement.cases[0].body.tag === 'hole'
+    ) {
+      // Left UNNAMED on purpose. Lean's goal tags here are full dotted paths
+      // (`eps_delta.mk.mk.left`), and `cases … with | <alt> =>` wants the bare
+      // constructor (`left`) — using the tag verbatim makes Lean reject the
+      // alternative. `enrichInductionCaseNames` already derives the right name
+      // from the same tags on the next round-trip; until then these print as
+      // `·` bullets, which Lean accepts.
+      const label = replacement.cases[0].label;
+      replacement = {
+        ...replacement,
+        cases: Array.from({ length: subgoals }, () => mkCase(label, mkHole())),
+      };
     }
 
     const newRoot = replaceNode(this.proof, this.cursorId, replacement);
