@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { orderApplyBranches } from './orderApplyBranches';
 import { mkApply, mkExact, mkHole, mkIntros, type ProofNode, type ProofNodeId } from '../proof-tree/proof-tree';
-import type { NodeGoalInfo } from '../proof-tree/goal-computation';
+import type { NodeGoalInfo } from '../proof-tree/goal-types';
 
 /** Goal map + text map from `[nodeId, caseTag, target]` triples. */
 function goals(entries: Array<[ProofNodeId, string | undefined, string]>) {

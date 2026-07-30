@@ -1,16 +1,13 @@
 import { BrowserRouter, Route, Routes } from 'react-router-dom';
-import { TextEditorPage } from './components/TextEditorPage';
 import { LeanEditorPage } from './components/LeanEditorPage';
 
 export function AppRoutes() {
   return (
     <Routes>
-      {/* Lean is now THE editor (default). The legacy TT/TTK page stays at
-          /tt-legacy for reference during the migration; removed in M5. */}
+      {/* Lean IS the editor. The legacy TT/TTK page (and the whole TT engine
+          behind it) was deleted in M5 — every route lands here. */}
       <Route path="/" element={<LeanEditorPage />} />
       <Route path="/lean" element={<LeanEditorPage />} />
-      <Route path="/tt-legacy" element={<TextEditorPage />} />
-      <Route path="/text-editor" element={<TextEditorPage />} />
       <Route path="*" element={<LeanEditorPage />} />
     </Routes>
   );

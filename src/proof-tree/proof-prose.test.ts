@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach } from 'vitest';
 import { generateProofProse, ProseItem } from './proof-prose';
 import { ProofNode, resetProofIds, freshProofId } from './proof-tree';
-import { NodeGoalInfo } from './goal-computation';
+import { NodeGoalInfo } from './goal-types';
 
 beforeEach(() => {
   resetProofIds(100);

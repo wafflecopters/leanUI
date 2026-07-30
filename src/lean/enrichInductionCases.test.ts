@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { enrichInductionCaseNames } from './enrichInductionCases';
 import type { ProofNode } from '../proof-tree/proof-tree';
-import type { NodeGoalInfo } from '../proof-tree/goal-computation';
+import type { NodeGoalInfo } from '../proof-tree/goal-types';
 
 function mkGoalMap(entries: [number, Partial<NodeGoalInfo>][]): Map<number, NodeGoalInfo> {
   const m = new Map<number, NodeGoalInfo>();

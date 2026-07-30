@@ -1,8 +1,0 @@
-@test success
-@name "Sort ω (omega level) parses and elaborates"
-
--- Sort ω is the universe of all finite-level types. Used internally by
--- the type checker as the result level when a Pi's codomain level depends
--- on a bound level variable. Surface support: parses to Sort(UOmega).
-sortOmega : Type ω
-sortOmega = Sort ω

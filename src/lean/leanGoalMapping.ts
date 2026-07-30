@@ -13,7 +13,7 @@
  */
 import type { ProofNode, ProofNodeId } from '../proof-tree/proof-tree';
 import { rewriteSideGoals } from '../proof-tree/proof-tree';
-import type { NodeGoalInfo, TypedHypothesis } from '../proof-tree/goal-computation';
+import type { NodeGoalInfo, TypedHypothesis } from '../proof-tree/goal-types';
 import type { LeanGoal, LeanGoalState, LeanMessage } from './types';
 import type { NodeRange } from './proofTreeToLean';
 import { taggedToLatex } from './codeWithInfos';

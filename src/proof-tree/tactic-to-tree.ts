@@ -5,8 +5,7 @@
  * uses tactic mode (`:= by ...`).
  */
 
-import { TacticCommand, TTerm, CasePattern, allPatternVarNames } from '../compiler/surface';
-import { desugarNestedCaseBranch } from '../compiler/case-pattern-desugar';
+import { TacticCommand, CasePattern, allPatternVarNames, desugarNestedCaseBranch } from './tactic-command';
 import {
   ProofNode,
   mkHole,
@@ -25,74 +24,17 @@ import {
 import { renderNameLatex } from './name-latex';
 
 /**
- * Render a surface TTerm to a string for display in proof tree nodes.
- * Handles the common cases seen in tactic arguments.
- * Uses "fun name =>" for lambdas (not "\name =>") to avoid KaTeX
- * interpreting \name as a LaTeX command.
- * Tracks binder context so Var nodes render as their binder name.
+ * A tactic argument IS its source text — see ./tactic-command. These two
+ * helpers remain as named seams because call sites read better for it: one
+ * means "this argument should be a bare identifier", the other "render this
+ * argument for display".
  */
-export function surfaceTermToString(term: TTerm, ctx: string[] = []): string {
-  switch (term.tag) {
-    case 'Const':
-      return term.name;
-    case 'App': {
-      // Collect spine: f a1 a2 a3 → "f a1 a2 a3" or "(f a1 a2 a3)"
-      const parts: string[] = [];
-      let cur: TTerm = term;
-      while (cur.tag === 'App') {
-        parts.unshift(surfaceTermToString(cur.arg, ctx));
-        cur = cur.fn;
-      }
-      parts.unshift(surfaceTermToString(cur, ctx));
-      return `(${parts.join(' ')})`;
-    }
-    case 'Binder':
-      if (term.binderKind.tag === 'BLamTT') {
-        const newCtx = [term.name, ...ctx];
-        return `(fun ${term.name} => ${surfaceTermToString(term.body, newCtx)})`;
-      }
-      return '?';
-    case 'Var':
-      return ctx[term.index] ?? `v${term.index}`;
-    case 'Hole':
-      return '_';
-    case 'NatLit':
-      return term.value.toString();
-    case 'RatLit': {
-      // Integer-shaped: emit a bare signed integer literal (the re-parser
-      // recognises `-N` as a signed literal and `N` as a NatLit).
-      if (term.den === 1n) return term.num.toString();
-      // Rational with a terminating decimal expansion: multiply num and den
-      // until den becomes a power of 10 (possible iff den's only prime
-      // factors are 2 and 5). For canonical RatLits (gcd-reduced by the
-      // parser), this lets `1.5` → RatLit(3, 2) round-trip back to `1.5`.
-      let num = term.num;
-      let den = term.den;
-      let pow10 = 0;
-      // Strip 2s and 5s from den; multiply num accordingly.
-      while (den % 2n === 0n) { den /= 2n; num *= 5n; pow10++; }
-      while (den % 5n === 0n) { den /= 5n; num *= 2n; pow10++; }
-      if (den === 1n) {
-        const absNum = num < 0n ? -num : num;
-        const numDigits = absNum.toString().padStart(pow10 + 1, '0');
-        const intPart = numDigits.slice(0, -pow10) || '0';
-        const fracPart = numDigits.slice(-pow10);
-        const sign = num < 0n ? '-' : '';
-        return `${sign}${intPart}.${fracPart}`;
-      }
-      // Non-terminating: fall back to explicit fraction syntax.
-      return `(${term.num.toString()} / ${term.den.toString()})`;
-    }
-    default:
-      return '?';
-  }
+export function surfaceTermToString(arg: string): string {
+  return arg;
 }
 
-/** Extract a name from a TTerm that should be an identifier (Const node). */
-function extractName(term: TTerm | undefined): string | undefined {
-  if (!term) return undefined;
-  if (term.tag === 'Const') return term.name;
-  return undefined;
+function extractName(arg: string | undefined): string | undefined {
+  return arg;
 }
 
 function buildFocusedChildren(
@@ -304,7 +246,7 @@ function buildInductionNode(cmd: TacticCommand): ProofNode {
 }
 
 /** Build a chain of RewriteNodes from multiple rw/erw arguments. */
-function buildRewriteChain(args: readonly TTerm[], continuation: ProofNode, enhanced: boolean): ProofNode {
+function buildRewriteChain(args: readonly string[], continuation: ProofNode, enhanced: boolean): ProofNode {
   if (args.length === 0) return continuation;
   let result = continuation;
   for (let i = args.length - 1; i >= 0; i--) {
@@ -314,7 +256,7 @@ function buildRewriteChain(args: readonly TTerm[], continuation: ProofNode, enha
 }
 
 /** Build a chain of UnfoldNodes from multiple unfold arguments. */
-function buildUnfoldChain(args: readonly TTerm[], continuation: ProofNode): ProofNode {
+function buildUnfoldChain(args: readonly string[], continuation: ProofNode): ProofNode {
   if (args.length === 0) return continuation;
   let result = continuation;
   for (let i = args.length - 1; i >= 0; i--) {
@@ -324,7 +266,7 @@ function buildUnfoldChain(args: readonly TTerm[], continuation: ProofNode): Proo
 }
 
 /** Build a chain of FoldNodes from multiple fold arguments. */
-function buildFoldChain(args: readonly TTerm[], continuation: ProofNode): ProofNode {
+function buildFoldChain(args: readonly string[], continuation: ProofNode): ProofNode {
   if (args.length === 0) return continuation;
   let result = continuation;
   for (let i = args.length - 1; i >= 0; i--) {

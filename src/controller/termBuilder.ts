@@ -9,7 +9,7 @@
  * Framework-free: it implements `TermBuilderProvider`, which the React
  * `TermBuilderView` consumes, but it holds no React itself.
  */
-import type { TermBuilderDisplay, TermBuilderProvider } from '../proof-tree/term-builder';
+import type { TermBuilderDisplay, TermBuilderProvider } from '../proof-tree/term-builder-types';
 import {
   appliedExpr,
   appliedExprWithHoles,

@@ -15,7 +15,7 @@ import {
   type ProofNode,
   type ProofNodeId,
 } from '../proof-tree/proof-tree';
-import type { NodeGoalInfo } from '../proof-tree/goal-computation';
+import type { NodeGoalInfo } from '../proof-tree/goal-types';
 import type { NodeStatus, OutlineNode } from './types';
 
 /** The one-line rendering of a step — what the REPL prints, near enough to the

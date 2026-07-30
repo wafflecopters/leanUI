@@ -15,7 +15,7 @@
  * it is left alone, so this converges in a single pass and never oscillates.
  */
 import { type ProofNode, type CaseNode, type ProofNodeId, splitCaseParams } from '../proof-tree/proof-tree';
-import type { NodeGoalInfo } from '../proof-tree/goal-computation';
+import type { NodeGoalInfo } from '../proof-tree/goal-types';
 
 /** Lean's inaccessible-name marker (LATIN CROSS, U+271D). */
 const DAGGER = '✝';

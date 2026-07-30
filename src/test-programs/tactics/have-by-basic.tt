@@ -1,8 +1,0 @@
-@test success
-@name "have by: basic forward reasoning"
-@import preambles/nat.tt
-@import preambles/equal-simple.tt
-
-testHaveByBasic : Equal Zero Zero := by
-  have h : Equal Zero Zero by exact refl
-  exact h

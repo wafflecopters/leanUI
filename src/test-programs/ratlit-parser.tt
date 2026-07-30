@@ -1,8 +1,0 @@
-@test failure
-@name "RatLit: decimal without @impl=rat fails inference"
-@error "no @impl=rat type registered"
-
--- Without an @impl=rat type in scope, a bare decimal can't be inferred.
--- (With @impl=rat, see ratlit-impl.tt — `1.5` infers to Rat.)
-test : Type
-test = 1.5

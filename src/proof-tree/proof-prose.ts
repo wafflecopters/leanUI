@@ -8,8 +8,7 @@
  */
 
 import { ProofNode, ProofNodeId, CaseNode, ExactNode } from './proof-tree';
-import { NodeGoalInfo, TypedHypothesis } from './goal-computation';
-import { TTerm } from '../compiler/surface';
+import { NodeGoalInfo, TypedHypothesis } from './goal-types';
 import { renderNameLatex } from './name-latex';
 
 /** Walk a byProof subtree to extract the proof expression string.
@@ -41,7 +40,6 @@ export interface IntroToken {
   readonly nameLatex: string;   // e.g., "n" or "\\mathit{ih}"
   readonly nameIndex: number;   // index into IntrosNode.names (for editIntroName)
   readonly typeLatex: string;   // shared type LaTeX for the group
-  readonly rawType?: TTerm;     // for extractTypeHead → induction check
 }
 
 /** A group of variables sharing the same type in an intro line. */
@@ -144,7 +142,7 @@ function renderIntroLatex(
 
 /**
  * Build structured intro groups with per-variable metadata for clickable tokens.
- * Each group contains variables sharing the same type, with rawType for induction checks.
+ * Each group contains the variables sharing one type.
  */
 function buildIntroGroups(
   parentHyps: readonly TypedHypothesis[],
@@ -163,7 +161,6 @@ function buildIntroGroups(
         nameLatex: texName(name),
         nameIndex: nameIdx,
         typeLatex: g.typeLatex,
-        rawType: hyp?.rawType,
       };
       nameIdx++;
       return token;

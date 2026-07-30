@@ -1,4 +1,0 @@
-@syntax @impl=nat
-inductive Nat : Type where
-  Zero : Nat
-  Succ : Nat -> Nat

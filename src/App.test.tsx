@@ -2,9 +2,6 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 
-vi.mock('./components/TextEditorPage', () => ({
-  TextEditorPage: () => <div>Mock Text Editor Page</div>,
-}));
 vi.mock('./components/LeanEditorPage', () => ({
   LeanEditorPage: () => <div>Mock Lean Editor Page</div>,
 }));
@@ -40,11 +37,11 @@ describe('App routes', () => {
     expect(render('/inductive')).toContain('Mock Lean Editor Page');
   });
 
-  test('the legacy TT editor stays reachable at /tt-legacy', () => {
-    expect(render('/tt-legacy')).toContain('Mock Text Editor Page');
-  });
-
-  test('the legacy TT editor stays reachable at /text-editor', () => {
-    expect(render('/text-editor')).toContain('Mock Text Editor Page');
+  // M5 deleted the TT engine and its page: the old routes must not 404 or
+  // render something else — they fall through to the Lean editor like any
+  // unknown path.
+  test('the retired TT routes now land on the Lean editor', () => {
+    expect(render('/tt-legacy')).toContain('Mock Lean Editor Page');
+    expect(render('/text-editor')).toContain('Mock Lean Editor Page');
   });
 });

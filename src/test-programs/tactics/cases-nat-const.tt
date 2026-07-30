@@ -1,9 +1,0 @@
-@test success
-@name "cases on Nat returning constant"
-@import preambles/nat.tt
-
-constZero : (n : Nat) -> Nat := by
-  intro n
-  cases n
-  exact Zero
-  exact Zero

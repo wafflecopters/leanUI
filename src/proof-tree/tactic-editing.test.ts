@@ -1,24 +1,14 @@
-import { mkConstTT, mkPiTT } from '../compiler/surface';
-import { addDefinition, createDefinitionsMap, type MetaVar } from '../compiler/term';
 import { beforeEach, describe, expect, test } from 'vitest';
-import type { TTKContext, TTKTerm } from '../compiler/kernel';
-import { createInitialEngine } from '../tactics/tacticsEngine';
-import type { InductiveInfo } from './goal-computation';
 import { createInitialState, mkCase, mkExact, mkHave, mkHole, mkInduction, mkIntros, mkSimp, resetProofIds } from './proof-tree';
-import { buildProjectionApplicationSource, buildHaveTacticCommands } from './tactic-command-bridge';
+import { buildHaveTacticCommands } from './tactic-command-bridge';
 import {
   addInductionCaseInProofTree,
   applyManualProofTreeTactic,
   applySuggestionToProofTreeState,
   clearProofTreeNode,
-  clearHaveTermBuilderSlotInProofTree,
   commitHaveExprSourceInProofTree,
   commitProofTreeBinderRename,
   convertMathEditorSourceToUnicode,
-  fillHaveTermBuilderSlotInProofTree,
-  hoistTermBuilderSlotToHave,
-  insertHaveFromTermBuilder,
-  openHaveExprTermBuilder,
   renameHaveBindingInProofTree,
   renameCaseParamInProofTree,
   renameIntroTokenInProofTree,
@@ -31,20 +21,6 @@ import {
 } from './tactic-editing';
 
 beforeEach(() => resetProofIds());
-
-const nat: TTKTerm = { tag: 'Const', name: 'Nat' };
-
-function mkPi(name: string, domain: TTKTerm, body: TTKTerm): TTKTerm {
-  return { tag: 'Binder', binderKind: { tag: 'BPi' }, name, domain, body };
-}
-
-const natInfo: InductiveInfo = {
-  name: 'Nat',
-  constructors: [
-    { name: 'Zero', type: mkConstTT('Nat') },
-    { name: 'Succ', type: mkPiTT(mkConstTT('Nat'), mkConstTT('Nat'), 'n') },
-  ],
-};
 
 describe('applySuggestionToProofTreeState', () => {
   test('uses edited intro names through the shared action helper', () => {
@@ -114,31 +90,12 @@ describe('applySuggestionToProofTreeState', () => {
     expect(next?.root.tag).toBe('have');
     if (!next || next.root.tag !== 'have') return;
     expect(next.root.name).toBe('h');
-    expect(next.root.expr).toBe('(Limit.eps_delta hLim _ _)');
+    // Verbatim, and no longer wrapped in parentheses: the TT round-trip used to
+    // parse the argument into a term and re-print it, which added parens around
+    // every application. An argument is Lean source now and passes through.
+    expect(next.root.expr).toBe('Limit.eps_delta hLim _ _');
   });
 
-  test('hypothesis destructure suggestions share the command bridge and preserve cases metadata', () => {
-    const state = createInitialState();
-    const destructCtx = {
-      hypotheses: [{ name: 'n', rawType: mkConstTT('Nat'), type: 'Nat' }],
-      goal: '?',
-    } as any;
-    const next = applySuggestionToProofTreeState(state, {
-      id: 'induction-n',
-      label: 'Destructure n',
-      labelLatex: '\\text{cases } n',
-      description: 'Destructure the hypothesis',
-    }, {
-      typedContext: destructCtx,
-      inductiveMap: new Map([['Nat', natInfo]]),
-    });
-
-    expect(next?.root.tag).toBe('induction');
-    if (!next || next.root.tag !== 'induction') return;
-    expect(next.root.isCases).toBe(true);
-    expect(next.root.cases.map(c => c.constructorName)).toEqual(['Zero', 'Succ']);
-    expect(next.root.cases[1].constructorParamNames).toEqual(['n1']);
-  });
 });
 
 describe('applyManualProofTreeTactic', () => {
@@ -146,8 +103,6 @@ describe('applyManualProofTreeTactic', () => {
     const state = createInitialState();
     const tacticMode: ProofTreeManualTacticMode = { tactic: 'apply' };
     const next = applyManualProofTreeTactic(state, tacticMode, 'zeroLeOne', {
-      kernelType: {} as any,
-      definitions: {} as any,
       computeApplySubgoalCount: () => 0,
     });
 
@@ -236,135 +191,10 @@ describe('have editing helpers', () => {
     expect(convertMathEditorSourceToUnicode('\\delta')).toBe('δ');
   });
 
-  test('shared have term-builder helpers reopen and sync the have expression', () => {
-    let defs = createDefinitionsMap();
-    defs = addDefinition(
-      defs,
-      'pairNat',
-      mkPi('x', nat, mkPi('y', nat, nat)),
-    );
 
-    const ctx: TTKContext = [{ name: 'n', type: nat }];
-    const goalMeta: MetaVar = { ctx, type: nat, solution: undefined };
-    const kernelGoal = { engine: createInitialEngine(nat, ctx, defs), goal: goalMeta };
-
-    const child = mkHole();
-    const state = {
-      root: mkHave('h', 'pairNat n ?', child),
-      cursor: { nodeId: child.id },
-    };
-
-    const opened = openHaveExprTermBuilder(state.root.expr, kernelGoal, defs);
-    expect(opened).not.toBeNull();
-    if (!opened) return;
-    expect(opened.builderState.slots[0].sourceExpr).toBe('n');
-
-    const filled = fillHaveTermBuilderSlotInProofTree(
-      state,
-      state.root.id,
-      opened.builderState,
-      1,
-      '\\alpha',
-      kernelGoal,
-      defs,
-    );
-    expect(filled).not.toBeNull();
-    if (!filled) return;
-    expect(filled.builderState.slots[1].sourceExpr).toBe('α');
-    expect(filled.state.root.tag).toBe('have');
-    if (filled.state.root.tag !== 'have') return;
-    expect(filled.state.root.expr).toBe('pairNat (n) (α)');
-
-    const cleared = clearHaveTermBuilderSlotInProofTree(
-      filled.state,
-      state.root.id,
-      filled.builderState,
-      1,
-      kernelGoal,
-      defs,
-    );
-    expect(cleared).not.toBeNull();
-    if (!cleared) return;
-    expect(cleared.builderState.slots[1].value).toBeNull();
-    expect(cleared.state.root.tag).toBe('have');
-    if (cleared.state.root.tag !== 'have') return;
-    expect(cleared.state.root.expr).toBe('pairNat (n) ?');
-  });
-
-  test('hoistTermBuilderSlotToHave inserts a new interactive have and rewrites the parent expr', () => {
-    const currentHave = mkHave('main', 'foo (old)', mkHole());
-    const state = {
-      root: currentHave,
-      cursor: { nodeId: currentHave.id },
-    };
-
-    const next = hoistTermBuilderSlotToHave(state, currentHave.id, {
-      fnName: 'foo',
-      fnDisplayName: 'foo',
-      slots: [{
-        index: 0,
-        name: 'x',
-        type: { tag: 'Const', name: 'Nat' } as any,
-        typeLatex: 'Nat',
-        implicit: false,
-        metaId: '?m',
-        value: { tag: 'Const', name: 'old' } as any,
-        sourceExpr: 'old',
-      }],
-      slotSuggestions: new Map(),
-      engine: {} as any,
-      goalCtx: [],
-    }, 0);
-
-    expect(next).not.toBeNull();
-    expect(next?.root.tag).toBe('have');
-    if (!next || next.root.tag !== 'have') return;
-    expect(next.root.name).toBe('hx');
-    expect(next.root.expr).toBe('?');
-    expect(next.root.proofTree?.tag).toBe('hole');
-    expect(next.root.child.tag).toBe('have');
-    if (next.root.child.tag === 'have') {
-      expect(next.root.child.expr).toBe('foo (hx)');
-    }
-  });
 });
 
 describe('hypothesis suggestion helpers', () => {
-  test('projection helper builds source with placeholders for remaining explicit args', () => {
-    const definitions = createDefinitionsMap();
-    definitions.terms.set('Limit.eps_delta', {
-      name: 'Limit.eps_delta',
-      namedArgMap: new Map([['R', 0]]),
-      type: {
-        tag: 'Binder',
-        name: 'R',
-        binderKind: { tag: 'BPi' },
-        domain: { tag: 'Sort', level: { tag: 'ULit', n: 0 } },
-        body: {
-          tag: 'Binder',
-          name: 'limitProof',
-          binderKind: { tag: 'BPi' },
-          domain: { tag: 'Const', name: 'Limit' },
-          body: {
-            tag: 'Binder',
-            name: 'eps',
-            binderKind: { tag: 'BPi' },
-            domain: { tag: 'Const', name: 'Carrier' },
-            body: {
-              tag: 'Binder',
-              name: 'epsPos',
-              binderKind: { tag: 'BPi' },
-              domain: { tag: 'Const', name: 'Rlt' },
-              body: { tag: 'Const', name: 'Sigma' },
-            },
-          },
-        },
-      } as any,
-    });
-
-    expect(buildProjectionApplicationSource('Limit.eps_delta', 'hLim', definitions))
-      .toBe('Limit.eps_delta hLim ? ?');
-  });
 
   test('hypothesis exact/apply suggestions reuse the shared bridge helpers', () => {
     const state = createInitialState();
@@ -574,31 +404,6 @@ describe('shared structural editing helpers', () => {
     expect(collapsedSimp.cursor.nodeId).toBe(simpRoot.id);
   });
 
-  test('insertHaveFromTermBuilder commits a shared have command from filled slots', () => {
-    const state = createInitialState();
-    const next = insertHaveFromTermBuilder(state, {
-      fnName: 'pairNat',
-      fnDisplayName: 'pairNat',
-      slots: [{
-        index: 0,
-        name: 'x',
-        type: { tag: 'Const', name: 'Nat' } as any,
-        typeLatex: 'Nat',
-        implicit: false,
-        metaId: '?m0',
-        value: { tag: 'Const', name: 'n' } as any,
-        sourceExpr: 'n',
-      }],
-      slotSuggestions: new Map(),
-      engine: {} as any,
-      goalCtx: [],
-    });
-
-    expect(next?.root.tag).toBe('have');
-    if (!next || next.root.tag !== 'have') return;
-    expect(next.root.name).toBe('h');
-    expect(next.root.expr).toBe('(pairNat n)');
-  });
 });
 
 describe('tray input normalization (latex → unicode)', () => {

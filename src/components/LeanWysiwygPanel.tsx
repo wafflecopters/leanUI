@@ -8,7 +8,7 @@ import { ProofTreeEditor } from './ProofTreeEditor';
 import { proofSeedBlock } from '../lean/extractTacticBlock';
 import { applySubgoalCount, rewriteSideGoalCount } from '../lean/rewriteCandidates';
 import { taggedToInteractiveGoal } from '../lean/leanInteractiveGoal';
-import type { TacticSuggestion } from '../proof-tree/tactic-suggestions';
+import type { TacticSuggestion } from '../proof-tree/suggestion-types';
 import { useProofSession } from '../controller/useProofSession';
 import { createTermBuilderProvider } from '../controller/termBuilder';
 

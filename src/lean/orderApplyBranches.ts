@@ -23,7 +23,7 @@
  * they're refreshed.
  */
 import type { ProofNode, ProofNodeId } from '../proof-tree/proof-tree';
-import type { NodeGoalInfo } from '../proof-tree/goal-computation';
+import type { NodeGoalInfo } from '../proof-tree/goal-types';
 import { orderedSubgoalTags } from './leanSuggestions';
 
 export interface OrderApplyBranchesInput {

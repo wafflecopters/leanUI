@@ -12,7 +12,7 @@
 
 import React, { useRef, useEffect, useCallback } from 'react';
 import katex from 'katex';
-import { GoalPath, InteractiveGoal } from '../proof-tree/interactive-goal';
+import { GoalPath, InteractiveGoal } from '../proof-tree/interactive-goal-types';
 
 export interface InteractiveGoalViewProps {
   readonly goal: InteractiveGoal;

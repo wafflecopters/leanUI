@@ -1,22 +1,12 @@
-import { parseExpr } from '../parser/parser';
 import {
   TacticCommand,
   type CaseBranch,
-  mkConstTT,
-  mkHoleTT,
-  mkPropTT,
   allPatternVarNames,
   flatParamsToCasePatterns,
-  type TTerm,
-} from '../compiler/surface';
-import { createNamedArgLookup, type DefinitionsMap } from '../compiler/term';
+} from './tactic-command';
 import type { CaseNode, InductionNode, ProofNode, ProofTreeState } from './proof-tree';
 import { findNode, formatCaseLabelLatex, mkCase, replaceNode } from './proof-tree';
 import { findFirstHole, tacticCommandsToProofTree } from './tactic-to-tree';
-
-function parseSourceExpr(expr: string): TTerm {
-  return parseExpr(expr);
-}
 
 function mkFocusCommand(tactics: readonly TacticCommand[]): TacticCommand {
   return { name: 'focus', args: [], focusedTactics: [...tactics] };
@@ -29,7 +19,7 @@ export function buildApplyTacticCommands(
 ): TacticCommand[] {
   const head: TacticCommand = isConstructor
     ? { name: 'constructor', args: [] }
-    : { name: 'apply', args: [mkConstTT(name)] };
+    : { name: 'apply', args: [name] };
 
   if (numChildren === 0) {
     return [{ ...head, focusedTactics: [] }];
@@ -45,11 +35,9 @@ export function buildHaveTacticCommands(
   name: string,
   expr: string,
 ): TacticCommand[] {
-  const inferredTypeHole = mkHoleTT('_have_type', mkHoleTT('_have_type_type', mkPropTT()));
-  return [{
-    name: 'have',
-    args: [mkConstTT(name), inferredTypeHole, parseSourceExpr(expr)],
-  }];
+  // Slot 1 is the have's TYPE: `_` means "infer it", which is what an untyped
+  // `have h := e` asks for.
+  return [{ name: 'have', args: [name, '_', expr] }];
 }
 
 export interface StructuredInductionCaseInfo {
@@ -72,7 +60,7 @@ export function buildInductionTacticCommands(
 ): TacticCommand[] {
   return [{
     name: tacticName,
-    args: [parseSourceExpr(scrutinee)],
+    args: [scrutinee],
     caseBranches: caseInfos.map(info => ({
       constructor: info.constructorName,
       params: flatParamsToCasePatterns(info.paramNames),
@@ -107,30 +95,6 @@ export function rebuildInductionNodeFromCaseBranches(
   return { ...node, cases };
 }
 
-export function buildProjectionApplicationSource(
-  projName: string,
-  hypName: string,
-  definitions: DefinitionsMap,
-): string | null {
-  const namedArgLookup = createNamedArgLookup(definitions);
-  const namedArgMap = namedArgLookup(projName);
-  const numImplicit = namedArgMap?.size ?? 0;
-  const termDef = definitions.terms.get(projName);
-  if (!termDef?.type) return null;
-
-  let numExplicit = 0;
-  let t = termDef.type;
-  let idx = 0;
-  while (t.tag === 'Binder' && t.binderKind.tag === 'BPi') {
-    if (idx >= numImplicit) numExplicit++;
-    t = t.body;
-    idx++;
-  }
-
-  const holes = Array(Math.max(0, numExplicit - 1)).fill('?').join(' ');
-  return holes ? `${projName} ${hypName} ${holes}` : `${projName} ${hypName}`;
-}
-
 export function applyTacticCommandsAtCursor(
   state: ProofTreeState,
   commands: readonly TacticCommand[],
@@ -156,30 +120,30 @@ export function proofTreeToTacticCommands(node: ProofNode): TacticCommand[] {
       const introName = node.names.length === 1 ? 'intro' : 'intros';
       const intro: TacticCommand = {
         name: introName,
-        args: node.names.map(name => mkConstTT(name)),
+        args: [...node.names],
       };
       return [intro, ...proofTreeToTacticCommands(node.child)];
     }
 
     case 'exact':
-      return [{ name: 'exact', args: [parseSourceExpr(node.expr)] }];
+      return [{ name: 'exact', args: [node.expr] }];
 
     case 'unfold':
       return [
-        { name: 'unfold', args: [mkConstTT(node.name)] },
+        { name: 'unfold', args: [node.name] },
         ...proofTreeToTacticCommands(node.child),
       ];
 
     case 'fold':
       return [
-        { name: 'fold', args: [mkConstTT(node.name)] },
+        { name: 'fold', args: [node.name] },
         ...proofTreeToTacticCommands(node.child),
       ];
 
     case 'rewrite': {
       const rewrite: TacticCommand = {
         name: 'rewrite',
-        args: [parseSourceExpr(node.name)],
+        args: [node.name],
         rewriteOptions: {
           reverse: node.reverse,
           occurrences: node.occurrences,
@@ -194,7 +158,7 @@ export function proofTreeToTacticCommands(node: ProofNode): TacticCommand[] {
       const isConstructor = node.name === 'constructor';
       const head: TacticCommand = isConstructor
         ? { name: 'constructor', args: [] }
-        : { name: 'apply', args: [parseSourceExpr(node.name)] };
+        : { name: 'apply', args: [node.name] };
 
       if (node.children.length === 0) {
         return [{ ...head, focusedTactics: [] }];
@@ -215,7 +179,7 @@ export function proofTreeToTacticCommands(node: ProofNode): TacticCommand[] {
       }));
       return [{
         name: tacticName,
-        args: [parseSourceExpr(node.scrutinee)],
+        args: [node.scrutinee],
         caseBranches,
       }];
     }
@@ -228,7 +192,7 @@ export function proofTreeToTacticCommands(node: ProofNode): TacticCommand[] {
         return [
           {
             name: 'have',
-            args: [mkConstTT(node.name), parseSourceExpr(node.typeExpr)],
+            args: [node.name, node.typeExpr],
             focusedTactics: proofTreeToTacticCommands(node.proofTree),
           },
           ...proofTreeToTacticCommands(node.child),
@@ -245,7 +209,7 @@ export function proofTreeToTacticCommands(node: ProofNode): TacticCommand[] {
       return [
         {
           name: 'suffices',
-          args: [mkConstTT(node.name), parseSourceExpr(node.typeExpr)],
+          args: [node.name, node.typeExpr],
           focusedTactics: closing,
         },
         ...proofTreeToTacticCommands(node.child),
@@ -257,7 +221,7 @@ export function proofTreeToTacticCommands(node: ProofNode): TacticCommand[] {
         return [
           {
             name: 'simp',
-            args: node.lemmas.map(name => mkConstTT(name)),
+            args: [...node.lemmas],
           },
           ...proofTreeToTacticCommands(node.child),
         ];

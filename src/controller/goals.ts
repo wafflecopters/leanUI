@@ -7,7 +7,7 @@
  * analyze, and map Lean's range-keyed goal states back onto proof node ids.
  */
 import type { ProofNode, ProofNodeId } from '../proof-tree/proof-tree';
-import type { NodeGoalInfo, TypedProofContext } from '../proof-tree/goal-computation';
+import type { NodeGoalInfo, TypedProofContext } from '../proof-tree/goal-types';
 import type { LeanGoal, LeanGoalState, LeanMessage } from '../lean/types';
 import { assembleProofInSource } from '../lean/assembleProofDecl';
 import { collectBranchTags, mapLeanGoalsToNodes } from '../lean/leanGoalMapping';

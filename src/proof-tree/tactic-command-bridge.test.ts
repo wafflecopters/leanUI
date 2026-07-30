@@ -1,11 +1,5 @@
 import { beforeEach, describe, expect, test } from 'vitest';
-import {
-  mkConstTT,
-  flatParamsToCasePatterns,
-  type TacticCommand,
-  type TTerm,
-} from '../compiler/surface';
-import { createDefinitionsMap } from '../compiler/term';
+import { flatParamsToCasePatterns, type TacticCommand } from './tactic-command';
 import {
   createInitialState,
   mkApply,
@@ -27,15 +21,14 @@ import {
   buildApplyTacticCommands,
   buildHaveTacticCommands,
   buildInductionTacticCommands,
-  buildProjectionApplicationSource,
   proofTreeToTacticCommands,
   rebuildInductionNodeFromCaseBranches,
 } from './tactic-command-bridge';
 
-const cst = (name: string): TTerm => ({ tag: 'Const', name });
-const app = (fn: TTerm, arg: TTerm): TTerm => ({ tag: 'App', fn, arg });
+const cst = (name: string): string => name;
+const app = (fn: string, arg: string): string => `(${fn} ${arg})`;
 
-function tc(name: string, args: TTerm[] = [], opts?: Partial<TacticCommand>): TacticCommand {
+function tc(name: string, args: string[] = [], opts?: Partial<TacticCommand>): TacticCommand {
   return { name, args, ...opts };
 }
 
@@ -111,44 +104,6 @@ describe('applyTacticCommandsAtCursor', () => {
     if (!next || next.root.tag !== 'have') return;
     expect(next.root.name).toBe('h');
     expect(next.root.expr).toBe('refl');
-  });
-});
-
-describe('buildProjectionApplicationSource', () => {
-  test('fills remaining explicit projection arguments with placeholders', () => {
-    const definitions = createDefinitionsMap();
-    definitions.terms.set('Limit.eps_delta', {
-      name: 'Limit.eps_delta',
-      namedArgMap: new Map([['R', 0]]),
-      type: {
-        tag: 'Binder',
-        name: 'R',
-        binderKind: { tag: 'BPi' },
-        domain: { tag: 'Sort', level: { tag: 'ULit', n: 0 } },
-        body: {
-          tag: 'Binder',
-          name: 'limitProof',
-          binderKind: { tag: 'BPi' },
-          domain: { tag: 'Const', name: 'Limit' },
-          body: {
-            tag: 'Binder',
-            name: 'eps',
-            binderKind: { tag: 'BPi' },
-            domain: { tag: 'Const', name: 'Carrier' },
-            body: {
-              tag: 'Binder',
-              name: 'epsPos',
-              binderKind: { tag: 'BPi' },
-              domain: { tag: 'Const', name: 'Rlt' },
-              body: { tag: 'Const', name: 'Sigma' },
-            },
-          },
-        },
-      } as any,
-    });
-
-    expect(buildProjectionApplicationSource('Limit.eps_delta', 'hLim', definitions))
-      .toBe('Limit.eps_delta hLim ? ?');
   });
 });
 

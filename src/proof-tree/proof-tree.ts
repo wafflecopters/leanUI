@@ -160,11 +160,9 @@ export interface HaveNode {
   readonly expr: string;
   /** Optional explicit type annotation as source expression (for display fallback). */
   readonly typeExpr?: string;
-  /** Optional kernel-level type term (avoids lossy string roundtrip for proofTree goals). */
-  readonly typeKernel?: import('../compiler/kernel').TTKTerm;
   /** Optional interactive proof subtree (alternative to flat expr string).
-   *  When present, this subtree proves the have's type interactively via tactics.
-   *  The proofTree's goal is the have's type (typeKernel or typeExpr). */
+   *  When present, this subtree proves the have's type interactively via
+   *  tactics; the subtree's goal is the have's type (`typeExpr`). */
   readonly proofTree?: ProofNode;
   /** The continuation proof after have introduces the binding. */
   readonly child: ProofNode;
@@ -204,7 +202,7 @@ export interface CaseNode {
    *  `| MkDPair δF (MkPair posF boundF) =>`. Used by the replay layer to render
    *  the case label through the @syntax registry (so MkDPair can pick up the
    *  user's `\text{witness} $x, \text{and} $y` notation). */
-  readonly casePatterns?: readonly import('../compiler/surface').CasePattern[];
+  readonly casePatterns?: readonly import('./tactic-command').CasePattern[];
 }
 
 /** Info needed to create a case with constructor metadata. */
@@ -259,8 +257,8 @@ export function mkExact(expr: string, raw = false): ExactNode {
   return raw ? { ...node, raw: true } : node;
 }
 
-export function mkHave(name: string, expr: string, child: ProofNode, typeExpr?: string, proofTree?: ProofNode, typeKernel?: import('../compiler/kernel').TTKTerm): HaveNode {
-  return { tag: 'have', id: freshProofId(), name, expr, child, typeExpr, proofTree, typeKernel };
+export function mkHave(name: string, expr: string, child: ProofNode, typeExpr?: string, proofTree?: ProofNode): HaveNode {
+  return { tag: 'have', id: freshProofId(), name, expr, child, typeExpr, proofTree };
 }
 
 export function mkSuffices(name: string, typeExpr: string, child: ProofNode, byProof?: ProofNode): SufficesNode {
@@ -343,7 +341,7 @@ export function mkCase(
   label: string, body: ProofNode,
   constructorName?: string, constructorParamNames?: readonly string[],
   labelLatex?: string,
-  casePatterns?: readonly import('../compiler/surface').CasePattern[],
+  casePatterns?: readonly import('./tactic-command').CasePattern[],
 ): CaseNode {
   const node: CaseNode = { tag: 'case', id: freshProofId(), label, body, collapsed: false };
   if (constructorName !== undefined) (node as any).constructorName = constructorName;
@@ -721,12 +719,15 @@ export function applyInduction(
   state: ProofTreeState,
   scrutinee: string,
   caseLabels: readonly string[],
+  /** `cases` (destructure) vs `induction` — they print differently, so the
+   *  caller's choice has to survive into the node. */
+  tacticName: 'induction' | 'cases' = 'induction',
 ): ProofTreeState | null {
   const node = findNode(state.root, state.cursor.nodeId);
   if (!node || node.tag !== 'hole') return null;
 
   const cases = caseLabels.map(label => mkCase(label, mkHole()));
-  const induction = mkInduction(scrutinee, cases);
+  const induction = mkInduction(scrutinee, cases, tacticName === 'cases');
   const newRoot = replaceNode(state.root, state.cursor.nodeId, induction);
 
   // Cursor → first case's body hole

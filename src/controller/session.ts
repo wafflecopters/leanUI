@@ -42,7 +42,7 @@ import {
   applyManualProofTreeTactic,
   type ProofTreeManualTacticMode,
 } from '../proof-tree/tactic-editing';
-import type { NodeGoalInfo, TypedProofContext } from '../proof-tree/goal-computation';
+import type { NodeGoalInfo, TypedProofContext } from '../proof-tree/goal-types';
 import type { LeanDeclaration, LeanGoalState } from '../lean/types';
 import { leanTacticsToTree } from '../lean/leanTacticsToTree';
 import { proofSeedBlock } from '../lean/extractTacticBlock';
@@ -593,10 +593,8 @@ export class ProofSession {
   runTactic(tactic: ProofTreeManualTacticMode['tactic'], value: string): DispatchResult {
     let next = applyManualProofTreeTactic(this.history.current, { tactic } as ProofTreeManualTacticMode, value, {
       typedContext: this.typedContext,
-      // Lean-backed counters: they estimate from the lemma's type and need no
-      // TT kernel term.
-      leanApply: true,
-      computeApplySubgoalCount: (_root, _cursor, _kt, _defs, name) =>
+      // Both counters read the lemma's type out of Lean's declaration list.
+      computeApplySubgoalCount: (_root, _cursor, name) =>
         applySubgoalCount(this.declarations, name),
       computeRewriteSideGoalCount: (name) => rewriteSideGoalCount(this.declarations, name),
     });

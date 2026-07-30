@@ -1,9 +1,0 @@
-@test success
-@name "cases on Bool creates True and False branches"
-@import preambles/bool.tt
-
-boolId : (b : Bool) -> Bool := by
-  intro b
-  cases b
-  exact True
-  exact False

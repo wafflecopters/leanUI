@@ -1,9 +1,0 @@
-@test success
-@name "False elimination: 0 ctors → vacuously singleton, can land anywhere"
-@import preambles/nat.tt
-
-inductive False : Prop where
-
--- False.elim : False -> any type. Zero clauses = no actual elimination,
--- so the universe restriction is vacuous. Must be accepted.
-falseElimNat : False -> Nat

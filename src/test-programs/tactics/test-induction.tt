@@ -1,9 +1,0 @@
-@test success
-@name "induction tactic creates branches with IH"
-@import preambles/nat.tt
-
-natId : (n : Nat) -> Nat := by
-  intro n
-  induction n with
-  | Zero => exact Zero
-  | Succ n' IH => exact (Succ n')

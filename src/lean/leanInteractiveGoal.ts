@@ -11,7 +11,7 @@ import { codeWithInfosToMathRow } from './codeWithInfos';
 import { renderStaticLatex } from '../math-editor/render';
 import { mkGroup, mkRow, type MathNode, type MathRow } from '../math-editor/types';
 import type { TaggedText } from './types';
-import type { InteractiveGoal, SubtermInfo } from '../proof-tree/interactive-goal';
+import type { InteractiveGoal, SubtermInfo } from '../proof-tree/interactive-goal-types';
 
 /** Prefix InteractiveGoalView recognizes as a clickable subterm id. */
 const GOAL_PREFIX = 'goal-';
@@ -103,11 +103,7 @@ export function taggedToInteractiveGoal(target: TaggedText): InteractiveGoal {
         case 'Group': {
           const pos = n.htmlId.startsWith('subexpr:') ? n.htmlId.slice('subexpr:'.length) : n.htmlId;
           const goalId = goalIdForPos(pos);
-          subtermMap.set(goalId, {
-            htmlId: goalId,
-            term: { tag: 'Hole' } as unknown as SubtermInfo['term'],
-            isAppOfConst: false,
-          });
+          subtermMap.set(goalId, { htmlId: goalId, isAppOfConst: false });
           return mkGroup(goalId, relabel(n.children));
         }
         case 'Frac':

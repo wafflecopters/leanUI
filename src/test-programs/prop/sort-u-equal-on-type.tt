@@ -1,8 +1,0 @@
-@test success
-@name "Sort u Equal: instantiated at u=1 equates data (Type)"
-@import preambles/equality-sort.tt
-@import preambles/nat.tt
-
--- Same Equal — different universe. At u = 1 it equates Nats.
-zeroEqZero : Equal Zero Zero
-zeroEqZero = refl

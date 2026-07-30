@@ -1,9 +1,0 @@
-@test success
-@name "modusPonens with apply"
-
--- Tests that implicit type arguments work correctly with apply tactic
--- Previously had de Bruijn indexing issues in dependent contexts, now fixed!
-modusPonens : {A B : Type} -> A -> (A -> B) -> B := by
-  intros A B a f
-  apply f
-  exact a

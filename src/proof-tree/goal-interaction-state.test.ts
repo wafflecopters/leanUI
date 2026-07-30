@@ -1,11 +1,8 @@
 import { describe, expect, test } from 'vitest';
-import { mkConstTT } from '../compiler/surface';
-import type { InductiveInfo } from './goal-computation';
 import {
   EMPTY_GOAL_INTERACTION_STATE,
   clearGoalInteractionAfterApply,
   clearGoalInteractionForCursorChange,
-  computeGoalInteractionSuggestions,
   selectGoalInteractionBinder,
   selectGoalInteractionPath,
   startGoalInteractionEditing,
@@ -23,7 +20,6 @@ function mkSelectedBinder(name = 'n'): SelectedBinder {
       nameLatex: name,
       nameIndex: 0,
       typeLatex: '\\mathbb{N}',
-      rawType: mkConstTT('Nat'),
     },
   };
 }
@@ -118,19 +114,4 @@ describe('goal interaction state', () => {
     expect(selectGoalInteractionPath(state, null).editingNames).toBeNull();
   });
 
-  test('binder selection suggestions route through the shared binder path', () => {
-    const suggestions = computeGoalInteractionSuggestions(
-      {
-        ...EMPTY_GOAL_INTERACTION_STATE,
-        selectedBinder: mkSelectedBinder('n'),
-      },
-      null,
-      undefined,
-      undefined,
-      new Map<string, InductiveInfo>([['Nat', { name: 'Nat', constructors: [] }]]),
-      null,
-    );
-
-    expect(suggestions.map(s => s.id)).toEqual(['induction-n']);
-  });
 });

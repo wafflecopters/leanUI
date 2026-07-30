@@ -1,3 +1,0 @@
-inductive Either : Type -> Type -> Type where
-  Left : {A B : Type} -> A -> Either A B
-  Right : {A B : Type} -> B -> Either A B

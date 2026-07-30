@@ -1,17 +1,6 @@
-import { buildReverseRegistry } from '../math-editor/tt-to-math';
-import { parseExpr } from '../parser/parser';
-import { SyntaxRegistry } from '../math-editor/syntax-registry';
-import { mkConstTT } from '../compiler/surface';
-import { type DefinitionsMap } from '../compiler/term';
 import { normalizeBinderNameInput } from './name-latex';
 import { parseHaveInput } from './haveInput';
-import { runSimp } from '../tactics/simp-tactic';
-import {
-  TypedProofContext,
-  type InductiveMap,
-  extractTypeHead,
-  generateCaseInfos,
-} from './goal-computation';
+import type { TypedProofContext } from './goal-types';
 import type { ProofNodeId, ProofTreeState } from './proof-tree';
 import {
   applyInduction,
@@ -31,17 +20,7 @@ import {
   toggleSimpCollapse,
   updateCase,
 } from './proof-tree';
-import {
-  buildExprFromSlots,
-  buildTermBuilderRuntime,
-  clearTermBuilderSlotFromGoal,
-  fillTermBuilderSlotFromGoal,
-  kernelTermToSource,
-  openTermBuilderFromSourceExpr,
-  type TermBuilderKernelGoalRuntime,
-  type TermBuilderState,
-} from './term-builder';
-import type { RewriteSuggestion, TacticSuggestion } from './tactic-suggestions';
+import type { RewriteSuggestion, TacticSuggestion } from './suggestion-types';
 import {
   applyTacticCommandsAtCursor,
   buildCaseBranchFromCaseNode,
@@ -64,33 +43,23 @@ export type ProofTreeManualTacticMode =
   | { tactic: 'have' };
 
 export interface ProofTreeSuggestionContext {
-  readonly inductiveMap?: InductiveMap;
-  readonly registry?: SyntaxRegistry;
   readonly typedContext?: TypedProofContext | null;
-  readonly definitions?: DefinitionsMap;
   readonly editingNames?: readonly string[] | null;
   readonly editingSuggestionId?: string | null;
 }
 
 export interface ProofTreeManualTacticContext {
   readonly typedContext?: TypedProofContext | null;
-  readonly inductiveMap?: InductiveMap;
-  readonly registry?: SyntaxRegistry;
-  readonly kernelType?: import('../compiler/kernel').TTKTerm;
-  readonly definitions?: DefinitionsMap;
+  /** How many subgoals `apply <name>` opens — answered from the lemma's type in
+   *  the Lean declaration list (`src/lean/rewriteCandidates.ts`). */
   readonly computeApplySubgoalCount?: (
     root: ProofTreeState['root'],
     cursorNodeId: number,
-    kernelType: import('../compiler/kernel').TTKTerm | undefined,
-    definitions: import('../compiler/term').DefinitionsMap | undefined,
     name: string,
   ) => number;
-  /** Lean backend: `computeApplySubgoalCount` estimates from the lemma type and
-   *  needs no kernelType/definitions. */
-  readonly leanApply?: boolean;
-  /** Lean backend: how many SIDE GOALS `rw [name]` leaves (the lemma's
-   *  premises). When > 0, the rewrite is created with that many side-goal holes
-   *  so a conditional rewrite's obligations are visible immediately. */
+  /** How many SIDE GOALS `rw [name]` leaves (the lemma's premises). When > 0 the
+   *  rewrite is created with that many side-goal holes, so a conditional
+   *  rewrite's obligations are visible immediately. */
   readonly computeRewriteSideGoalCount?: (name: string) => number;
 }
 
@@ -98,11 +67,6 @@ export type ProofTreeBinderRenameTarget =
   | { tag: 'have'; nodeId: ProofNodeId }
   | { tag: 'introToken'; nodeId: ProofNodeId; nameIndex: number }
   | { tag: 'caseParam'; nodeId: ProofNodeId; paramIndex: number };
-
-export interface ProofTreeHaveTermBuilderEditResult {
-  readonly state: ProofTreeState;
-  readonly builderState: TermBuilderState;
-}
 
 function splitNames(value: string): string[] {
   return value.split(/[\s,]+/).filter(Boolean);
@@ -119,38 +83,20 @@ export function convertMathEditorSourceToUnicode(source: string): string {
   return source.replace(/\\[a-zA-Z]+/g, match => LATEX_TO_UNICODE[match] ?? match);
 }
 
-function buildInductionTacticCommandsFromContext(
-  scrutinee: string,
-  ctx: Pick<ProofTreeManualTacticContext, 'typedContext' | 'inductiveMap' | 'registry'>,
-  tacticName: 'induction' | 'cases',
-) {
-  const hyp = ctx.typedContext?.hypotheses.find(h => h.name === scrutinee);
-  const rawType = hyp?.rawType;
-  const headName = rawType ? extractTypeHead(rawType) : null;
-  const indInfo = headName && ctx.inductiveMap ? ctx.inductiveMap.get(headName) : undefined;
-
-  if (indInfo) {
-    const rev = ctx.registry ? buildReverseRegistry(ctx.registry) : undefined;
-    const ctxNames = ctx.typedContext?.hypotheses.map(h => h.name);
-    const ctorInfos = generateCaseInfos(scrutinee, indInfo, rev, ctxNames);
-    return buildInductionTacticCommands(scrutinee, ctorInfos, tacticName);
-  }
-
-  return null;
-}
-
+/**
+ * Open a `cases`/`induction` on a scrutinee.
+ *
+ * The TT path looked the scrutinee's type up in an in-process inductive map to
+ * name the constructor cases up front. On Lean the names come from the goal
+ * round-trip instead (`enrichInductionCases` renames the placeholder cases once
+ * Lean reports them), so this starts with placeholder branches.
+ */
 function applyInductionFromContext(
   state: ProofTreeState,
   scrutinee: string,
-  ctx: Pick<ProofTreeManualTacticContext, 'typedContext' | 'inductiveMap' | 'registry'>,
   tacticName: 'induction' | 'cases',
 ): ProofTreeState | null {
-  const commands = buildInductionTacticCommandsFromContext(scrutinee, ctx, tacticName);
-  if (commands) {
-    return applyTacticCommandsAtCursor(state, commands);
-  }
-
-  return applyInduction(state, scrutinee, [`${scrutinee} = 0`, `${scrutinee} = k'`]);
+  return applyInduction(state, scrutinee, [`${scrutinee} = 0`, `${scrutinee} = k'`], tacticName);
 }
 
 function inferInductionSuggestionTacticName(
@@ -358,60 +304,6 @@ export function commitHaveExprSourceInProofTree(
   return updateHaveExprInProofTree(state, haveNodeId, newExpr);
 }
 
-export function openHaveExprTermBuilder(
-  sourceExpr: string,
-  kernelGoal: TermBuilderKernelGoalRuntime | null | undefined,
-  definitions?: DefinitionsMap,
-) {
-  const runtime = buildTermBuilderRuntime(kernelGoal, definitions);
-  if (!runtime) return null;
-  return openTermBuilderFromSourceExpr(sourceExpr, runtime);
-}
-
-export function fillHaveTermBuilderSlotInProofTree(
-  state: ProofTreeState,
-  haveNodeId: ProofNodeId,
-  builderState: TermBuilderState,
-  slotIndex: number,
-  sourceExpr: string,
-  kernelGoal: TermBuilderKernelGoalRuntime | null | undefined,
-  definitions?: DefinitionsMap,
-): ProofTreeHaveTermBuilderEditResult | null {
-  const rebuilt = fillTermBuilderSlotFromGoal(
-    builderState,
-    slotIndex,
-    convertMathEditorSourceToUnicode(sourceExpr),
-    kernelGoal,
-    definitions,
-  );
-  if (!rebuilt) return null;
-  const nextState = rebuilt.expr
-    ? (updateHaveExprInProofTree(state, haveNodeId, rebuilt.expr) ?? state)
-    : state;
-  return { state: nextState, builderState: rebuilt.builderState };
-}
-
-export function clearHaveTermBuilderSlotInProofTree(
-  state: ProofTreeState,
-  haveNodeId: ProofNodeId,
-  builderState: TermBuilderState,
-  slotIndex: number,
-  kernelGoal: TermBuilderKernelGoalRuntime | null | undefined,
-  definitions?: DefinitionsMap,
-): ProofTreeHaveTermBuilderEditResult | null {
-  const rebuilt = clearTermBuilderSlotFromGoal(
-    builderState,
-    slotIndex,
-    kernelGoal,
-    definitions,
-  );
-  if (!rebuilt) return null;
-  const nextState = rebuilt.expr
-    ? (updateHaveExprInProofTree(state, haveNodeId, rebuilt.expr) ?? state)
-    : state;
-  return { state: nextState, builderState: rebuilt.builderState };
-}
-
 export function renameHaveBindingInProofTree(
   state: ProofTreeState,
   haveNodeId: ProofNodeId,
@@ -461,75 +353,11 @@ export function commitProofTreeBinderRename(
   }
 }
 
-function buildHoistedHaveName(builderState: TermBuilderState, slotIndex: number): string {
-  const slot = builderState.slots[slotIndex];
-  const baseName = (slot?.name && slot.name !== '_' && !slot.name.startsWith('_'))
-    ? slot.name
-    : `${slotIndex}`;
-  return `h${baseName}`;
-}
-
-export function hoistTermBuilderSlotToHave(
-  state: ProofTreeState,
-  haveNodeId: ProofNodeId,
-  builderState: TermBuilderState,
-  slotIndex: number,
-  definitions?: DefinitionsMap,
-): ProofTreeState | null {
-  const slot = builderState.slots[slotIndex];
-  if (!slot) return null;
-
-  const target = findNode(state.root, haveNodeId);
-  if (!target) return null;
-
-  const hoistName = buildHoistedHaveName(builderState, slotIndex);
-  // Zonk the slot type before serializing so meta solutions (e.g. the
-  // implicit `R` of `rdiv` / `rtwo` in `ε/2`) get folded in. Without this
-  // step the source string ends up with literal `?` placeholders for any
-  // meta that the term-builder created but didn't get to solve at slot
-  // construction time — surfacing as `ε/?` in the hoisted have type.
-  const zonkedSlotType = typeof builderState.engine.zonkTerm === 'function'
-    ? builderState.engine.zonkTerm(slot.type, builderState.goalCtx.length)
-    : slot.type;
-  const typeSourceExpr = kernelTermToSource(zonkedSlotType, builderState.goalCtx, definitions);
-  const proofHole = mkHole();
-  const inserted = mkHave(hoistName, '?', target, typeSourceExpr, proofHole);
-  let updated: ProofTreeState = {
-    root: replaceNode(state.root, haveNodeId, inserted),
-    cursor: state.cursor,
-  };
-
-  const newSlots = [...builderState.slots];
-  newSlots[slotIndex] = {
-    ...slot,
-    value: { tag: 'Const', name: hoistName },
-    sourceExpr: hoistName,
-  };
-  const expr = buildExprFromSlots(builderState.fnName, newSlots, builderState.goalCtx);
-  if (!expr) return updated;
-
-  return updateHaveExprInProofTree(updated, haveNodeId, expr) ?? updated;
-}
-
 export function clearProofTreeNode(
   state: ProofTreeState,
   nodeId: ProofNodeId,
 ): ProofTreeState | null {
   return clearNode(state, nodeId);
-}
-
-export function insertHaveFromTermBuilder(
-  state: ProofTreeState,
-  builderState: TermBuilderState,
-  haveName = 'h',
-): ProofTreeState | null {
-  const expr = buildExprFromSlots(
-    builderState.fnName,
-    builderState.slots,
-    builderState.goalCtx,
-  );
-  if (!expr) return null;
-  return applyTacticCommandsAtCursor(state, buildHaveTacticCommands(haveName, expr));
 }
 
 export function renameIntroTokenInProofTree(
@@ -640,27 +468,27 @@ export function applySuggestionToProofTreeState(
   }
 
   if (suggestion.id === 'exact-refl') {
-    return applyTacticCommandsAtCursor(state, [{ name: 'exact', args: [mkConstTT('refl')] }]);
+    return applyTacticCommandsAtCursor(state, [{ name: 'exact', args: ['refl'] }]);
   }
 
   if (suggestion.id.startsWith('unfold-')) {
     const name = suggestion.id.slice('unfold-'.length);
-    return applyTacticCommandsAtCursor(state, [{ name: 'unfold', args: [mkConstTT(name)] }]);
+    return applyTacticCommandsAtCursor(state, [{ name: 'unfold', args: [name] }]);
   }
 
   if (suggestion.id.startsWith('induction-')) {
     const scrutinee = suggestion.id.slice('induction-'.length);
-    return applyInductionFromContext(state, scrutinee, ctx, inferInductionSuggestionTacticName(suggestion));
+    return applyInductionFromContext(state, scrutinee, inferInductionSuggestionTacticName(suggestion));
   }
 
   if (suggestion.id.startsWith('fold-')) {
     const name = suggestion.foldName ?? suggestion.id.slice('fold-'.length);
-    return applyTacticCommandsAtCursor(state, [{ name: 'fold', args: [mkConstTT(name)] }]);
+    return applyTacticCommandsAtCursor(state, [{ name: 'fold', args: [name] }]);
   }
 
   if (suggestion.id.startsWith('exact-hyp-')) {
     const name = suggestion.id.slice('exact-hyp-'.length);
-    return applyTacticCommandsAtCursor(state, [{ name: 'exact', args: [mkConstTT(name)] }]);
+    return applyTacticCommandsAtCursor(state, [{ name: 'exact', args: [name] }]);
   }
 
   if (suggestion.id.startsWith('apply-hyp-')) {
@@ -673,50 +501,18 @@ export function applySuggestionToProofTreeState(
     return applyTacticCommandsAtCursor(state, buildApplyTacticCommands(name, suggestion.numSubgoals ?? 1));
   }
 
-  if (suggestion.id.startsWith('simp-then-apply-def-')) {
-    const defName = suggestion.id.slice('simp-then-apply-def-'.length);
-    const numSubgoals = suggestion.numSubgoals ?? 1;
-    const kernelGoal = ctx.typedContext?.kernelGoal;
-    if (!kernelGoal) return null;
-    const lemmas = [...(kernelGoal.definitions.simpLemmas ?? [])];
-    const simpResult = runSimp(kernelGoal.engine, lemmas);
-    if (!simpResult.success || simpResult.steps.length === 0) return null;
-    const afterSimp = applySimp(state, lemmas, simpResult.proofNodes);
-    if (!afterSimp) return null;
-    return applyTacticCommandsAtCursor(afterSimp, buildApplyTacticCommands(defName, numSubgoals));
-  }
 
   if (suggestion.id.startsWith('construct-')) {
     const ctorName = suggestion.applyCtorName ?? suggestion.id.slice('construct-'.length);
     return applyTacticCommandsAtCursor(state, buildApplyTacticCommands(ctorName, suggestion.numSubgoals ?? 1, true));
   }
 
-  if (suggestion.id === 'simp-auto' || suggestion.id === 'compute') {
-    // 'compute' is the norm_num variant of simp-auto: the suggestion was
-    // surfaced because the clicked subterm was registered carrier-arithmetic
-    // and evaluated to a closed Rat. Dispatch both to runSimp, but for
-    // 'compute' augment the @simp set with @carrierBridge lemmas (the
-    // alias-→-realOfRat bridges needed to normalize literals before
-    // applying arithmetic homomorphism lemmas like addRealOfRat). This
-    // keeps the tactic tree shape consistent — replay walks see a simp
-    // node in either case — while letting Compute reach cases that
-    // ordinary simp can't.
-    const kernelGoal = ctx.typedContext?.kernelGoal;
-    if (!kernelGoal) return null;
-    const baseSimp = [...(kernelGoal.definitions.simpLemmas ?? [])];
-    const lemmas = suggestion.id === 'compute' && kernelGoal.definitions.carrierBridges
-      ? [...baseSimp, ...kernelGoal.definitions.carrierBridges]
-      : baseSimp;
-    const simpResult = runSimp(kernelGoal.engine, lemmas);
-    if (!simpResult.success) return null;
-    return applySimp(state, lemmas, simpResult.proofNodes);
-  }
 
   if (suggestion.id.startsWith('rewrite-') || suggestion.id.startsWith('simp-')) {
     const rw = suggestion as RewriteSuggestion;
     return applyTacticCommandsAtCursor(state, [{
       name: 'rewrite',
-      args: [mkConstTT(rw.rewriteName)],
+      args: [rw.rewriteName],
       rewriteOptions: {
         reverse: rw.reverse,
         occurrences: rw.occurrences,
@@ -730,7 +526,7 @@ export function applySuggestionToProofTreeState(
     : [...(suggestion.proposedNames ?? [])];
   if (names.length === 0) return null;
   const introName = names.length === 1 ? 'intro' : 'intros';
-  return applyTacticCommandsAtCursor(state, [{ name: introName, args: names.map(mkConstTT) }]);
+  return applyTacticCommandsAtCursor(state, [{ name: introName, args: [...names] }]);
 }
 
 /**
@@ -776,23 +572,22 @@ export function applyManualProofTreeTactic(
       const names = splitNames(value);
       if (names.length === 0) return null;
       const introName = names.length === 1 ? 'intro' : 'intros';
-      return applyTacticCommandsAtCursor(state, [{ name: introName, args: names.map(mkConstTT) }]);
+      return applyTacticCommandsAtCursor(state, [{ name: introName, args: [...names] }]);
     }
 
     case 'induction': {
       const scrutinee = value.trim();
       if (!scrutinee) return null;
-      return applyInductionFromContext(state, scrutinee, ctx, 'induction');
+      return applyInductionFromContext(state, scrutinee, 'induction');
     }
 
     case 'exact': {
       const expr = value.trim();
       if (!expr) return null;
-      // Lean backend: no TT kernel — keep the user's expression text VERBATIM.
-      // The TT round-trip (parse → print) rewrites notation into TT spellings
-      // (`ε / 2` → `div ε 2`) that real Lean does not know, so the spliced
-      // source elaborates to `sorry` with an error the user never typed.
-      if (!ctx.typedContext?.kernelGoal) {
+      // Keep the user's expression text VERBATIM: it is Lean source, and only
+      // Lean parses Lean. (The deleted TT round-trip used to rewrite notation
+      // into TT spellings — `ε / 2` → `div ε 2` — which real Lean rejects.)
+      {
         const node = findNode(state.root, state.cursor.nodeId);
         if (!node || node.tag !== 'hole') return null;
         return {
@@ -800,19 +595,19 @@ export function applyManualProofTreeTactic(
           cursor: state.cursor,
         };
       }
-      return applyTacticCommandsAtCursor(state, [{ name: 'exact', args: [parseExpr(expr)] }]);
+      return applyTacticCommandsAtCursor(state, [{ name: 'exact', args: [expr] }]);
     }
 
     case 'unfold': {
       const name = value.trim();
       if (!name) return null;
-      return applyTacticCommandsAtCursor(state, [{ name: 'unfold', args: [mkConstTT(name)] }]);
+      return applyTacticCommandsAtCursor(state, [{ name: 'unfold', args: [name] }]);
     }
 
     case 'fold': {
       const name = value.trim();
       if (!name) return null;
-      return applyTacticCommandsAtCursor(state, [{ name: 'fold', args: [mkConstTT(name)] }]);
+      return applyTacticCommandsAtCursor(state, [{ name: 'fold', args: [name] }]);
     }
 
     case 'rewrite': {
@@ -820,7 +615,7 @@ export function applyManualProofTreeTactic(
       if (!name) return null;
       const leanRw = applyLeanRewriteWithSideGoals(state, name, false, ctx);
       if (leanRw) return leanRw;
-      return applyTacticCommandsAtCursor(state, [{ name: 'rewrite', args: [mkConstTT(name)] }]);
+      return applyTacticCommandsAtCursor(state, [{ name: 'rewrite', args: [name] }]);
     }
 
     case 'rewrite_rev': {
@@ -830,7 +625,7 @@ export function applyManualProofTreeTactic(
       if (leanRw) return leanRw;
       return applyTacticCommandsAtCursor(state, [{
         name: 'rewrite',
-        args: [mkConstTT(name)],
+        args: [name],
         rewriteOptions: { reverse: true },
       }]);
     }
@@ -842,14 +637,8 @@ export function applyManualProofTreeTactic(
       // The TT counter needs kernelType+definitions; a Lean-backed counter
       // (which estimates from the lemma type) needs neither — so call whatever
       // counter is provided, as long as the TT one has its kernel inputs.
-      if (ctx.computeApplySubgoalCount && (ctx.leanApply || (ctx.kernelType && ctx.definitions))) {
-        numChildren = ctx.computeApplySubgoalCount(
-          state.root,
-          state.cursor.nodeId,
-          ctx.kernelType,
-          ctx.definitions,
-          name,
-        );
+      if (ctx.computeApplySubgoalCount) {
+        numChildren = ctx.computeApplySubgoalCount(state.root, state.cursor.nodeId, name);
       }
       return applyTacticCommandsAtCursor(state, buildApplyTacticCommands(name, numChildren));
     }
@@ -873,9 +662,8 @@ export function applyManualProofTreeTactic(
           cursor: { nodeId: obligation.id },
         };
       }
-      // Lean backend: keep the term-have's expression VERBATIM (see the exact
-      // case above — the TT round-trip rewrites `ε / 2` into `div ε 2`).
-      if (!ctx.typedContext?.kernelGoal) {
+      // Keep the term-have's expression VERBATIM (see the exact case above).
+      {
         const node = findNode(state.root, state.cursor.nodeId);
         if (!node || node.tag !== 'hole') return null;
         const rest = mkHole();
@@ -885,25 +673,18 @@ export function applyManualProofTreeTactic(
           cursor: { nodeId: rest.id },
         };
       }
-      return applyTacticCommandsAtCursor(state, buildHaveTacticCommands(parsed.name, parsed.expr));
     }
 
     case 'simp': {
       const lemmaStr = value.trim();
       const lemmas = lemmaStr ? lemmaStr.split(/[\s,]+/).filter(Boolean) : [];
-      // Lean backend: no TT kernel engine — insert a structural `simp [...]` node
-      // and let the Lean round-trip check/replay it (the engine path below only
-      // runs for the in-process TT checker).
-      if (!ctx.typedContext?.kernelGoal) {
-        const child = mkHole();
-        const newRoot = replaceNode(state.root, state.cursor.nodeId, mkSimp(lemmas, [], child));
-        return { root: newRoot, cursor: { nodeId: child.id } };
-      }
-      const { engine, definitions } = ctx.typedContext.kernelGoal;
-      const allLemmas = lemmas.length ? lemmas : [...(definitions.simpLemmas ?? [])];
-      const simpResult = runSimp(engine, allLemmas);
-      if (!simpResult.success) return null;
-      return applySimp(state, allLemmas, simpResult.proofNodes);
+      // Insert a structural `simp [...]` node and let the Lean round-trip
+      // check it. (The TT path ran an in-process simp engine here and recorded
+      // the individual rewrite steps it fired; Lean reports the resulting goal
+      // instead, which is the part the reader actually needs.)
+      const child = mkHole();
+      const newRoot = replaceNode(state.root, state.cursor.nodeId, mkSimp(lemmas, [], child));
+      return { root: newRoot, cursor: { nodeId: child.id } };
     }
   }
 }

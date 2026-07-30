@@ -1,6 +1,0 @@
--- Equality between two proofs of the same proposition.
--- Lives in Prop. Lets us state and prove proof-irrelevance theorems.
--- (Surface syntax has no `Sort u`, so we specialise to `: Prop` rather
--- than write a single universe-polymorphic Equal.)
-inductive EqualProp : {P : Prop} -> P -> P -> Prop where
-  reflProp : {P : Prop} -> {p : P} -> EqualProp p p

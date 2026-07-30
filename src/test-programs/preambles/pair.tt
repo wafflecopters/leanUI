@@ -1,2 +1,0 @@
-inductive Pair : Type -> Type -> Type where
-  MkPair : {A B : Type} -> A -> B -> Pair A B
