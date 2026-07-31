@@ -19,7 +19,7 @@
 set -u
 
 LIMIT_GB=14
-POLL_SECS=3
+POLL_SECS=1
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -53,11 +53,31 @@ tree_pids() {
     }'
 }
 
-tree_rss_kb() {
-  local pids total
-  pids=$(tree_pids "$1")
-  total=0
-  for p in $pids; do
+# Lean processes ANYWHERE on the system, whatever their parent.
+#
+# The tree walk alone is not enough, and believing it was is how this script
+# under-reported a run that took the machine into swap. A Lean worker whose
+# parent dies — a vitest fork being recycled, a killed test process — is
+# reparented to init, drops out of the tree, and becomes invisible to a
+# BFS from ROOT while still holding several GB. Those orphans are exactly
+# the ones that accumulate across runs and take a machine down, so they are
+# what this most needs to see.
+#
+# Matching by name has the opposite bias to the tree walk (it catches Lean
+# processes this run did not start), which is the right bias for a safety
+# limit: over-report and stop, rather than under-report and continue.
+lean_pids() {
+  pgrep -f '\.lake/build/bin/extract|lean --run|lake env' 2>/dev/null
+}
+
+# Union of the tree and every Lean process, deduped.
+watched_pids() {
+  { tree_pids "$1"; lean_pids; } | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -un
+}
+
+watched_rss_kb() {
+  local total=0 r
+  for p in $(watched_pids "$1"); do
     r=$(ps -o rss= -p "$p" 2>/dev/null | tr -d ' ')
     [ -n "$r" ] && total=$((total + r))
   done
@@ -66,7 +86,7 @@ tree_rss_kb() {
 
 kill_tree() {
   local pids
-  pids=$(tree_pids "$1")
+  pids=$(watched_pids "$1")
   kill -TERM $pids 2>/dev/null
   sleep 2
   kill -KILL $pids 2>/dev/null
@@ -74,13 +94,13 @@ kill_tree() {
 
 peak=0
 while kill -0 "$ROOT" 2>/dev/null; do
-  rss=$(tree_rss_kb "$ROOT")
+  rss=$(watched_rss_kb "$ROOT")
   [ "$rss" -gt "$peak" ] && peak=$rss
   if [ "$rss" -gt "$LIMIT_KB" ]; then
-    echo "[guarded-run] MEMORY LIMIT BREACHED: tree RSS $((rss / 1024 / 1024))GB > ${LIMIT_GB}GB — killing process tree" >&2
+    echo "[guarded-run] MEMORY LIMIT BREACHED: watched RSS $((rss / 1024 / 1024))GB > ${LIMIT_GB}GB — killing the tree AND every Lean process" >&2
     kill_tree "$ROOT"
     wait "$ROOT" 2>/dev/null
-    echo "[guarded-run] killed. peak tree RSS: $((peak / 1024))MB" >&2
+    echo "[guarded-run] killed. peak watched RSS: $((peak / 1024))MB" >&2
     exit 137
   fi
   sleep "$POLL_SECS"
@@ -88,5 +108,6 @@ done
 
 wait "$ROOT"
 code=$?
-echo "[guarded-run] done (exit $code). peak tree RSS: $((peak / 1024))MB" >&2
+leftover=$(lean_pids | wc -l | tr -d ' ')
+echo "[guarded-run] done (exit $code). peak watched RSS: $((peak / 1024))MB; Lean processes still alive: $leftover" >&2
 exit $code

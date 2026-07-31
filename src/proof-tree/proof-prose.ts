@@ -55,7 +55,17 @@ export type ProseItemKind =
   | { tag: 'rewrite'; name: string; reverse?: boolean; occurrences?: readonly number[]; equationLatex?: string; preGoalLatex?: string; goalLatex?: string; error?: string }
   | { tag: 'apply'; name: string; preGoalLatex?: string; subgoalLatex?: string[]; appliedArgsLatex?: string[]; error?: string; proofExprs?: readonly string[] }
   | { tag: 'inductionHeader'; scrutinee: string; scrutineeLatex?: string; isCases?: boolean }
-  | { tag: 'caseHeader'; labelLatex: string; isBaseCase: boolean; constructorParamNames?: readonly string[]; constructorName?: string; scrutinee?: string; isCases?: boolean }
+  | {
+      tag: 'caseHeader';
+      labelLatex: string;
+      isBaseCase: boolean;
+      constructorParamNames?: readonly string[];
+      /** Rendered type per param, positionally — what a hover shows. */
+      paramTypeLatex?: readonly string[];
+      constructorName?: string;
+      scrutinee?: string;
+      isCases?: boolean;
+    }
   | { tag: 'exact'; exprLatex: string; solved: boolean; goalLatex?: string; error?: string; proofExprLatex?: string; isValueType?: boolean }
   | { tag: 'hole'; goalLatex?: string; isValueType?: boolean; solved?: boolean }
   | { tag: 'simp'; lemmas: readonly string[]; stepCount: number; preGoalLatex?: string; goalLatex?: string; error?: string }
@@ -458,19 +468,27 @@ export function generateProofProse(
           // from the goal state: a case that introduces hypotheses NOT present in
           // the induction's incoming goal (the constructor's recursive args / the
           // induction hypothesis) is the inductive step, not a base case.
+          // A LONE unnamed case prints as a plain continuation and so has no
+          // goal of its own; the head of its body carries the same goal.
+          const caseInfo = goalMap.get(c.id) ?? goalMap.get(c.body.id);
           if (isBaseCase) {
             const parentHyps = new Set((info?.hypotheses ?? []).map((h) => h.name));
-            const caseHyps = goalMap.get(c.id)?.hypotheses ?? [];
+            const caseHyps = caseInfo?.hypotheses ?? [];
             if (caseHyps.some((h) => !parentHyps.has(h.name))) isBaseCase = false;
           }
           // Prefer the registry-aware label computed by goal-computation
           // (so nested `@syntax` like `MkDPair → witness ...` applies).
-          const registryLabel = goalMap.get(c.id)?.caseLabelLatex;
+          const registryLabel = caseInfo?.caseLabelLatex;
+          // The type of each bound param, so hovering a name can show it. The
+          // names are the ones the case binds, so they resolve in its own goal.
+          const caseHypTypes = new Map((caseInfo?.hypotheses ?? []).map((h) => [h.name, h.type]));
+          const paramTypeLatex = c.constructorParamNames?.map((n) => caseHypTypes.get(n) ?? '');
           emit(c.id, depth + 1, {
             tag: 'caseHeader',
             labelLatex: registryLabel ?? c.labelLatex ?? c.label,
             isBaseCase,
             constructorParamNames: c.constructorParamNames,
+            ...(paramTypeLatex?.some((t) => t) ? { paramTypeLatex } : {}),
             constructorName: c.constructorName,
             scrutinee: node.scrutinee,
             isCases: node.isCases,

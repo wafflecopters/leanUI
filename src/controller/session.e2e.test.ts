@@ -397,6 +397,35 @@ describe('ProofSession against real Lean', () => {
     },
     10 * MINUTES,
   );
+
+  // REGRESSION: `cases` on a ONE-constructor structure left its fields as
+  // inaccessible `fst✝`/`snd✝` and the header reading "Case (case)" — nothing
+  // to name, nothing to refer to. The case had no source range of its own (a
+  // lone case prints as a plain continuation, not a `·` bullet), so the
+  // enrichment that names cases never saw a goal for it.
+  test(
+    'destructuring a one-constructor structure binds accessible, nameable fields',
+    async () => {
+      const s = open('limitAdd');
+      await s.refresh();
+      s.insertTactic('cases fProof');
+      await s.refresh();
+      // Enrichment rewrote the tree; Lean reports on the NAMED form next pass.
+      await s.refresh();
+
+      // Bound by name in the source, so the proof can refer to them.
+      expect(s.proofSource()).toContain('cases fProof with');
+      expect(s.proofSource()).toContain('| mk fst snd =>');
+
+      const names = s.getState().goal!.hypotheses.map((h) => h.name);
+      expect(names).toContain('fst');
+      expect(names).toContain('snd');
+      expect(names.some((n) => n.includes('\u271d'))).toBe(false); // no daggers
+
+      expect(s.getState().status.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    },
+    10 * MINUTES,
+  );
 });
 
 /** First outline node with the given label. */

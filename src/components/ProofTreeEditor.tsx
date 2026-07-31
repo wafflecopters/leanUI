@@ -2553,6 +2553,55 @@ function HaveExprBlock({
   );
 }
 
+/**
+ * Show a name's TYPE on hover.
+ *
+ * The types are all already here — every binder the proof introduces is a
+ * hypothesis in Lean's goal state — but the only place you could read one was
+ * the context panel, which means scrolling away from the sentence you are
+ * reading to look up a name in a list. A paper writes "where δ_F is the delta
+ * from limF"; the closest interactive equivalent is: point at it.
+ *
+ * Rendered as math, not a native `title`, because a type IS math — `0 < δ_F`
+ * as text is a step backwards from what the rest of the view does. Positioned
+ * above the name and non-interactive, so it never eats a click meant for the
+ * name underneath (those clicks rename the binder).
+ */
+function HoverType({ typeLatex, children }: { typeLatex?: string; children: React.ReactNode }) {
+  const [shown, setShown] = useState(false);
+  if (!typeLatex) return <>{children}</>;
+  return (
+    <span
+      style={{ position: 'relative' }}
+      onMouseEnter={() => setShown(true)}
+      onMouseLeave={() => setShown(false)}
+    >
+      {children}
+      {shown && (
+        <span
+          style={{
+            position: 'absolute',
+            bottom: '100%',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            marginBottom: '4px',
+            padding: '3px 7px',
+            background: '#161b22',
+            border: '1px solid #30363d',
+            borderRadius: '4px',
+            boxShadow: '0 2px 8px rgba(0, 0, 0, 0.5)',
+            whiteSpace: 'nowrap',
+            zIndex: 20,
+            pointerEvents: 'none',
+          }}
+        >
+          <InlineKaTeX latex={typeLatex} style={{ fontSize: '12px' }} />
+        </span>
+      )}
+    </span>
+  );
+}
+
 function InlineProseName({ name, fontSize = '13px', fontWeight }: {
   name: string;
   fontSize?: string;
@@ -3282,18 +3331,20 @@ function CaseHeaderProseItem({
         {paramNames!.map((name, i) => (
           <React.Fragment key={i}>
             {i > 0 && <InlineKaTeX latex=",\," style={{ fontSize: '12px' }} />}
-            <span
-              onClick={e => handleParamClick(i, e)}
-              style={{
-                cursor: 'pointer',
-                borderBottom: selectedParamIndex === i
-                  ? '2px solid #58a6ff'
-                  : '1px dotted rgba(201, 209, 217, 0.4)',
-                paddingBottom: '1px',
-              }}
-            >
-              <InlineKaTeX latex={texNameForProse(name)} style={{ fontSize: '12px' }} />
-            </span>
+            <HoverType typeLatex={kind.paramTypeLatex?.[i]}>
+              <span
+                onClick={e => handleParamClick(i, e)}
+                style={{
+                  cursor: 'pointer',
+                  borderBottom: selectedParamIndex === i
+                    ? '2px solid #58a6ff'
+                    : '1px dotted rgba(201, 209, 217, 0.4)',
+                  paddingBottom: '1px',
+                }}
+              >
+                <InlineKaTeX latex={texNameForProse(name)} style={{ fontSize: '12px' }} />
+              </span>
+            </HoverType>
           </React.Fragment>
         ))}
         <InlineKaTeX latex=")" style={{ fontSize: '12px' }} />

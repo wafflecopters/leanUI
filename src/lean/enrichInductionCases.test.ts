@@ -133,4 +133,41 @@ describe('shadowing avoidance', () => {
     const ind = root as Extract<ProofNode, { tag: 'induction' }>;
     expect(ind.cases[0].constructorParamNames).toEqual(['fst1', 'snd1']);
   });
+
+  // REGRESSION: a LONE unnamed case prints as a plain continuation, not a `·`
+  // bullet (a bullet focuses one goal, hiding the rest from validation), so the
+  // case node has no source range and Lean reports nothing AT it — the tag is on
+  // the head of its body instead. Reading only the case's own id left
+  // `cases fProof` on a one-constructor structure permanently unnamed, with its
+  // fields stuck as inaccessible `fst✝`/`snd✝` that the proof cannot refer to.
+  test('a case with no goal of its own is named from the head of its body', () => {
+    const lone: ProofNode = {
+      tag: 'induction',
+      id: 1,
+      scrutinee: 'fProof',
+      collapsed: false,
+      isCases: true,
+      cases: [{ tag: 'case', id: 3, label: '?', body: { tag: 'hole', id: 2 }, collapsed: false }],
+    };
+    const goalMap = mkGoalMap([
+      [1, { hypotheses: [{ name: 'fProof', type: 'EpsDeltaWitness f x0 L (ε / 2) deltaF' }] }],
+      // Nothing at id 3 — the case itself. The body carries Lean's composed tag.
+      [2, {
+        caseLabelLatex: 'eps_delta.mk.mk.mk',
+        hypotheses: [
+          { name: 'fProof', type: 'EpsDeltaWitness f x0 L (ε / 2) deltaF' },
+          { name: 'fst✝', type: '0 < deltaF' },
+          { name: 'snd✝', type: '∀ x, …' },
+        ],
+      }],
+    ]);
+    const { root, changed } = enrichInductionCaseNames(lone, goalMap);
+    expect(changed).toBe(true);
+    const ind = root as Extract<ProofNode, { tag: 'induction' }>;
+    // Composed tag → the constructor's OWN name, which is what `| mk … =>` wants.
+    expect(ind.cases[0].constructorName).toBe('mk');
+    expect(ind.cases[0].constructorParamNames).toEqual(['fst', 'snd']);
+    // And the display label, so the prose stops reading "Case (case)".
+    expect(ind.cases[0].label).toBe('mk');
+  });
 });

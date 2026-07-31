@@ -66,7 +66,15 @@ export function enrichInductionCaseNames(
     if (isLeanCtorName(c.constructorName)) {
       return body === c.body ? c : { ...c, body };
     }
-    const info = goalMap.get(c.id);
+    // The case's own goal, or — when the case has no line of its own — the goal
+    // at the head of its BODY, which is the same goal. A LONE unnamed case
+    // prints as a plain continuation rather than a `·` bullet (a bullet focuses
+    // one goal, which hides the others from validation), so it contributes no
+    // source range and Lean reports nothing at it. Without this fallback such a
+    // case is never enriched: `cases fProof` on a one-constructor structure kept
+    // the placeholder label and left its fields as inaccessible `fst✝`/`snd✝`,
+    // which the user cannot refer to.
+    const info = goalMap.get(c.id) ?? goalMap.get(c.body.id);
     // Lean COMPOSES case tags when goals nest: `cases hF` inside a goal already
     // tagged `eps_delta` (a `constructor` on Limit) reports `eps_delta.mk`. A
     // `with |` alternative must be the constructor's OWN tag — Lean rejects the

@@ -511,12 +511,18 @@ export function createAnalyzeLimiter(maxConcurrent: number): AnalyzeLimiter {
 }
 
 // ── worker-pool sizing ──────────────────────────────────────────────────────
-// Core and Mathlib requests run through SEPARATE pools sized very differently,
-// because their memory profiles are three orders of magnitude apart: a core
-// worker idles at ~100–200MB, while a worker that has imported Mathlib holds
-// 4–7GB genuinely resident. One shared pool meant every worker (and every
-// busy-spill one-shot) eventually went Mathlib-sized — stacked across the dev
-// server plus parallel test forks, that is the ~100GB blowup of 2026-07-28.
+// Core and Mathlib requests run through SEPARATE pools, because a worker that
+// has imported Mathlib holds 4–7GB resident and one shared pool meant every
+// worker (and every busy-spill one-shot) eventually went Mathlib-sized —
+// stacked across the dev server plus parallel test forks, that is the ~100GB
+// blowup of 2026-07-28.
+//
+// CORE WORKERS ARE NOT CHEAP EITHER. This comment used to claim ~100–200MB;
+// measured against the real-analysis preset with no Mathlib in the picture, the
+// three core workers of an idle dev server sat at 4.4GB, 3.3GB and 2.7GB — over
+// 10GB, doing nothing. The preset's own environment is what costs that, so the
+// number scales with the FILE, and the default of 3 is a real memory decision
+// rather than a free one. Tests override it to 1 (see vitest.config.ts).
 //
 // Each mode's limiter cap equals its pool size, so an acquired slot always
 // finds a free worker — which is also what keeps the one-shot busy-fallback

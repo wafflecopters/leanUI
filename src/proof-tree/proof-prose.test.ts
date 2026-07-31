@@ -498,4 +498,41 @@ describe('generateProofProse', () => {
     expect(sideHoleItem).toBeTruthy();
     expect(sideHoleItem!.isCursor).toBe(true);
   });
+
+describe('case params carry their types (for hover)', () => {
+  test('each bound param gets the type it has in the case goal', () => {
+    const body: ProofNode = { tag: 'hole', id: 2 };
+    const root: ProofNode = {
+      tag: 'induction', id: 1, scrutinee: 'fProof', collapsed: false, isCases: true,
+      cases: [{
+        tag: 'case', id: 3, label: 'mk', body, collapsed: false,
+        constructorName: 'mk', constructorParamNames: ['fst', 'snd'],
+      }],
+    };
+    // The case has NO goal of its own (a lone case prints as a plain
+    // continuation); the head of its body carries the same goal.
+    const goalMap = mkGoalMap([
+      [1, { hypotheses: [{ name: 'fProof', type: 'W' }] }],
+      [2, { hypotheses: [{ name: 'fst', type: '0 < \\delta_F' }, { name: 'snd', type: '\\forall x, P' }] }],
+    ]);
+    const items = generateProofProse(root, 2, goalMap);
+    const header = items.find((i: ProseItem) => i.kind.tag === 'caseHeader')!;
+    expect(header.kind).toMatchObject({
+      constructorParamNames: ['fst', 'snd'],
+      paramTypeLatex: ['0 < \\delta_F', '\\forall x, P'],
+    });
+  });
+
+  test('no types recorded when the goal map has nothing to say', () => {
+    const root: ProofNode = {
+      tag: 'induction', id: 1, scrutinee: 'x', collapsed: false, isCases: true,
+      cases: [{
+        tag: 'case', id: 3, label: 'mk', body: { tag: 'hole', id: 2 }, collapsed: false,
+        constructorName: 'mk', constructorParamNames: ['a'],
+      }],
+    };
+    const header = generateProofProse(root, 2, new Map()).find((i: ProseItem) => i.kind.tag === 'caseHeader')!;
+    expect((header.kind as { paramTypeLatex?: string[] }).paramTypeLatex).toBeUndefined();
+  });
+});
 });
