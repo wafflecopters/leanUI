@@ -16,6 +16,7 @@ import {
   applyCandidates,
   comparisonCandidates,
   equalityLemmas,
+  valueCandidates,
   rankByGoalOverlap,
   unfoldableDefs,
 } from '../lean/rewriteCandidates';
@@ -50,6 +51,12 @@ export interface CandidateInput {
   selectedSubtermText?: string;
   /** Clicked hypothesis name, when the user selected one. */
   selectedHypName?: string | null;
+  /**
+   * True when the goal is a VALUE to choose (`⊢ ℝ` — a δ, a midpoint) rather
+   * than a claim to prove. A different kind of move applies, so a different set
+   * is offered: see `valueCandidates`.
+   */
+  isValueGoal?: boolean;
 }
 
 /** How many file rewrite lemmas to trial (each is a Lean round-trip). */
@@ -161,6 +168,26 @@ export const SOLVER_TACTICS: readonly string[] = [
 export function tacticCandidates(input: CandidateInput): LeanSuggestion[] {
   const { declarations, currentDeclName, goalText } = input;
   const selected = input.selectedSubtermText ?? '';
+
+  // A value goal is a blank to fill, not a claim to prove. Offer the values —
+  // and ONLY those: `omega`, `trivial` and `assumption` all "succeed" on `⊢ ℝ`
+  // by picking something arbitrary, which is worse than no suggestion, because
+  // the proof then contains a choice nobody made.
+  if (input.isValueGoal) {
+    const values = valueCandidates(declarations, goalText, input.hypotheses, currentDeclName);
+    // Only when there IS something to choose. With nothing of that type in
+    // scope the list would be empty, and an empty list reads as "nothing
+    // applies" — so fall through to the ordinary candidates rather than leave
+    // the user with no moves at all.
+    if (values.length > 0) {
+      return values.map((expr) => ({
+        id: `lean-value:${expr}`,
+        label: `use ${expr}`,
+        tactic: `exact ${expr}`,
+        kind: 'exact' as const,
+      }));
+    }
+  }
 
   const heuristics: LeanSuggestion[] = [
     ...(selected ? targetedSuggestions(selected) : []),

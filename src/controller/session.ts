@@ -416,6 +416,7 @@ export class ProofSession {
 
     const goal = this.cursorGoal;
     const selection = this.subtermSelection();
+    const isValueGoal = this.goalMap.get(this.cursorId)?.isValueType === true;
     const candidates = tacticCandidates({
       declarations: this.declarations,
       currentDeclName: this.decl.name,
@@ -423,6 +424,7 @@ export class ProofSession {
       hypotheses: this.hypothesesWithTypes(),
       selectedSubtermText: selection?.text ?? '',
       selectedHypName: this.selectedHyp,
+      isValueGoal,
     });
 
     // Two independent sources, merged as they arrive: the file's own lemmas
@@ -465,7 +467,12 @@ export class ProofSession {
       }).then((done) => {
         fromFile = done;
       }),
-      discoverSuggestions({ ...common, cancel }).then(async (found) => {
+      // Lean's own search is skipped at a VALUE goal. `exact?` answers "what
+      // inhabits ℝ?" with the first term it can build — it offered
+      // `f (f (f (f x0))) / f (f (f (f x0)))` — which type-checks, closes the
+      // goal, and is not a choice anyone would make. The value list is the
+      // honest answer there.
+      (isValueGoal ? Promise.resolve([] as LeanSuggestion[]) : discoverSuggestions({ ...common, cancel })).then(async (found) => {
         if (found.length === 0 || cancel.cancelled) return;
         fromLean = await validateSuggestions({
           ...validateOpts,

@@ -490,3 +490,102 @@ export function comparisonCandidates(
   }
   return out.slice(0, cap);
 }
+
+// ── choosing a value ────────────────────────────────────────────────────────
+
+/**
+ * The EXPLICIT argument types of a function type, in order, plus its conclusion.
+ *
+ * Handles both spellings Lean prints: named groups (`(a b : ℝ) → …`) and bare
+ * arrows (`ℝ → ℝ → ℝ`, which is how `rmin` prints). Implicit `{…}` and instance
+ * `[…]` binders are skipped — Lean infers them.
+ */
+function explicitArgTypes(prettyType: string): { args: string[]; conclusion: string } {
+  let rest = stripForall(prettyType);
+  const args: string[] = [];
+  for (;;) {
+    const split = splitTopLevel(rest, ' → ');
+    if (!split) break;
+    const antecedent = split[0].trim();
+    const binder = asBinderGroup(antecedent);
+    if (!binder) {
+      args.push(antecedent); // bare arrow argument
+    } else if (binder.bracket === '(') {
+      const colon = splitTopLevel(antecedent.slice(1, -1), ' : ');
+      const type = (colon?.[1] ?? '').trim();
+      for (let i = 0; i < binder.names.length; i++) args.push(type);
+    }
+    rest = stripForall(split[1]);
+  }
+  return { args, conclusion: rest.trim() };
+}
+
+/**
+ * What you could PUT in a value goal.
+ *
+ * `⊢ ℝ` is not a claim to prove, it's a blank to fill — the δ of an ε-δ proof,
+ * the midpoint of a transitivity. Lean's own search is no help here: every real
+ * number type-checks, so `exact?` answers with whatever it finds first (it
+ * offered `f (f (f (f x0))) / f (f (f (f x0)))`) and `assumption` silently
+ * grabs an arbitrary hypothesis. Neither is a choice the reader can follow.
+ *
+ * So offer the choices explicitly: the values of that type already in scope,
+ * and the one-step ways to COMBINE them using the file's own operations on that
+ * type — which is where `rmin deltaF deltaG` comes from, the δ that makes an
+ * ε-δ sum proof work. Most-recent-first, because the values you just introduced
+ * are the ones the proof is about.
+ *
+ * Validation can't rank these: they all type-check, and which one works depends
+ * on a SIBLING goal. That's the point — this is the step where the human
+ * chooses, and the editor's job is to lay out the options, not to guess.
+ */
+export function valueCandidates(
+  declarations: readonly LeanDeclaration[],
+  goalType: string,
+  hypotheses: ReadonlyArray<{ name: string; type: string }>,
+  currentDeclName?: string,
+  cap = 10,
+): string[] {
+  const type = goalType.trim();
+  if (!type) return [];
+
+  // In-scope values of the goal's type, most recent first.
+  const inScope = hypotheses
+    .map((h, index) => ({ ...h, index }))
+    .filter((h) => h.type.trim() === type)
+    .sort((a, b) => b.index - a.index)
+    .map((h) => h.name);
+  if (inScope.length === 0) return [];
+  // The two most recent, back in SCOPE order — `rmin deltaF deltaG` reads the
+  // way the context does, not backwards.
+  const recent = inScope.slice(0, 2).reverse();
+
+  // The file's own operations on this type: every explicit argument and the
+  // result are the goal's type (`rmin`, `radd`, `rneg` — not `rlt`, whose
+  // result is a proposition, nor `realOfRat`, whose argument is something else).
+  const ops: Array<{ name: string; arity: number }> = [];
+  for (const d of declarations) {
+    if (d.name === currentDeclName) continue;
+    if (d.kind !== 'def' && d.kind !== 'theorem') continue;
+    const { args, conclusion } = explicitArgTypes(d.prettyType);
+    if (conclusion !== type) continue;
+    if (args.length < 1 || args.length > 2) continue;
+    if (!args.every((a) => a === type)) continue;
+    ops.push({ name: d.name, arity: args.length });
+  }
+
+  // Bare values are capped so the COMBINATIONS get room: a context can hold a
+  // half-dozen reals, and listing all of them would crowd out `rmin deltaF
+  // deltaG` — which is the answer here, and is never a bare hypothesis.
+  // Binary combinations before unary: two recent values of a type is usually
+  // why a proof needs a third.
+  const BARE_CAP = 4;
+  const binary = ops.filter((o) => o.arity === 2);
+  const unary = ops.filter((o) => o.arity === 1);
+  const [a, b] = recent;
+  return [
+    ...inScope.slice(0, BARE_CAP),
+    ...(b !== undefined ? binary.map((o) => `${o.name} ${a} ${b}`) : []),
+    ...unary.map((o) => `${o.name} ${inScope[0]}`),
+  ].slice(0, cap);
+}

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { applyCandidates, comparisonCandidates, equalityLemmas, rankByGoalOverlap, unfoldableDefs } from './rewriteCandidates';
+import { applyCandidates, comparisonCandidates, equalityLemmas, rankByGoalOverlap, unfoldableDefs, valueCandidates } from './rewriteCandidates';
 import type { LeanDeclaration } from './types';
 
 function decl(name: string, prettyType: string, kind: LeanDeclaration['kind'] = 'def'): LeanDeclaration {
@@ -269,5 +269,57 @@ describe('comparisonCandidates ("compare these two")', () => {
   test('nothing to compare with when the file declares no inductives', () => {
     const noInductives = LIB.filter((d) => d.kind !== 'inductive');
     expect(comparisonCandidates(noInductives, HYPS, 'limitAdd')).toEqual([]);
+  });
+});
+
+describe('valueCandidates ("what could I put here?")', () => {
+  // As the real-analysis preset reports them.
+  const LIB = [
+    decl('rmin', '{R : Real} → \u211d → \u211d → \u211d'),
+    decl('radd', '{R : Real} → \u211d → \u211d → \u211d'),
+    decl('rneg', '{R : Real} → \u211d → \u211d'),
+    // Result is a proposition, not a value of the goal's type.
+    decl('rlt', '{R : Real} → \u211d → \u211d → Type'),
+    // Argument isn't the goal's type.
+    decl('realOfRat', '(R : Real) → MyRat → \u211d'),
+    // Three arguments — not a one-step combination.
+    decl('rmid3', '{R : Real} → \u211d → \u211d → \u211d → \u211d'),
+  ];
+  const HYPS = [
+    { name: 'x0', type: '\u211d' },
+    { name: 'L', type: '\u211d' },
+    { name: '\u03b5', type: '\u211d' },
+    { name: 'epsPos', type: '0 < \u03b5' },
+    { name: 'deltaF', type: '\u211d' },
+    { name: 'deltaG', type: '\u211d' },
+  ];
+
+  test('offers the δ the proof actually needs, and in scope order', () => {
+    const out = valueCandidates(LIB, '\u211d', HYPS, 'limitAdd');
+    // `rmin deltaF deltaG` is never a bare hypothesis — it has to be BUILT, and
+    // it is the whole reason this list combines values rather than just listing
+    // them. Argument order follows the context, not the recency ranking.
+    expect(out).toContain('rmin deltaF deltaG');
+    expect(out).not.toContain('rmin deltaG deltaF');
+  });
+
+  test('in-scope values come first, most recent first', () => {
+    const out = valueCandidates(LIB, '\u211d', HYPS, 'limitAdd');
+    expect(out.slice(0, 2)).toEqual(['deltaG', 'deltaF']);
+  });
+
+  test('only operations that take and return the goal type', () => {
+    const out = valueCandidates(LIB, '\u211d', HYPS, 'limitAdd');
+    const built = out.filter((e) => e.includes(' '));
+    expect(built).toEqual(expect.arrayContaining(['rmin deltaF deltaG', 'radd deltaF deltaG', 'rneg deltaG']));
+    // Wrong result type, wrong argument type, wrong arity.
+    expect(built.some((e) => e.startsWith('rlt '))).toBe(false);
+    expect(built.some((e) => e.startsWith('realOfRat '))).toBe(false);
+    expect(built.some((e) => e.startsWith('rmid3 '))).toBe(false);
+  });
+
+  test('nothing to offer when no value of that type is in scope', () => {
+    expect(valueCandidates(LIB, '\u211d', [{ name: 'h', type: '0 < \u03b5' }], 'limitAdd')).toEqual([]);
+    expect(valueCandidates(LIB, 'MyNat', HYPS, 'limitAdd')).toEqual([]);
   });
 });

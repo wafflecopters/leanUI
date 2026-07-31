@@ -352,6 +352,51 @@ describe('ProofSession against real Lean', () => {
     },
     10 * MINUTES,
   );
+
+  // The step after the split: `⊢ ℝ` is a BLANK to fill — the δ. Lean's own
+  // search is actively unhelpful here (every real type-checks, so `exact?`
+  // answered with `f (f (f (f x0))) / f (f (f (f x0)))` and `assumption` grabs
+  // an arbitrary hypothesis), so the editor offers the choices instead.
+  test(
+    'a value goal offers the values — including the rmin that makes the proof work',
+    async () => {
+      const s = open('limitAdd');
+      await s.refresh();
+
+      const ctor = s.getState().suggestions.find((x) => x.tactic === 'constructor')!;
+      expect(ctor).toBeDefined();
+      s.applySuggestion(ctor.id);
+      await s.refresh();
+
+      // The witness goal comes FIRST (it's what the sibling depends on) and is
+      // marked as a value to choose, not a claim to prove.
+      const st = s.getState();
+      expect(st.goal!.targetText).toBe('\u211d');
+      expect(s.leanGoalMap.get(st.cursor.nodeId)?.isValueType).toBe(true);
+
+      const tactics = st.suggestions.map((x) => x.tactic);
+      // Built, not merely listed: `rmin deltaF deltaG` is no hypothesis.
+      expect(tactics).toContain('exact rmin deltaF deltaG');
+      // In scope order, and the recent pair — not the reals from the statement.
+      expect(tactics).toContain('exact deltaF');
+      expect(tactics).toContain('exact deltaG');
+      // The noise is gone: nothing that "succeeds" by choosing for you.
+      expect(tactics).not.toContain('omega');
+      expect(tactics).not.toContain('trivial');
+      expect(tactics).not.toContain('assumption');
+      expect(tactics.some((t) => /f \(f \(f/.test(t))).toBe(false);
+
+      // Taking it substitutes the witness into the sibling goal, cleanly.
+      const pick = st.suggestions.find((x) => x.tactic === 'exact rmin deltaF deltaG')!;
+      s.applySuggestion(pick.id);
+      await s.refresh();
+      expect(s.getState().goal!.targetText).toBe(
+        'EpsDeltaWitness (fun x => f x + g x) x0 (L + M) \u03b5 (rmin deltaF deltaG)',
+      );
+      expect(s.getState().status.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    },
+    10 * MINUTES,
+  );
 });
 
 /** First outline node with the given label. */
