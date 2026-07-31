@@ -210,3 +210,42 @@ test(
   },
   10 * MINUTES,
 );
+
+// How a goal READS is part of the product: this is an editor whose whole point
+// is that a proof looks like mathematics. Two things stood between the ε-δ goal
+// and its paper form, in different layers, and both are pinned here.
+test(
+  'the ε-δ goal reads as mathematics: |f x + g x - (L + M)| < ε',
+  async () => {
+    const preset = LEAN_PRESETS.find((p) => p.name === 'Real Analysis (chain rule)');
+    if (!preset) throw new Error('missing preset');
+    const base = preset.code.endsWith('\n') ? preset.code : `${preset.code}\n`;
+    const body = [
+      '',
+      'def probeReads {R : Real} (f g : Carrier R → Carrier R) (x0 L M eps delta : Carrier R) :',
+      '    EpsDeltaWitness (fun x => radd (f x) (g x)) x0 (radd L M) eps delta := by',
+      '  constructor',
+      '  · sorry',
+      '  · intro x hx0 hxd',
+      '    sorry',
+      '',
+    ].join('\n');
+    const r = await analyzeLeanSource(base + body, { timeoutMs: 10 * MINUTES, prefix: base, body });
+    expect(r.bridgeError).toBeUndefined();
+    expect(r.messages.filter((m) => m.severity === 'error')).toEqual([]);
+
+    const targets = r.goals.flatMap((g) => g.goals.map((st) => st.plain.split('\n').pop()!.trim()));
+    const witness = targets.find((t) => t.includes('< eps') && t.includes('(L + M)'));
+    expect(witness, `goals: ${JSON.stringify(targets)}`).toBeDefined();
+
+    // 1. `rabs a` prints as `|a|` — the preset's own notation + unexpander, not
+    //    a special case in the renderer.
+    expect(witness).toContain('|f x + g x - (L + M)|');
+    expect(witness).not.toContain('rabs');
+    // 2. No beta-redex. Substituting `fun x => f x + g x` into the statement
+    //    leaves `(fun x => f x + g x) x`, which Lean prints literally unless
+    //    `pp.beta` is on (set in Extract.lean).
+    expect(witness).not.toContain('fun x =>');
+  },
+  10 * MINUTES,
+);

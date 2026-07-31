@@ -814,6 +814,16 @@ prefix:75 (priority := high) "-" => rneg
 def rabs {R : Real} (a : Carrier R) : Carrier R :=
   eitherElim (fun _ => a) (fun _ => rneg a) ((fieldOf R).leTotal (rzero R) a)
 
+-- |a| for absolute value, in both directions: the macro lets you WRITE it, the
+-- unexpander makes Lean PRINT it, so a goal reads |f x - L| < ε instead of
+-- rabs (f x - L) < ε. \`noWs\` (no whitespace inside the bars) is how Mathlib
+-- spells this too — it keeps the bars from being confused with the \`|\` that
+-- separates match alternatives.
+macro:max atomic("|" noWs) a:term noWs "|" : term => \`(rabs $a)
+@[app_unexpander rabs] def unexpRabs : Lean.PrettyPrinter.Unexpander
+  | \`($_ $a) => \`(|$a|)
+  | _ => throw ()
+
 def absElim {R : Real} (a : Carrier R) (C : Carrier R → Sort w)
     (pos : rle (rzero R) a → C a) (neg : rle a (rzero R) → C (rneg a)) : C (rabs a) :=
   eitherElimDep (fun e => C (eitherElim (fun _ => a) (fun _ => rneg a) e))

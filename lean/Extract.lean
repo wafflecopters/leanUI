@@ -134,7 +134,14 @@ unsafe def analyzeFile (cache : EnvCache) (path : String) : IO Json := do
         -- target, each pretty-printed as CodeWithInfos so the goal panel renders
         -- as WYSIWYG math (same machinery as the InfoView). We also keep the
         -- plain string (ppGoal) for fallback/diagnostics.
-        let renderedGoals ← ci.runMetaM {} do
+        -- `pp.beta`: print goals BETA-REDUCED. Substituting a lambda into a
+        -- statement leaves a redex — `EpsDeltaWitness (fun x => f x + g x) …`
+        -- puts the applied function in the goal, and Lean's default rendering
+        -- shows it literally: `rabs (((fun x => f x + g x) x - (L + M)))`. The
+        -- reader wants `|f x + g x - (L + M)|`, which is the same term; beta is
+        -- definitional, so this changes only how it is SPELLED, and it is Lean's
+        -- own pretty-printer option rather than term surgery of ours.
+        let renderedGoals ← ci.runMetaM {} <| withOptions (fun o => o.setBool `pp.beta true) do
           ti.goalsBefore.mapM fun g => do
             let ig ← Widget.goalToInteractive g
             let hypsJson := ig.hyps.map fun h =>
