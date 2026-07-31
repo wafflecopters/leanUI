@@ -224,3 +224,28 @@ describe('operator spacing', () => {
     expect(renderStaticLatex(mkRow([mkSymbol('x')]))).toBe('x');
   });
 });
+
+describe('underscores never become subscripts', () => {
+  const tex = (v: string) => renderStaticLatex(mkRow([mkSymbol(v)]));
+
+  // REGRESSION: `_` is the subscript operator in math mode, so an unescaped
+  // name carrying one renders as its first half with the next character tucked
+  // underneath. Lean's unassigned metavariable `?eps_delta.mk.mk.fst` showed up
+  // in a goal as `?eps` with a subscript `d` followed by `elta.mk.mk.fst`.
+  test('a Lean metavariable name renders upright, underscore intact', () => {
+    expect(tex('?eps_delta.mk.mk.fst')).toBe('\\operatorname{?eps\\_delta.mk.mk.fst}');
+  });
+
+  test('ordinary snake_case names are escaped too', () => {
+    expect(tex('eps_delta')).toBe('\\operatorname{eps\\_delta}');
+    expect(tex('limF.eps_delta')).toBe('\\operatorname{limF.eps\\_delta}');
+    // Single leading letter — falls past the multi-letter rule, still escaped.
+    expect(tex('a_ih')).toBe('a\\_ih');
+    expect(tex('_')).toBe('\\_');
+  });
+
+  test('the DELIBERATE subscript still works', () => {
+    // `x0` → x₀ is a rendering rule, not an accident; escaping must not eat it.
+    expect(tex('x0')).toBe('{x}_{0}');
+  });
+});

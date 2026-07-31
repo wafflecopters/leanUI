@@ -247,6 +247,17 @@ function subLatex(base: string, sub: string): string {
 }
 
 /** Render a symbol value — most are passed through as-is. */
+/**
+ * Escape text that will be emitted into math mode.
+ *
+ * `_` is the subscript operator there, so a name carrying one — Lean's
+ * `?eps_delta.mk.mk.fst`, or any `snake_case` identifier — silently renders as
+ * its first half with the next character tucked underneath.
+ */
+function escapeLatexText(value: string): string {
+  return value.replace(/_/g, '\\_');
+}
+
 function renderSymbol(value: string): string {
   // Unicode Greek letters → LaTeX commands (δ → \delta, ε → \varepsilon)
   if (value.length === 1 && GREEK_TO_LATEX[value]) {
@@ -281,14 +292,21 @@ function renderSymbol(value: string): string {
     return `{${value[0]}}_{${value.slice(1)}}`;
   }
   // Multi-letter names (not LaTeX commands) render upright, like \sin or \log.
+  // A leading `?` counts: Lean names an unassigned metavariable
+  // `?eps_delta.mk.mk.fst`, and that is a NAME, not an expression — it should
+  // read upright like every other name. (It also must not fall through to the
+  // raw return below, where its underscore becomes a subscript: the goal
+  // rendered as `?eps` with a subscript `d` followed by `elta.mk.mk.fst`.)
   // Exclude primed variables (n', x').
-  if (value.length > 1 && !value.startsWith('\\') && /^[a-zA-Z]{2,}/.test(value)) {
-    return `\\operatorname{${value.replace(/_/g, '\\_')}}`;
+  if (value.length > 1 && !value.startsWith('\\') && /^\??[a-zA-Z]{2,}/.test(value)) {
+    return `\\operatorname{${escapeLatexText(value)}}`;
   }
   // Escape underscore: bare _ is the subscript operator in math mode.
   // Inside \htmlId{...}{_}, KaTeX still interprets _ as subscript, causing errors.
   if (value === '_') return '\\_';
-  return value;
+  // Anything left is emitted raw, so it must not carry math-mode syntax of its
+  // own — an underscore here silently becomes a subscript.
+  return value.includes('_') ? escapeLatexText(value) : value;
 }
 
 // ============================================================================
