@@ -559,6 +559,39 @@ async function withMathlibSlot<T>(priority: boolean, fn: () => Promise<T>): Prom
 // file path in per stdin line, one JSON out per stdout line. Warm requests
 // run in ~20ms.
 
+/**
+ * How big a resident worker may get before it is recycled, in MB.
+ *
+ * A worker's environment cache is a CACHE WITH NO EVICTION: every distinct
+ * prefix module it imports stays in memory for the life of the process, and a
+ * real preset's environment is hundreds of MB to GBs each. An editing session
+ * that touches many prefixes therefore grows its workers without bound — which
+ * is how an ordinary afternoon of proving reached ~100GB across a pool of
+ * three. Recycling on a REQUEST COUNT (the 400 below) does not bound that: the
+ * cost per request depends on what was imported, not on how many requests.
+ */
+// 3GB each: with the default pool of 3 that is a ~9GB ceiling for the pool,
+// versus the unbounded growth it replaces. Deliberately not lower — a worker
+// recycled too eagerly re-imports the prefix on its next request, and the
+// resident environment is the entire reason warm round-trips are ~20ms rather
+// than seconds. Tune with LEANUI_WORKER_MAX_MB if that trade sits differently
+// on your machine.
+const MAX_WORKER_RSS_MB = clampPoolSize(process.env.LEANUI_WORKER_MAX_MB, 3072, 64_000);
+/** How often to look (in requests) — `ps` is cheap next to an elaboration, but
+ *  not free, and memory cannot grow much in ten requests. */
+const RSS_CHECK_EVERY = 10;
+
+/** Resident size of a live pid in KB, or null when it can't be read. */
+function pidRssKb(pid: number): Promise<number | null> {
+  return new Promise((resolve) => {
+    execFile('ps', ['-o', 'rss=', '-p', String(pid)], { timeout: 5_000 }, (err, stdout) => {
+      if (err) return resolve(null);
+      const n = Number(stdout.trim());
+      resolve(Number.isFinite(n) ? n : null);
+    });
+  });
+}
+
 class ExtractWorker {
   private child: ChildProcessWithoutNullStreams | null = null;
   private waiters: Array<(line: string | null) => void> = [];
@@ -636,8 +669,28 @@ class ExtractWorker {
       const timer = setTimeout(() => this.child?.kill(), timeoutMs); // kill → exit → waiters flushed null
       const line = await reply;
       clearTimeout(timer);
-      // Recycle periodically: each request's elaboration state accumulates.
-      if (++this.served >= 400) {
+      // Recycle on SIZE first, then on count. The environment cache never
+      // evicts, so the honest bound is "how much memory is this holding", not
+      // "how many questions has it answered".
+      this.served++;
+      const pid = this.child?.pid;
+      if (pid !== undefined && this.served % RSS_CHECK_EVERY === 0) {
+        const rss = await pidRssKb(pid);
+        if (rss !== null && rss > MAX_WORKER_RSS_MB * 1024) {
+          console.warn(
+            `[lean-bridge] recycling worker ${pid}: ${Math.round(rss / 1024)}MB > ${MAX_WORKER_RSS_MB}MB`,
+          );
+          this.child?.kill();
+          this.child = null;
+          return line;
+        }
+      }
+      // Count backstop, for growth the size check somehow misses. 400 was far
+      // too generous: a single goal refresh with a subterm selected fires on
+      // the order of a HUNDRED trials (unfold alone is capped at 60), so 400
+      // requests is a few refreshes — and by then a worker on a real preset is
+      // many GB.
+      if (this.served >= 150) {
         this.child?.kill();
         this.child = null;
       }
