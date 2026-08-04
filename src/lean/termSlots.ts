@@ -270,9 +270,18 @@ export function projectionCandidates(
 ): string[] {
   const tokensOf = (text: string) => text.match(/[A-Za-z_][A-Za-z0-9_.']*|[⟦⟧]/g) ?? [];
   const hypTokens = new Set(tokensOf(hypType));
-  const head = hypTokens.size > 0 ? tokensOf(hypType)[0] : undefined;
+  const head = tokensOf(hypType)[0];
   const headDef = head ? declarations.find((d) => d.name === head) : undefined;
-  if (headDef?.prettyValue) for (const t of tokensOf(headDef.prettyValue)) hypTokens.add(t);
+  // The STRUCTURE the hypothesis really is, once the abbreviation is unfolded:
+  // the head of the definition's body (`fun … => Pair (0 < delta) …` → `Pair`).
+  let structHead: string | undefined;
+  if (headDef?.prettyValue) {
+    for (const t of tokensOf(headDef.prettyValue)) hypTokens.add(t);
+    const body = headDef.prettyValue.includes('=>')
+      ? headDef.prettyValue.slice(headDef.prettyValue.indexOf('=>') + 2)
+      : headDef.prettyValue;
+    structHead = tokensOf(body)[0];
+  }
   const scored: Array<{ expr: string; score: number }> = [];
   const seen = new Set<string>();
   for (const d of declarations) {
@@ -282,9 +291,18 @@ export function projectionCandidates(
     if (seen.has(field)) continue;
     seen.add(field);
     let score = 0;
-    for (const t of d.prettyType.match(/[A-Za-z_][A-Za-z0-9_.']*|[⟦⟧]/g) ?? []) {
+    for (const t of tokensOf(d.prettyType)) {
       if (hypTokens.has(t)) score++;
     }
+    // OWNING the hypothesis's structure beats sharing vocabulary with it.
+    // Raw overlap rewards long types: `Limit.eps_delta` mentions f, x0, L, ε
+    // and δ, so it outscored `Pair.fst : {A B} → Pair A B → A` — which is an
+    // actual field of what the hypothesis actually IS — five to one, and the
+    // cap then dropped the right answer. A projection of the hypothesis's own
+    // structure is not merely a better guess, it is the only kind that can
+    // typecheck.
+    const owner = d.name.slice(0, dot);
+    if (owner === structHead || owner === head) score += 100;
     if (score > 0) scored.push({ expr: `${hypName}.${field}`, score });
   }
   scored.sort((a, b) => b.score - a.score);

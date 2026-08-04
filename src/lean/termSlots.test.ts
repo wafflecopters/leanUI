@@ -108,9 +108,12 @@ describe('projectionCandidates', () => {
       { name: 'Pair.fst', prettyType: '{A B : Type} → Pair A B → A' },
       { name: 'Pair.snd', prettyType: '{A B : Type} → Pair A B → B' },
     ];
-    const c = projectionCandidates('fProof', 'EpsDeltaWitness f x0 L (ε / 2) deltaF', withAbbrev);
-    expect(c).toContain('fProof.fst');
-    expect(c).toContain('fProof.snd');
+    // And they must come FIRST, even against a projection whose long type
+    // shares more vocabulary: `Limit.eps_delta` mentions f, x0, L, ε and δ, so
+    // raw overlap put it ahead of `Pair.fst` five to one and the cap then
+    // dropped the only field that can typecheck.
+    const c = projectionCandidates('fProof', 'EpsDeltaWitness f x0 L (ε / 2) deltaF', withAbbrev, 2);
+    expect(c).toEqual(['fProof.fst', 'fProof.snd']);
   });
 
   test('a hypothesis whose head has no definition is unaffected', () => {

@@ -123,6 +123,47 @@ function hypothesisCandidates(input: CandidateInput): LeanSuggestion[] {
   return out;
 }
 
+/** How many hypotheses to look inside, and how many fields of each, when
+ *  hunting for a projection that CLOSES the goal. Each is a Lean trial, so
+ *  this is deliberately tight — the fact you want is almost always in something
+ *  recently introduced. */
+const PROJECTION_HYPS = 3;
+const PROJECTION_FIELDS = 2;
+
+/**
+ * Projections that might CLOSE the goal, without being asked.
+ *
+ * `apply minPos` leaves `0 < deltaF`, and that fact is sitting in
+ * `fProof : EpsDeltaWitness f x0 L (ε / 2) deltaF` — one field away. But
+ * projections were only offered for a hypothesis the user had CLICKED, and
+ * then only as `have probe := fProof.fst`, which opens the term builder rather
+ * than discharging the goal. So the goal looked unclosable: nothing in the tray
+ * finished it, and finding the move meant knowing to click the right
+ * hypothesis first.
+ *
+ * A field of something in scope is an ordinary way to close a goal, so it is
+ * offered like one. Which field fits is Lean's question, not ours — these are
+ * trialed like everything else, and only a projection that really closes shows
+ * up as a closer.
+ */
+function projectionExactCandidates(input: CandidateInput): LeanSuggestion[] {
+  const out: LeanSuggestion[] = [];
+  // Most recent first: the fact you need is usually the thing you just got.
+  const recent = [...input.hypotheses].reverse().slice(0, PROJECTION_HYPS);
+  for (const h of recent) {
+    if (h.name === input.selectedHypName) continue; // already covered, with the builder
+    for (const expr of projectionCandidates(h.name, h.type, input.declarations, PROJECTION_FIELDS)) {
+      out.push({
+        id: `lean-projexact:${expr}`,
+        label: `exact ${expr}`,
+        tactic: `exact ${expr}`,
+        kind: 'exact',
+      });
+    }
+  }
+  return out;
+}
+
 /**
  * Whole-goal solvers, offered on every goal and cheapest-first.
  *
@@ -302,6 +343,9 @@ export function tacticCandidates(input: CandidateInput): LeanSuggestion[] {
     // them is almost always the move, and nothing else can apply until it is.
     ...intros,
     ...assumption,
+    // Right after `assumption`, and for the same reason: a field of something
+    // in scope is as ordinary a way to close a goal as a hypothesis itself.
+    ...projectionExactCandidates(input),
     // Before the lemma searches: when the proof has two of something and needs
     // one, comparing them is the structural move, and no lemma in the file is
     // shaped like the goal it leaves.
