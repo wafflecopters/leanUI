@@ -91,6 +91,33 @@ describe('projectionCandidates', () => {
     expect(c[0]).toBe('limF.eps_delta');
     expect(c).not.toContain('limF.plusComm');
   });
+
+  // REGRESSION: `EpsDeltaWitness f x0 L (ε / 2) deltaF` IS a `Pair` — that is
+  // what the abbreviation unfolds to — but the word `Pair` appears nowhere in
+  // it, so `Pair.fst` scored zero overlap and `fProof.fst` was never offered.
+  // The positivity fact `0 < deltaF` lives in that projection, so the proof had
+  // no way to reach it: a dead end one step after `apply minPos`.
+  test('sees through an abbreviation to the structure underneath', () => {
+    const withAbbrev = [
+      ...decls,
+      {
+        name: 'EpsDeltaWitness',
+        prettyType: '{R : Real} → (ℝ → ℝ) → ℝ → ℝ → ℝ → ℝ → Type',
+        prettyValue: 'Pair (0 < delta) ((x : ℝ) → 0 < |x - x0| → |f x - L| < epsilon)',
+      },
+      { name: 'Pair.fst', prettyType: '{A B : Type} → Pair A B → A' },
+      { name: 'Pair.snd', prettyType: '{A B : Type} → Pair A B → B' },
+    ];
+    const c = projectionCandidates('fProof', 'EpsDeltaWitness f x0 L (ε / 2) deltaF', withAbbrev);
+    expect(c).toContain('fProof.fst');
+    expect(c).toContain('fProof.snd');
+  });
+
+  test('a hypothesis whose head has no definition is unaffected', () => {
+    // Nothing to unfold — ranking falls back to plain token overlap.
+    const c = projectionCandidates('limF', 'lim⟦x0⟧ f = L', decls);
+    expect(c).toEqual(['limF.eps_delta']);
+  });
 });
 
 describe('appliedExprWithHoles / parseApplied (builder ⟷ have round-trip)', () => {

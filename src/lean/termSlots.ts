@@ -252,14 +252,27 @@ export function slotSuggestionNames(
  * between the declaration's type text and the hypothesis's type text (a
  * projection of the hyp's own structure shares its notation/tokens), cap, and
  * let the standard validation trials drop the ones that don't typecheck.
+ *
+ * Overlap alone is blind to ABBREVIATIONS. `fProof : EpsDeltaWitness f x0 L
+ * (ε / 2) deltaF` is a `Pair` — that is literally what `EpsDeltaWitness`
+ * unfolds to — but the word `Pair` occurs nowhere in the hypothesis, so
+ * `Pair.fst` scored zero and `fProof.fst` was never offered, leaving the
+ * positivity fact inside it unreachable. So the head constant's DEFINITION
+ * joins the token set: a reader sees through the abbreviation, and so should
+ * the ranking. One level only, which is enough to reach the structure a
+ * `@[reducible] def` is standing in front of.
  */
 export function projectionCandidates(
   hypName: string,
   hypType: string,
-  declarations: ReadonlyArray<{ name: string; prettyType: string }>,
+  declarations: ReadonlyArray<{ name: string; prettyType: string; prettyValue?: string }>,
   cap = 6,
 ): string[] {
-  const hypTokens = new Set(hypType.match(/[A-Za-z_][A-Za-z0-9_.']*|[⟦⟧]/g) ?? []);
+  const tokensOf = (text: string) => text.match(/[A-Za-z_][A-Za-z0-9_.']*|[⟦⟧]/g) ?? [];
+  const hypTokens = new Set(tokensOf(hypType));
+  const head = hypTokens.size > 0 ? tokensOf(hypType)[0] : undefined;
+  const headDef = head ? declarations.find((d) => d.name === head) : undefined;
+  if (headDef?.prettyValue) for (const t of tokensOf(headDef.prettyValue)) hypTokens.add(t);
   const scored: Array<{ expr: string; score: number }> = [];
   const seen = new Set<string>();
   for (const d of declarations) {
