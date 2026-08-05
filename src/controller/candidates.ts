@@ -61,12 +61,18 @@ export interface CandidateInput {
 
 /** How many file rewrite lemmas to trial (each is a Lean round-trip). */
 const REWRITE_CAP = 10;
-/** How many `unfold <def>` candidates to trial when a subterm is selected.
- *  Generous, because the list is now definitions only (lemmas filtered out) and
- *  the one you need is often deep in the file: the constants behind a displayed
- *  literal — `2` is `rtwo` — are invisible in the goal text, so there is nothing
- *  to rank them by. Validation drops whatever doesn't fire. */
-const UNFOLD_CAP = 60;
+/**
+ * How many `unfold <def>` candidates to trial when a subterm is selected.
+ *
+ * Was 60, which is 60 Lean round-trips from a single click — by a wide margin
+ * the biggest contributor to both click latency and the elaboration state that
+ * accumulates in a worker. The generosity was defensible on its own terms (the
+ * constants behind a displayed literal — `2` is `rtwo` — are invisible in the
+ * goal text, so there is little to rank them by), but not against what it cost
+ * and not against what it displaced: the trials it crowded out included lemmas
+ * the proof actually needed.
+ */
+const UNFOLD_CAP = 20;
 
 /**
  * Rewrite candidates: equality hypotheses first (the induction hypothesis is

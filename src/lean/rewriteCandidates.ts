@@ -303,8 +303,19 @@ function isStructural(prettyType: string): boolean {
   return idents.length > 0 && idents.every((id) => binders.has(id));
 }
 
-/** Slots held for structural moves, so they are always reachable. */
-const STRUCTURAL_SLOTS = 3;
+/**
+ * Slots held for structural moves, so they are always reachable.
+ *
+ * Five, not three. A structural lemma's conclusion is made only of ITS OWN
+ * bound variables, so token overlap with the goal is close to meaningless —
+ * `convertEps : v < ε/2 + ε/2 → v < epsilon` scored zero against a goal saying
+ * `ε` rather than `epsilon`, because the only word they could have shared is a
+ * name the lemma made up. These lemmas are therefore ranked almost arbitrarily
+ * among themselves, and three slots meant the first three won and the rest were
+ * unreachable: `convertEps` is the step that turns ε/2 + ε/2 back into ε, and
+ * there was no way to reach it from the tray.
+ */
+const STRUCTURAL_SLOTS = 5;
 
 /**
  * File lemmas whose CONCLUSION is shaped like the goal — candidates for
@@ -323,7 +334,7 @@ export function applyCandidates(
   const goalHead = headOp(target);
   if (!goalHead) return [];
   const goalTokens = tokens(target);
-  const scored: Array<{ name: string; score: number; structural: boolean }> = [];
+  const scored: Array<{ name: string; score: number; structural: boolean; leaves: number }> = [];
   for (const d of declarations) {
     if (d.name === currentDeclName) continue;
     if (d.kind !== 'def' && d.kind !== 'theorem') continue;
@@ -331,8 +342,18 @@ export function applyCandidates(
     if (headOp(concl) !== goalHead) continue;
     let score = 0;
     for (const t of tokens(concl)) if (goalTokens.has(t)) score++;
-    scored.push({ name: d.name, score, structural: isStructural(d.prettyType) });
+    scored.push({
+      name: d.name,
+      score,
+      structural: isStructural(d.prettyType),
+      leaves: premiseCount(d.prettyType),
+    });
   }
+  // NOTE: deliberately NOT tiebroken by `leaves` here. Tried it — preferring
+  // the lemma that leaves least looks principled, but applied to the main sort
+  // it pushed `ltMin` (two premises, and exactly the right move) off the tray
+  // at `0 < rmin deltaF deltaG` to make room for one-premise lemmas that don't
+  // apply. The tiebreak only pays off among the leftovers, below.
   scored.sort((a, b) => b.score - a.score);
 
   // Best matches first — but keep a few slots for the structural moves, which
@@ -341,7 +362,20 @@ export function applyCandidates(
   const have = new Set(picked.map((p) => p.name));
   const missing = STRUCTURAL_SLOTS - picked.filter((p) => p.structural).length;
   if (missing > 0) {
-    const extras = scored.filter((p) => p.structural && !have.has(p.name)).slice(0, missing);
+    // Among structural lemmas there is nothing to rank BY: their conclusions
+    // are made of their own bound variables, so overlap with the goal is near
+    // zero for all of them and the order is whatever the file happened to be
+    // in. `convertEps` — the step that turns ε/2 + ε/2 back into ε — sat around
+    // 25th and was unreachable for that reason alone.
+    //
+    // So prefer the one that LEAVES THE LEAST: a lemma with a single premise is
+    // a better opening guess than one that also asks you to invent a midpoint.
+    // It is a tiebreak, not a claim about which is right — validation still
+    // decides, and the cheap ones are simply worth asking about first.
+    const extras = scored
+      .filter((p) => p.structural && !have.has(p.name))
+      .sort((a, b) => a.leaves - b.leaves)
+      .slice(0, missing);
     for (const extra of extras) {
       // Displace the lowest-scoring NON-structural pick, never another
       // structural one.
