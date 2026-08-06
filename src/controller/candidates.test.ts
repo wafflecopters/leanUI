@@ -250,9 +250,18 @@ describe('a clicked hypothesis that is a FUNCTION can be used', () => {
     currentDeclName: 'limitAdd',
     goalText: '|f x + g x - (L + M)| < \u03b5',
     hypotheses: [
-      { name: 'dfPos', type: '0 < \u03b4F' },
+      { name: 'dfPos', type: '0 < \u03b4F', isFun: false, fields: [] },
       // The ε-δ workhorse: feed it the point and two bounds, get the estimate.
-      { name: 'fnF', type: '(x : \u211d) → 0 < |x - x0| → |x - x0| < \u03b4F → |f x - L| < \u03b5 / 2' },
+      // Note the RENDERED type here — the preset prints implications as prose,
+      // so there is no `→` in it anywhere. The first version of this feature
+      // tested the text for an arrow and missed this exact hypothesis; `isFun`
+      // comes from the elaborator and does not care how the type is displayed.
+      {
+        name: 'fnF',
+        type: '\u2200x \u2208 \u211d, 0 < |x - x0| and |x - x0| < \u03b4F, then |f x - L| < \u03b5 / 2',
+        isFun: true,
+        fields: [],
+      },
     ],
     ...over,
   });

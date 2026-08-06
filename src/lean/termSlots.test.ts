@@ -80,46 +80,19 @@ describe('slotSuggestionNames', () => {
 });
 
 describe('projectionCandidates', () => {
-  const decls = [
-    { name: 'Limit.eps_delta', prettyType: '{R : Real} → (lim⟦x0⟧ f = L) → (epsilon : ℝ) → …' },
-    { name: 'Preorder.le', prettyType: 'Preorder A → A → A → Prop' },
-    { name: 'plusComm', prettyType: '∀ (n m : MyNat), n + m = m + n' },
-  ];
-
-  test('ranks projections sharing the hypothesis type tokens; skips undotted', () => {
-    const c = projectionCandidates('limF', 'lim⟦x0⟧ f = L', decls);
-    expect(c[0]).toBe('limF.eps_delta');
-    expect(c).not.toContain('limF.plusComm');
+  // Nothing to rank and nothing to guess: Lean reports the structure's fields
+  // (after unfolding, so an abbreviation like `EpsDeltaWitness` gives `Pair`'s
+  // fields), and every one of them is a real projection. The version this
+  // replaced scored dotted declarations by token overlap — it missed
+  // `Pair.fst` on a hypothesis printing as `EpsDeltaWitness …`, and offered
+  // `limF.supUpperBound`, which cannot typecheck.
+  test('offers exactly the fields Lean reported', () => {
+    expect(projectionCandidates('fProof', ['fst', 'snd'])).toEqual(['fProof.fst', 'fProof.snd']);
+    expect(projectionCandidates('limF', ['eps_delta'])).toEqual(['limF.eps_delta']);
   });
 
-  // REGRESSION: `EpsDeltaWitness f x0 L (ε / 2) deltaF` IS a `Pair` — that is
-  // what the abbreviation unfolds to — but the word `Pair` appears nowhere in
-  // it, so `Pair.fst` scored zero overlap and `fProof.fst` was never offered.
-  // The positivity fact `0 < deltaF` lives in that projection, so the proof had
-  // no way to reach it: a dead end one step after `apply minPos`.
-  test('sees through an abbreviation to the structure underneath', () => {
-    const withAbbrev = [
-      ...decls,
-      {
-        name: 'EpsDeltaWitness',
-        prettyType: '{R : Real} → (ℝ → ℝ) → ℝ → ℝ → ℝ → ℝ → Type',
-        prettyValue: 'Pair (0 < delta) ((x : ℝ) → 0 < |x - x0| → |f x - L| < epsilon)',
-      },
-      { name: 'Pair.fst', prettyType: '{A B : Type} → Pair A B → A' },
-      { name: 'Pair.snd', prettyType: '{A B : Type} → Pair A B → B' },
-    ];
-    // And they must come FIRST, even against a projection whose long type
-    // shares more vocabulary: `Limit.eps_delta` mentions f, x0, L, ε and δ, so
-    // raw overlap put it ahead of `Pair.fst` five to one and the cap then
-    // dropped the only field that can typecheck.
-    const c = projectionCandidates('fProof', 'EpsDeltaWitness f x0 L (ε / 2) deltaF', withAbbrev, 2);
-    expect(c).toEqual(['fProof.fst', 'fProof.snd']);
-  });
-
-  test('a hypothesis whose head has no definition is unaffected', () => {
-    // Nothing to unfold — ranking falls back to plain token overlap.
-    const c = projectionCandidates('limF', 'lim⟦x0⟧ f = L', decls);
-    expect(c).toEqual(['limF.eps_delta']);
+  test('a hypothesis that is not a structure has no projections', () => {
+    expect(projectionCandidates('deltaF', [])).toEqual([]);
   });
 });
 

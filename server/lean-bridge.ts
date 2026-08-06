@@ -312,6 +312,14 @@ export interface LeanHyp {
   type: TaggedText;
 }
 
+/** What a hypothesis IS, from the elaborator rather than from its rendering. */
+export interface LeanHypFact {
+  name: string;
+  typeHead: string | null;
+  isFun: boolean;
+  fields: string[];
+}
+
 /** A single open goal: optional case name, hypotheses, and a target. */
 export interface LeanGoalState {
   /** `case foo` name, if any. */
@@ -322,6 +330,8 @@ export interface LeanGoalState {
   /** Whether the target is a Prop (a claim to prove) as opposed to data (a
    *  value to choose). Absent from pre-`isProp` extractor builds. */
   isProp?: boolean;
+  /** Structural facts per hypothesis, from the elaborator. */
+  hypFacts?: LeanHypFact[];
   /** Plain-text rendering (fallback / copy), e.g. "n : Nat\n⊢ n + 0 = n". */
   plain: string;
 }
@@ -422,9 +432,18 @@ export function parseAnalyzeJson(
           })
           .filter(Boolean)
       : [];
+    const hypFacts: LeanHypFact[] = Array.isArray(gs?.hypFacts)
+      ? gs.hypFacts.map((h: any) => ({
+          name: String(h?.name ?? ''),
+          typeHead: typeof h?.typeHead === 'string' ? h.typeHead : null,
+          isFun: h?.isFun === true,
+          fields: Array.isArray(h?.fields) ? h.fields.map((x: any) => String(x)) : [],
+        }))
+      : [];
     return {
       ...(typeof gs?.case === 'string' ? { case: gs.case } : {}),
       hyps,
+      ...(hypFacts.length ? { hypFacts } : {}),
       targetTagged: target,
       ...(typeof gs?.isProp === 'boolean' ? { isProp: gs.isProp } : {}),
       plain: String(gs?.plain ?? ''),

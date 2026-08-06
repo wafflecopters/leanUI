@@ -953,9 +953,26 @@ export class ProofSession {
   }
 
   /** Hypotheses flattened to one entry per name, with plain type text. */
-  hypothesesWithTypes(): Array<{ name: string; type: string }> {
+  hypothesesWithTypes(): Array<{
+    name: string;
+    type: string;
+    typeHead?: string | null;
+    isFun?: boolean;
+    fields?: readonly string[];
+  }> {
+    // The rendered type (for text ranking) PLUS what the elaborator says the
+    // hypothesis is — see LeanHypFact. Keyed by name, because Lean reports the
+    // facts per local declaration while the display groups `a b : T` together.
+    const facts = new Map((this.cursorGoal?.hypFacts ?? []).map((f) => [f.name, f]));
     return (this.cursorGoal?.hyps ?? []).flatMap((h) =>
-      h.names.map((name) => ({ name, type: taggedText(h.type) })),
+      h.names.map((name) => {
+        const f = facts.get(name);
+        return {
+          name,
+          type: taggedText(h.type),
+          ...(f ? { typeHead: f.typeHead, isFun: f.isFun, fields: f.fields } : {}),
+        };
+      }),
     );
   }
 

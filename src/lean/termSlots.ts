@@ -246,65 +246,21 @@ export function slotSuggestionNames(
 }
 
 /**
- * Candidate PROJECTIONS to "use" on a hypothesis — the Lean-path version of
- * TT's record-field "Use <field>" suggestions. Generic: every dotted
- * declaration `T.field` is a potential projection; rank by token overlap
- * between the declaration's type text and the hypothesis's type text (a
- * projection of the hyp's own structure shares its notation/tokens), cap, and
- * let the standard validation trials drop the ones that don't typecheck.
+ * The projections available on a hypothesis — `fProof.fst`, `limF.eps_delta`.
  *
- * Overlap alone is blind to ABBREVIATIONS. `fProof : EpsDeltaWitness f x0 L
- * (ε / 2) deltaF` is a `Pair` — that is literally what `EpsDeltaWitness`
- * unfolds to — but the word `Pair` occurs nowhere in the hypothesis, so
- * `Pair.fst` scored zero and `fProof.fst` was never offered, leaving the
- * positivity fact inside it unreachable. So the head constant's DEFINITION
- * joins the token set: a reader sees through the abbreviation, and so should
- * the ranking. One level only, which is enough to reach the structure a
- * `@[reducible] def` is standing in front of.
+ * This used to be a guess: score every dotted declaration in the file by token
+ * overlap between its type and the hypothesis's, unfold abbreviations by
+ * string-matching definition bodies, boost whatever seemed to own the
+ * structure, cap, and hope. It was wrong in both directions — it missed
+ * `Pair.fst` on a hypothesis whose type printed as `EpsDeltaWitness …`, and it
+ * offered `limF.supUpperBound`, which cannot typecheck.
+ *
+ * Lean already knows. `hypFacts` carries the structure's field names, taken
+ * from the environment after unfolding, so the answer is exact and there is
+ * nothing to rank: a structure has a handful of fields and every one of them
+ * is real.
  */
-export function projectionCandidates(
-  hypName: string,
-  hypType: string,
-  declarations: ReadonlyArray<{ name: string; prettyType: string; prettyValue?: string }>,
-  cap = 6,
-): string[] {
-  const tokensOf = (text: string) => text.match(/[A-Za-z_][A-Za-z0-9_.']*|[⟦⟧]/g) ?? [];
-  const hypTokens = new Set(tokensOf(hypType));
-  const head = tokensOf(hypType)[0];
-  const headDef = head ? declarations.find((d) => d.name === head) : undefined;
-  // The STRUCTURE the hypothesis really is, once the abbreviation is unfolded:
-  // the head of the definition's body (`fun … => Pair (0 < delta) …` → `Pair`).
-  let structHead: string | undefined;
-  if (headDef?.prettyValue) {
-    for (const t of tokensOf(headDef.prettyValue)) hypTokens.add(t);
-    const body = headDef.prettyValue.includes('=>')
-      ? headDef.prettyValue.slice(headDef.prettyValue.indexOf('=>') + 2)
-      : headDef.prettyValue;
-    structHead = tokensOf(body)[0];
-  }
-  const scored: Array<{ expr: string; score: number }> = [];
-  const seen = new Set<string>();
-  for (const d of declarations) {
-    const dot = d.name.lastIndexOf('.');
-    if (dot <= 0) continue;
-    const field = d.name.slice(dot + 1);
-    if (seen.has(field)) continue;
-    seen.add(field);
-    let score = 0;
-    for (const t of tokensOf(d.prettyType)) {
-      if (hypTokens.has(t)) score++;
-    }
-    // OWNING the hypothesis's structure beats sharing vocabulary with it.
-    // Raw overlap rewards long types: `Limit.eps_delta` mentions f, x0, L, ε
-    // and δ, so it outscored `Pair.fst : {A B} → Pair A B → A` — which is an
-    // actual field of what the hypothesis actually IS — five to one, and the
-    // cap then dropped the right answer. A projection of the hypothesis's own
-    // structure is not merely a better guess, it is the only kind that can
-    // typecheck.
-    const owner = d.name.slice(0, dot);
-    if (owner === structHead || owner === head) score += 100;
-    if (score > 0) scored.push({ expr: `${hypName}.${field}`, score });
-  }
-  scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, cap).map((s) => s.expr);
+export function projectionCandidates(hypName: string, fields: readonly string[]): string[] {
+  return fields.map((field) => `${hypName}.${field}`);
 }
+

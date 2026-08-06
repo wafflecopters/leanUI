@@ -21,6 +21,24 @@ export interface LeanHyp {
 }
 
 /** A single open goal: optional case name, hypotheses, and a target. */
+/**
+ * What a hypothesis IS, according to the elaborator — not according to its
+ * rendered type. The editor used to recover these by reading pretty-printed
+ * text, which is written for a human and changes with notation: a binder named
+ * `epsilon` shows as `ε`, an implication can print as prose, and an
+ * abbreviation hides the structure it stands for. Every one of those broke a
+ * suggestion. Lean knows them exactly, so it says so.
+ */
+export interface LeanHypFact {
+  name: string;
+  /** Head constant of the type after unfolding — `EpsDeltaWitness …` is `Pair`. */
+  typeHead: string | null;
+  /** Is it a function? (Then it can be USED: applied to arguments.) */
+  isFun: boolean;
+  /** Field names, when the type is a structure. */
+  fields: string[];
+}
+
 export interface LeanGoalState {
   /** `case foo` name, if any. */
   case?: string;
@@ -31,6 +49,8 @@ export interface LeanGoalState {
    *  value to choose, e.g. `⊢ ℝ` after `apply ltLeTrans`). Absent on output
    *  from an extractor built before this field existed. */
   isProp?: boolean;
+  /** Structural facts per hypothesis, from the elaborator. */
+  hypFacts?: LeanHypFact[];
   /** Plain-text rendering (fallback / copy). */
   plain: string;
 }

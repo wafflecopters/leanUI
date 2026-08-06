@@ -45,8 +45,18 @@ export interface CandidateInput {
    * filtering out every `<` lemma before it can be trialed.
    */
   goalText: string;
-  /** Hypotheses in scope, with plain type text. */
-  hypotheses: ReadonlyArray<{ name: string; type: string }>;
+  /** Hypotheses in scope: rendered type for ranking text, plus what the
+   *  elaborator says each one IS (see LeanHypFact). */
+  hypotheses: ReadonlyArray<{
+    name: string;
+    type: string;
+    /** Head constant of the type after unfolding. */
+    typeHead?: string | null;
+    /** True when it is a function, and so can be applied to arguments. */
+    isFun?: boolean;
+    /** Field names, when it is a structure. */
+    fields?: readonly string[];
+  }>;
   /** Plain text of the clicked subterm; empty when nothing is selected. */
   selectedSubtermText?: string;
   /** Clicked hypothesis name, when the user selected one. */
@@ -115,19 +125,19 @@ function hypothesisCandidates(input: CandidateInput): LeanSuggestion[] {
   const hyp = input.selectedHypName;
   if (!hyp) return [];
   const out = hypothesisSuggestions(hyp);
-  const hypType = input.hypotheses.find((h) => h.name === hyp)?.type ?? '';
+  const facts = input.hypotheses.find((h) => h.name === hyp);
 
   // A hypothesis that is a FUNCTION can be USED — applied to arguments to
-  // obtain the fact it yields. `fnF : (x : ℝ) → 0 < |x - x0| → |x - x0| < δF →
-  // |f x - L| < ε/2` is the ε-δ workhorse: you feed it the point and the two
-  // bounds and get the estimate. Nothing offered that. `exact`/`apply` want its
-  // CONCLUSION to match the goal, which it doesn't, and it has no fields for
-  // the projection path to find — so clicking the one hypothesis that carries
-  // the fact you need produced nothing at all.
+  // obtain the fact it yields. `dfFn : (x : ℝ) → 0 < |x - x0| → … → |f x - L| <
+  // ε/2` is the ε-δ workhorse: feed it the point and the two bounds, get the
+  // estimate. `exact`/`apply` want its CONCLUSION to match the goal, and it has
+  // no fields for the projection path, so nothing else offers it.
   //
-  // Same trial as a projection: `have <probe> := <hyp>` type-checks it without
-  // committing, and clicking opens the slot builder to supply the arguments.
-  if (/→/.test(hypType)) {
+  // `isFun` comes from the elaborator. Testing the RENDERED type for an arrow
+  // (the first attempt) missed this very hypothesis, because the preset prints
+  // its implications as prose — "∀x ∈ ℝ, 0 < |x - x0| and …, then …" — and there
+  // is no `→` in that at all.
+  if (facts?.isFun) {
     out.push({
       id: `hyp-use:${hyp}`,
       label: `use ${hyp}`,
@@ -136,7 +146,7 @@ function hypothesisCandidates(input: CandidateInput): LeanSuggestion[] {
     });
   }
 
-  for (const expr of projectionCandidates(hyp, hypType, input.declarations)) {
+  for (const expr of projectionCandidates(hyp, facts?.fields ?? [])) {
     // The trial is a `have <probe> := <expr>` — it type-checks the projection
     // without committing to it. Clicking opens the slot builder.
     out.push({
@@ -178,7 +188,7 @@ function projectionExactCandidates(input: CandidateInput): LeanSuggestion[] {
   const recent = [...input.hypotheses].reverse().slice(0, PROJECTION_HYPS);
   for (const h of recent) {
     if (h.name === input.selectedHypName) continue; // already covered, with the builder
-    for (const expr of projectionCandidates(h.name, h.type, input.declarations, PROJECTION_FIELDS)) {
+    for (const expr of projectionCandidates(h.name, (h.fields ?? []).slice(0, PROJECTION_FIELDS))) {
       out.push({
         id: `lean-projexact:${expr}`,
         label: `exact ${expr}`,

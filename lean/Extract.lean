@@ -148,6 +148,44 @@ unsafe def analyzeFile (cache : EnvCache) (path : String) : IO Json := do
               Json.mkObj
                 [("names", Json.arr (h.names.map Json.str)),
                  ("type", taggedToJson h.type)]
+            -- STRUCTURAL FACTS about each hypothesis, straight from the
+            -- elaborator. The editor used to recover these by parsing the
+            -- pretty-printed type: guessing a hypothesis's structure from
+            -- token overlap, testing for a function with a regex on `→`. That
+            -- reads what was RENDERED for a human, so it broke on everything
+            -- rendering is allowed to do — a binder named `epsilon` displaying
+            -- as `ε`, `|a|` notation, an abbreviation hiding the structure it
+            -- stands for. Lean knows all of it exactly.
+            --
+            -- `whnf` is the point: `EpsDeltaWitness f x0 L (ε/2) δ` IS a `Pair`,
+            -- and only unfolding says so.
+            let hypFacts ← g.withContext do
+              let envH ← getEnv
+              let mut rows : Array Json := #[]
+              for ldecl in ← getLCtx do
+                if ldecl.isImplementationDetail then continue
+                let ty ← instantiateMVars ldecl.type
+                let red ← try Meta.whnf ty catch _ => pure ty
+                let headName : Option Name :=
+                  match red.getAppFn with
+                  | .const n _ => some n
+                  | _ => none
+                -- A structure's FIELDS are what "use this hypothesis" offers;
+                -- asking the environment beats inferring them from a name.
+                let fields : Array String :=
+                  match headName with
+                  | some n => match getStructureInfo? envH n with
+                    | some info => info.fieldNames.map (·.toString)
+                    | none => #[]
+                  | none => #[]
+                rows := rows.push <| Json.mkObj
+                  [("name", Json.str ldecl.userName.toString),
+                   ("typeHead", match headName with
+                     | some n => Json.str n.toString
+                     | none => Json.null),
+                   ("isFun", Json.bool red.isForall),
+                   ("fields", Json.arr (fields.map Json.str))]
+              pure rows
             let plain := toString (← Meta.ppGoal g)
             -- Prop targets are claims to PROVE; non-Prop targets (ℝ, ℕ, a
             -- function…) are values to CHOOSE. The UI words them differently,
@@ -158,6 +196,7 @@ unsafe def analyzeFile (cache : EnvCache) (path : String) : IO Json := do
                | some n => [("case", Json.str n)]
                | none => []) ++
               [("hyps", Json.arr hypsJson),
+               ("hypFacts", Json.arr hypFacts),
                ("targetTagged", taggedToJson ig.type),
                ("isProp", Json.bool isProp),
                ("plain", Json.str plain)]
