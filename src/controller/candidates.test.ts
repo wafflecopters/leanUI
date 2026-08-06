@@ -243,4 +243,33 @@ describe('Compute (subterm reduction via the file’s @[simp] rules)', () => {
     const s = tacticCandidates({ ...base, goalText: '0 < 2 + -1' });
     expect(s.find((x) => x.id.startsWith('lean-compute'))).toBeUndefined();
   });
+
+describe('a clicked hypothesis that is a FUNCTION can be used', () => {
+  const base = (over: Partial<CandidateInput> = {}): CandidateInput => ({
+    declarations: REAL_ANALYSIS,
+    currentDeclName: 'limitAdd',
+    goalText: '|f x + g x - (L + M)| < \u03b5',
+    hypotheses: [
+      { name: 'dfPos', type: '0 < \u03b4F' },
+      // The ε-δ workhorse: feed it the point and two bounds, get the estimate.
+      { name: 'fnF', type: '(x : \u211d) → 0 < |x - x0| → |x - x0| < \u03b4F → |f x - L| < \u03b5 / 2' },
+    ],
+    ...over,
+  });
+
+  // REGRESSION: clicking the one hypothesis carrying the fact you need produced
+  // NOTHING. `exact`/`apply` want its conclusion to match the goal (it doesn't),
+  // and a function has no fields for the projection path to find.
+  test('offers `use <hyp>`, which opens the builder for its arguments', () => {
+    const tactics = tacticCandidates(base({ selectedHypName: 'fnF' })).map((c) => c.tactic);
+    expect(tactics).toContain('have leanuiProbe := fnF');
+  });
+
+  test('a non-function hypothesis gets no `use` — there is nothing to apply', () => {
+    const tactics = tacticCandidates(base({ selectedHypName: 'dfPos' })).map((c) => c.tactic);
+    expect(tactics).not.toContain('have leanuiProbe := dfPos');
+    // The ordinary hypothesis actions are still there.
+    expect(tactics).toContain('exact dfPos');
+  });
+});
 });

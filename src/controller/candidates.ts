@@ -116,6 +116,26 @@ function hypothesisCandidates(input: CandidateInput): LeanSuggestion[] {
   if (!hyp) return [];
   const out = hypothesisSuggestions(hyp);
   const hypType = input.hypotheses.find((h) => h.name === hyp)?.type ?? '';
+
+  // A hypothesis that is a FUNCTION can be USED — applied to arguments to
+  // obtain the fact it yields. `fnF : (x : ℝ) → 0 < |x - x0| → |x - x0| < δF →
+  // |f x - L| < ε/2` is the ε-δ workhorse: you feed it the point and the two
+  // bounds and get the estimate. Nothing offered that. `exact`/`apply` want its
+  // CONCLUSION to match the goal, which it doesn't, and it has no fields for
+  // the projection path to find — so clicking the one hypothesis that carries
+  // the fact you need produced nothing at all.
+  //
+  // Same trial as a projection: `have <probe> := <hyp>` type-checks it without
+  // committing, and clicking opens the slot builder to supply the arguments.
+  if (/→/.test(hypType)) {
+    out.push({
+      id: `hyp-use:${hyp}`,
+      label: `use ${hyp}`,
+      tactic: `have ${PROBE_NAME} := ${hyp}`,
+      kind: 'apply',
+    });
+  }
+
   for (const expr of projectionCandidates(hyp, hypType, input.declarations)) {
     // The trial is a `have <probe> := <expr>` — it type-checks the projection
     // without committing to it. Clicking opens the slot builder.
