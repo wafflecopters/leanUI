@@ -20,6 +20,14 @@ import type { NodeGoalInfo } from '../proof-tree/goal-types';
 /** Lean's inaccessible-name marker (LATIN CROSS, U+271D). */
 const DAGGER = '✝';
 
+/** Labels that mean "no name yet", written by whichever path made the case:
+ *  `?` from a bare `cases x`, the literal `case` from a `·` bullet. Both read
+ *  as a name in the prose — "Case (case):" — until Lean supplies the real one. */
+function isPlaceholderLabel(label: string): boolean {
+  const t = label.trim();
+  return t === '' || t === '?' || t === 'case';
+}
+
 /** A valid Lean constructor identifier (letters/digits/_/., not a display label). */
 function isLeanCtorName(name: string | undefined): name is string {
   return name !== undefined && /^[A-Za-z_][A-Za-z0-9_.]*$/.test(name);
@@ -103,7 +111,7 @@ export function enrichInductionCaseNames(
       // The DISPLAY label too, not just the printed alternative: a placeholder
       // case reads "Case ?" in the prose and the outline until something gives
       // it a name, and the name Lean just told us is that name.
-      ...(c.label === '?' || c.label.trim().length === 0 ? { label: ctorName } : {}),
+      ...(isPlaceholderLabel(c.label) ? { label: ctorName } : {}),
       ...(ihNames.length ? { ihNames } : {}),
     };
   };
