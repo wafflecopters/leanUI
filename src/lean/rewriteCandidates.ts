@@ -293,15 +293,6 @@ function binderNames(prettyType: string): Set<string> {
  * happens to mention a `0`. Those are the moves a user reaches for when the
  * direct lemma isn't what they want, so a few slots are held for them.
  */
-function isStructural(prettyType: string): boolean {
-  const conclusion = conclusionOf(prettyType);
-  // A concrete NUMERAL makes the conclusion specific: `divPos`'s `0 < a / b` is
-  // about zero, not about any two terms, even though its variables are bound.
-  if (/\d/.test(conclusion)) return false;
-  const binders = binderNames(prettyType);
-  const idents = [...conclusion.matchAll(/[A-Za-z_α-ωΑ-Ω][A-Za-z0-9_'α-ωΑ-Ω]*/g)].map((m) => m[0]);
-  return idents.length > 0 && idents.every((id) => binders.has(id));
-}
 
 /**
  * Slots held for structural moves, so they are always reachable.
@@ -328,7 +319,7 @@ export function applyCandidates(
   declarations: readonly LeanDeclaration[],
   goalText: string,
   currentDeclName?: string,
-  cap = 8,
+  cap = 30,
   /** The goal's head CONSTANT, from the elaborator. When present it replaces
    *  the text-derived operator entirely: `0 < x` is `rlt 0 x` whatever notation
    *  renders it as, so `convertEps` — whose binder is spelled `epsilon` while
@@ -340,7 +331,7 @@ export function applyCandidates(
   const byConst = typeof goalHeadConst === 'string' && goalHeadConst.length > 0;
   if (!byConst && !goalHead) return [];
   const goalTokens = tokens(target);
-  const scored: Array<{ name: string; score: number; structural: boolean; leaves: number }> = [];
+  const scored: Array<{ name: string; score: number; leaves: number }> = [];
   for (const d of declarations) {
     if (d.name === currentDeclName) continue;
     if (d.kind !== 'def' && d.kind !== 'theorem') continue;
@@ -353,7 +344,6 @@ export function applyCandidates(
     scored.push({
       name: d.name,
       score,
-      structural: isStructural(d.prettyType),
       // From Lean when it said so; the text estimate only as a fallback.
       leaves: typeof d.premises === 'number' ? d.premises : premiseCount(d.prettyType),
     });
@@ -363,41 +353,24 @@ export function applyCandidates(
   // it pushed `ltMin` (two premises, and exactly the right move) off the tray
   // at `0 < rmin deltaF deltaG` to make room for one-premise lemmas that don't
   // apply. The tiebreak only pays off among the leftovers, below.
-  scored.sort((a, b) => b.score - a.score);
-
-  // Best matches first — but keep a few slots for the structural moves, which
-  // score near zero by construction and would otherwise never be offered.
+  // Overlap first (a lemma sharing the goal's vocabulary is the likelier
+  // hit and should stream back first), then the cheapest — a move leaving one
+  // goal is a better thing to see early than one leaving three.
+  scored.sort((a, b) => b.score - a.score || a.leaves - b.leaves);
   const picked = scored.slice(0, cap);
-  const have = new Set(picked.map((p) => p.name));
-  const missing = STRUCTURAL_SLOTS - picked.filter((p) => p.structural).length;
-  if (missing > 0) {
-    // Among structural lemmas there is nothing to rank BY: their conclusions
-    // are made of their own bound variables, so overlap with the goal is near
-    // zero for all of them and the order is whatever the file happened to be
-    // in. `convertEps` — the step that turns ε/2 + ε/2 back into ε — sat around
-    // 25th and was unreachable for that reason alone.
-    //
-    // So prefer the one that LEAVES THE LEAST: a lemma with a single premise is
-    // a better opening guess than one that also asks you to invent a midpoint.
-    // It is a tiebreak, not a claim about which is right — validation still
-    // decides, and the cheap ones are simply worth asking about first.
-    const extras = scored
-      .filter((p) => p.structural && !have.has(p.name))
-      .sort((a, b) => a.leaves - b.leaves)
-      .slice(0, missing);
-    for (const extra of extras) {
-      // Displace the lowest-scoring NON-structural pick, never another
-      // structural one.
-      for (let i = picked.length - 1; i >= 0; i--) {
-        if (!picked[i].structural) {
-          picked.splice(i, 1);
-          break;
-        }
-      }
-      picked.push(extra);
-    }
-    picked.sort((a, b) => b.score - a.score);
-  }
+
+  // No reserve, no special cases: with an exact filter the whole pool is small
+  // (28 lemmas conclude `<` in the real-analysis preset, out of 326
+  // declarations), so we simply try all of them. Scoring only decides the ORDER
+  // pills stream back in.
+  //
+  // This replaced three successive attempts to RANK the general-purpose lemmas
+  // into reach — reserved slots, fewest-goals-first, transformers-first. Each
+  // one surfaced `convertEps` by displacing something else that mattered, which
+  // is what a proxy does when it has nothing real to go on: those lemmas'
+  // conclusions are made of their own bound variables, so no measure of "looks
+  // like this goal" can separate them. Trying them all is both simpler and
+  // correct, and validation was always the thing deciding anyway.
   return picked.map((s) => s.name);
 }
 

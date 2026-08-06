@@ -166,14 +166,19 @@ unsafe def analyzeFile (cache : EnvCache) (path : String) : IO Json := do
                 if ldecl.isImplementationDetail then continue
                 let ty ← instantiateMVars ldecl.type
                 let red ← try Meta.whnf ty catch _ => pure ty
-                let headName : Option Name :=
-                  match red.getAppFn with
-                  | .const n _ => some n
-                  | _ => none
+                -- TWO heads, for two different jobs — conflating them is a bug
+                -- we already made once. AS WRITTEN is what type-matching needs:
+                -- `ℝ` is `Carrier R`, and whnf turns that into a projection with
+                -- no constant head at all, so a value goal could never be
+                -- matched to the values in scope. UNFOLDED is what finding a
+                -- structure's fields needs: `EpsDeltaWitness …` IS a `Pair`, and
+                -- only unfolding says so.
+                let headName : Option Name := ty.getAppFn.constName?
+                let headUnfolded : Option Name := red.getAppFn.constName?
                 -- A structure's FIELDS are what "use this hypothesis" offers;
                 -- asking the environment beats inferring them from a name.
                 let fields : Array String :=
-                  match headName with
+                  match headUnfolded with
                   | some n => match getStructureInfo? envH n with
                     | some info => info.fieldNames.map (·.toString)
                     | none => #[]
@@ -194,7 +199,11 @@ unsafe def analyzeFile (cache : EnvCache) (path : String) : IO Json := do
             -- The goal's own head constant, so "which lemmas conclude something
             -- shaped like this?" is a comparison of CONSTANTS rather than of
             -- rendered operator text. `0 < x` is `rlt 0 x` however it prints.
-            let targetHead : Option Name := (← g.getType).getAppFn.constName?
+            -- `instantiateMVars` first: an uninstantiated metavariable has no
+            -- constant head, so the same goal reported at two points would
+            -- answer `DPair` at one and nothing at the other — and a goal whose
+            -- head is missing matches no lemma at all.
+            let targetHead : Option Name := (← instantiateMVars (← g.getType)).getAppFn.constName?
             pure <| Json.mkObj <|
               (match ig.userName? with
                | some n => [("case", Json.str n)]
