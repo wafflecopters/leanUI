@@ -921,12 +921,27 @@ function HaveProseItem({
 
   // Open the term builder by parsing the have expression into slots.
   // Lean backend: the async provider probes Lean instead of the kernel.
+  // The expression as it stood when the builder opened, so ✕ can put it back.
+  // Each fill writes into the proof immediately (that is what keeps the goal
+  // below in step with the term you are assembling), which also means there is
+  // something to undo if you change your mind.
+  const exprBeforeBuild = useRef<string | null>(null);
   const openBuilder = useCallback(() => {
     if (!termBuilderProvider) return;
+    exprBeforeBuild.current = kind.expr;
     void termBuilderProvider.open(kind.expr).then((d) => {
       if (d) setBuilderState(d);
     });
   }, [kind.expr, termBuilderProvider]);
+
+  const closeBuilder = useCallback((discard: boolean) => {
+    if (discard && exprBeforeBuild.current !== null && exprBeforeBuild.current !== kind.expr) {
+      const reverted = editHaveExpr(state, item.nodeId, exprBeforeBuild.current);
+      if (reverted) onPushChange(reverted);
+    }
+    exprBeforeBuild.current = null;
+    setBuilderState(null);
+  }, [state, item.nodeId, onPushChange, kind.expr]);
 
   if (builderState) {
     return (
@@ -955,8 +970,8 @@ function HaveProseItem({
               if (updated) onPushChange(updated);
             });
           }}
-          onConfirm={() => setBuilderState(null)}
-          onCancel={() => setBuilderState(null)}
+          onConfirm={() => closeBuilder(false)}
+          onCancel={() => closeBuilder(true)}
           onHoistToHave={(slotIndex) => {
             {
               // Insert `have hN : <slot type>` with its own interactive proof
@@ -1082,7 +1097,7 @@ function TermBuilderView({
   builderState,
   onFillSlot,
   onClearSlot,
-  onConfirm: _onConfirm,
+  onConfirm,
   onCancel,
   registry,
   onHoistToHave,
@@ -1112,17 +1127,42 @@ function TermBuilderView({
       borderRadius: '6px',
       marginBottom: '8px',
     }}>
-      {/* Header */}
+      {/* Header.
+          There was no way to SUBMIT: the only control was the ✕, which reads as
+          "discard", so a finished term left you unsure whether clicking it kept
+          your work. (It did — each fill is written into the proof as you go —
+          but nothing said so.) `allFilled` was even computed here and never
+          used; the button was simply never built. */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
         <span style={{ fontSize: '11px', color: '#8b949e', letterSpacing: '0.03em' }}>
           BUILDING TERM
         </span>
-        <button
-          onClick={onCancel}
-          style={{ background: 'none', border: 'none', color: '#f85149', cursor: 'pointer', fontSize: '11px' }}
-        >
-          ✕
-        </button>
+        <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <button
+            onClick={onConfirm}
+            disabled={!allFilled}
+            title={allFilled ? 'Use this term' : 'Fill every slot first'}
+            style={{
+              background: allFilled ? 'rgba(63, 185, 80, 0.15)' : 'none',
+              border: `1px solid ${allFilled ? '#3fb950' : '#30363d'}`,
+              borderRadius: '4px',
+              color: allFilled ? '#3fb950' : '#484f58',
+              cursor: allFilled ? 'pointer' : 'default',
+              fontSize: '11px',
+              padding: '1px 8px',
+              fontFamily: 'inherit',
+            }}
+          >
+            ✓ Done
+          </button>
+          <button
+            onClick={onCancel}
+            title="Discard this term"
+            style={{ background: 'none', border: 'none', color: '#f85149', cursor: 'pointer', fontSize: '11px' }}
+          >
+            ✕
+          </button>
+        </span>
       </div>
 
       {/* Function name + slots */}
