@@ -330,6 +330,8 @@ export interface LeanGoalState {
   /** Whether the target is a Prop (a claim to prove) as opposed to data (a
    *  value to choose). Absent from pre-`isProp` extractor builds. */
   isProp?: boolean;
+  /** Head constant of the target, AS WRITTEN — `rlt` for `0 < x`. */
+  targetHead?: string | null;
   /** Structural facts per hypothesis, from the elaborator. */
   hypFacts?: LeanHypFact[];
   /** Plain-text rendering (fallback / copy), e.g. "n : Nat\n⊢ n + 0 = n". */
@@ -361,6 +363,14 @@ export interface LeanDeclaration {
   prettyValue?: string;
   /** Tagged pretty-print of the value (defs only). */
   valueTagged?: TaggedText;
+  /** Head constant of the conclusion, AS WRITTEN — `rlt` for `a < b`. */
+  conclHead?: string | null;
+  /** Is that head an inductive type? */
+  conclIsInductive?: boolean;
+  /** Head constant of each EXPLICIT argument's type, in order. */
+  argHeads?: (string | null)[];
+  /** Goals a backwards step leaves (explicit args the conclusion doesn't fix). */
+  premises?: number;
   /** 1-based line, 0-based column of the declaration's start. */
   line: number;
   col: number;
@@ -443,6 +453,7 @@ export function parseAnalyzeJson(
     return {
       ...(typeof gs?.case === 'string' ? { case: gs.case } : {}),
       hyps,
+      ...(typeof gs?.targetHead === 'string' ? { targetHead: gs.targetHead } : {}),
       ...(hypFacts.length ? { hypFacts } : {}),
       targetTagged: target,
       ...(typeof gs?.isProp === 'boolean' ? { isProp: gs.isProp } : {}),
@@ -469,6 +480,12 @@ export function parseAnalyzeJson(
           prettyType: String(d.prettyType ?? ''),
           ...(typeTagged ? { typeTagged } : {}),
           ...(typeof d.prettyValue === 'string' ? { prettyValue: d.prettyValue } : {}),
+          ...(typeof d.conclHead === 'string' ? { conclHead: d.conclHead } : {}),
+          ...(typeof d.conclIsInductive === 'boolean' ? { conclIsInductive: d.conclIsInductive } : {}),
+          ...(Array.isArray(d.argHeads)
+            ? { argHeads: d.argHeads.map((h: any) => (typeof h === 'string' ? h : null)) }
+            : {}),
+          ...(typeof d.premises === 'number' ? { premises: d.premises } : {}),
           ...(valueTagged ? { valueTagged } : {}),
           line: clampInt(d.line, 1),
           col: clampInt(d.col),

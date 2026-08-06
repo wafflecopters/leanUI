@@ -191,12 +191,19 @@ unsafe def analyzeFile (cache : EnvCache) (path : String) : IO Json := do
             -- function…) are values to CHOOSE. The UI words them differently,
             -- and only Lean can tell them apart reliably.
             let isProp ← try Meta.isProp (← g.getType) catch _ => pure true
+            -- The goal's own head constant, so "which lemmas conclude something
+            -- shaped like this?" is a comparison of CONSTANTS rather than of
+            -- rendered operator text. `0 < x` is `rlt 0 x` however it prints.
+            let targetHead : Option Name := (← g.getType).getAppFn.constName?
             pure <| Json.mkObj <|
               (match ig.userName? with
                | some n => [("case", Json.str n)]
                | none => []) ++
               [("hyps", Json.arr hypsJson),
                ("hypFacts", Json.arr hypFacts),
+               ("targetHead", match targetHead with
+                 | some n => Json.str n.toString
+                 | none => Json.null),
                ("targetTagged", taggedToJson ig.type),
                ("isProp", Json.bool isProp),
                ("plain", Json.str plain)]
@@ -277,11 +284,57 @@ unsafe def analyzeFile (cache : EnvCache) (path : String) : IO Json := do
       let prettyType := toString (← Meta.ppExpr ci.type)
       -- Tagged pretty-print for the WYSIWYG math editor (text + subexpr spans).
       let typeTagged := taggedToJson (← ppExprTagged ci.type)
+      -- STRUCTURAL FACTS, for deciding which lemmas are worth trying. Same
+      -- reason as the hypothesis facts above: the alternative is parsing this
+      -- declaration's PRETTY-PRINTED type, which is written for a human and
+      -- reshaped by every notation the preset defines. `convertEps` was
+      -- unreachable because its binder is spelled `epsilon` and the goal says
+      -- `ε` — one thing with two spellings, invisible to text matching.
+      let (conclHead, conclIsInductive, argHeads, premises) ←
+        Meta.forallTelescopeReducing ci.type fun args body => do
+          let envD ← getEnv
+          -- NOT unfolded, deliberately. `rlt a b` whnfs to `Pair …` — as does
+          -- every other relation here — which collapses the very distinction
+          -- this exists to make. The head AS WRITTEN is what tells `<` from `≤`
+          -- from `=`, and it is already immune to notation.
+          let bodyRed := body
+          let headOf (e : Expr) : Option Name :=
+            match e.getAppFn with
+            | .const n _ => some n
+            | _ => none
+          let ch := headOf bodyRed
+          let isInd :=
+            match ch with
+            | some n => match envD.find? n with
+              | some (.inductInfo _) => true
+              | _ => false
+            | none => false
+          let mut heads : Array Json := #[]
+          let mut goalsLeft := 0
+          for a in args do
+            let ld ← a.fvarId!.getDecl
+            unless ld.binderInfo.isExplicit do continue
+            heads := heads.push (match headOf ld.type with
+              | some n => Json.str n.toString
+              | none => Json.null)
+            -- An argument the CONCLUSION mentions is solved by unifying with
+            -- the goal; one it doesn't mention becomes a goal of its own. That
+            -- is exactly why `apply leLtTrans` asks for a midpoint AND two
+            -- proofs (3), while `apply convertEps` asks for one thing (1).
+            unless bodyRed.hasAnyFVar (· == a.fvarId!) do
+              goalsLeft := goalsLeft + 1
+          pure (ch, isInd, heads, goalsLeft)
       let mut fields : List (String × Json) :=
         [("name", Json.str declName.toString),
          ("kind", Json.str kindStr),
          ("prettyType", Json.str prettyType),
          ("typeTagged", typeTagged),
+         ("conclHead", match conclHead with
+           | some n => Json.str n.toString
+           | none => Json.null),
+         ("conclIsInductive", Json.bool conclIsInductive),
+         ("argHeads", Json.arr argHeads),
+         ("premises", natJ premises),
          ("line", natJ pos.line), ("col", natJ pos.column)]
       -- Value, for plain defs only (theorems' proofs are noise here). Skip values
       -- compiled to the recursor machinery (`brecOn`/`rec`/`WellFounded.fix`),

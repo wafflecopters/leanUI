@@ -329,24 +329,33 @@ export function applyCandidates(
   goalText: string,
   currentDeclName?: string,
   cap = 8,
+  /** The goal's head CONSTANT, from the elaborator. When present it replaces
+   *  the text-derived operator entirely: `0 < x` is `rlt 0 x` whatever notation
+   *  renders it as, so `convertEps` — whose binder is spelled `epsilon` while
+   *  the goal says `ε` — matches on the thing they actually share. */
+  goalHeadConst?: string | null,
 ): string[] {
   const target = targetOfGoalText(goalText);
   const goalHead = headOp(target);
-  if (!goalHead) return [];
+  const byConst = typeof goalHeadConst === 'string' && goalHeadConst.length > 0;
+  if (!byConst && !goalHead) return [];
   const goalTokens = tokens(target);
   const scored: Array<{ name: string; score: number; structural: boolean; leaves: number }> = [];
   for (const d of declarations) {
     if (d.name === currentDeclName) continue;
     if (d.kind !== 'def' && d.kind !== 'theorem') continue;
     const concl = conclusionOf(d.prettyType);
-    if (headOp(concl) !== goalHead) continue;
+    if (byConst) {
+      if (d.conclHead !== goalHeadConst) continue;
+    } else if (headOp(concl) !== goalHead) continue;
     let score = 0;
     for (const t of tokens(concl)) if (goalTokens.has(t)) score++;
     scored.push({
       name: d.name,
       score,
       structural: isStructural(d.prettyType),
-      leaves: premiseCount(d.prettyType),
+      // From Lean when it said so; the text estimate only as a fallback.
+      leaves: typeof d.premises === 'number' ? d.premises : premiseCount(d.prettyType),
     });
   }
   // NOTE: deliberately NOT tiebroken by `leaves` here. Tried it — preferring
@@ -480,30 +489,25 @@ function headConst(s: string): string | null {
  */
 export function comparisonCandidates(
   declarations: readonly LeanDeclaration[],
-  hypotheses: ReadonlyArray<{ name: string; type: string }>,
+  hypotheses: ReadonlyArray<{ name: string; type: string; typeHead?: string | null }>,
   currentDeclName?: string,
-  // Each candidate costs a Lean trial, and the pair you want is almost always
-  // the most recent one — a couple of alternates is plenty.
   cap = 3,
 ): ComparisonSplit[] {
-  const inductives = new Set(
-    declarations.filter((d) => d.kind === 'inductive').map((d) => d.name),
-  );
-  if (inductives.size === 0) return [];
-
-  // Lemmas of the comparison shape, by the type they compare.
+  // The shape, stated as facts: exactly two explicit arguments of ONE type,
+  // nothing else asked for, and an inductive result — `cases`-ing that splits
+  // the proof into the ways those two can relate. `leTotal` is the instance
+  // that matters here; nothing knows its name.
   const byType = new Map<string, string[]>();
   for (const d of declarations) {
     if (d.name === currentDeclName) continue;
     if (d.kind !== 'def' && d.kind !== 'theorem') continue;
-    const { explicitGroups, hasPremise } = binderShape(d.prettyType);
-    if (hasPremise) continue;
-    if (explicitGroups.length !== 1 || explicitGroups[0].names.length !== 2) continue;
-    const head = headConst(conclusionOf(d.prettyType));
-    if (!head || !inductives.has(head)) continue;
-    const type = explicitGroups[0].type;
-    if (!type) continue;
-    byType.set(type, [...(byType.get(type) ?? []), d.name]);
+    if (!d.conclIsInductive) continue;
+    if (d.premises !== 0) continue;
+    const args = d.argHeads;
+    if (!args || args.length !== 2) continue;
+    const [a, b] = args;
+    if (!a || a !== b) continue;
+    byType.set(a, [...(byType.get(a) ?? []), d.name]);
   }
   if (byType.size === 0) return [];
 
@@ -511,12 +515,13 @@ export function comparisonCandidates(
   for (const [type, lemmas] of byType) {
     const named = hypotheses
       .map((h, index) => ({ ...h, index }))
-      .filter((h) => h.type.trim() === type);
+      .filter((h) => h.typeHead === type);
     const pairs: Array<{ left: string; right: string; rank: number }> = [];
-    for (let j = 1; j < named.length; j++) {
-      for (let i = 0; i < j; i++) {
-        // Rank by how recently the LATER of the two appeared, then the earlier.
-        pairs.push({ left: named[i].name, right: named[j].name, rank: named[j].index * 1000 + named[i].index });
+    for (let j2 = 1; j2 < named.length; j2++) {
+      for (let i2 = 0; i2 < j2; i2++) {
+        // Rank by how recently the LATER of the two appeared: the values you
+        // just introduced are the ones the proof is about.
+        pairs.push({ left: named[i2].name, right: named[j2].name, rank: named[j2].index * 1000 + named[i2].index });
       }
     }
     pairs.sort((a, b) => b.rank - a.rank);
@@ -575,18 +580,17 @@ function explicitArgTypes(prettyType: string): { args: string[]; conclusion: str
  */
 export function valueCandidates(
   declarations: readonly LeanDeclaration[],
-  goalType: string,
-  hypotheses: ReadonlyArray<{ name: string; type: string }>,
+  goalTypeHead: string | null | undefined,
+  hypotheses: ReadonlyArray<{ name: string; type: string; typeHead?: string | null }>,
   currentDeclName?: string,
   cap = 10,
 ): string[] {
-  const type = goalType.trim();
-  if (!type) return [];
+  if (!goalTypeHead) return [];
 
   // In-scope values of the goal's type, most recent first.
   const inScope = hypotheses
     .map((h, index) => ({ ...h, index }))
-    .filter((h) => h.type.trim() === type)
+    .filter((h) => h.typeHead === goalTypeHead)
     .sort((a, b) => b.index - a.index)
     .map((h) => h.name);
   if (inScope.length === 0) return [];
@@ -594,25 +598,24 @@ export function valueCandidates(
   // way the context does, not backwards.
   const recent = inScope.slice(0, 2).reverse();
 
-  // The file's own operations on this type: every explicit argument and the
-  // result are the goal's type (`rmin`, `radd`, `rneg` — not `rlt`, whose
-  // result is a proposition, nor `realOfRat`, whose argument is something else).
+  // The file's own operations ON this type: every explicit argument and the
+  // result are the goal's type. `rmin`, `radd`, `rneg` qualify; `rlt` (returns
+  // a proposition) and `realOfRat` (takes something else) do not — decided by
+  // comparing CONSTANTS, not by comparing rendered type text.
   const ops: Array<{ name: string; arity: number }> = [];
   for (const d of declarations) {
     if (d.name === currentDeclName) continue;
     if (d.kind !== 'def' && d.kind !== 'theorem') continue;
-    const { args, conclusion } = explicitArgTypes(d.prettyType);
-    if (conclusion !== type) continue;
-    if (args.length < 1 || args.length > 2) continue;
-    if (!args.every((a) => a === type)) continue;
+    if (d.conclHead !== goalTypeHead) continue;
+    const args = d.argHeads;
+    if (!args || args.length < 1 || args.length > 2) continue;
+    if (!args.every((a) => a === goalTypeHead)) continue;
     ops.push({ name: d.name, arity: args.length });
   }
 
   // Bare values are capped so the COMBINATIONS get room: a context can hold a
   // half-dozen reals, and listing all of them would crowd out `rmin deltaF
-  // deltaG` — which is the answer here, and is never a bare hypothesis.
-  // Binary combinations before unary: two recent values of a type is usually
-  // why a proof needs a third.
+  // deltaG` — the answer here, and never a bare hypothesis.
   const BARE_CAP = 4;
   const binary = ops.filter((o) => o.arity === 2);
   const unary = ops.filter((o) => o.arity === 1);

@@ -425,6 +425,7 @@ export class ProofSession {
       selectedSubtermText: selection?.text ?? '',
       selectedHypName: this.selectedHyp,
       isValueGoal,
+      goalHead: goal.targetHead ?? null,
     });
 
     // Two independent sources, merged as they arrive: the file's own lemmas

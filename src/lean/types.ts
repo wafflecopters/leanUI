@@ -49,6 +49,8 @@ export interface LeanGoalState {
    *  value to choose, e.g. `⊢ ℝ` after `apply ltLeTrans`). Absent on output
    *  from an extractor built before this field existed. */
   isProp?: boolean;
+  /** Head constant of the target, AS WRITTEN — `rlt` for `0 < x`. */
+  targetHead?: string | null;
   /** Structural facts per hypothesis, from the elaborator. */
   hypFacts?: LeanHypFact[];
   /** Plain-text rendering (fallback / copy). */
@@ -88,6 +90,16 @@ export interface LeanDeclaration {
   prettyValue?: string;
   /** Tagged pretty-print of the value (defs only). */
   valueTagged?: TaggedText;
+  /** Head constant of the conclusion, AS WRITTEN — `rlt` for `a < b`, however
+   *  that prints. What "concludes something shaped like this goal?" compares. */
+  conclHead?: string | null;
+  /** Is that head an inductive type? (A case split can be done on it.) */
+  conclIsInductive?: boolean;
+  /** Head constant of each EXPLICIT argument's type, in order. */
+  argHeads?: (string | null)[];
+  /** How many goals a backwards step leaves: the explicit arguments the
+   *  conclusion does not mention, so unifying with the goal cannot solve them. */
+  premises?: number;
   /** 1-based line, 0-based column of the declaration's start. */
   line: number;
   col: number;

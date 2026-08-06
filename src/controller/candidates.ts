@@ -61,6 +61,8 @@ export interface CandidateInput {
   selectedSubtermText?: string;
   /** Clicked hypothesis name, when the user selected one. */
   selectedHypName?: string | null;
+  /** The goal's head CONSTANT, from the elaborator — `rlt` for `0 < x`. */
+  goalHead?: string | null;
   /**
    * True when the goal is a VALUE to choose (`⊢ ℝ` — a δ, a midpoint) rather
    * than a claim to prove. A different kind of move applies, so a different set
@@ -251,7 +253,7 @@ export function tacticCandidates(input: CandidateInput): LeanSuggestion[] {
   // by picking something arbitrary, which is worse than no suggestion, because
   // the proof then contains a choice nobody made.
   if (input.isValueGoal) {
-    const values = valueCandidates(declarations, goalText, input.hypotheses, currentDeclName);
+    const values = valueCandidates(declarations, input.goalHead, input.hypotheses, currentDeclName);
     // Only when there IS something to choose. With nothing of that type in
     // scope the list would be empty, and an empty list reads as "nothing
     // applies" — so fall through to the ordinary candidates rather than leave
@@ -335,7 +337,7 @@ export function tacticCandidates(input: CandidateInput): LeanSuggestion[] {
     { id: 'lean-constructor', label: 'constructor', tactic: 'constructor', kind: 'apply' },
   ];
 
-  const applyLemmas: LeanSuggestion[] = applyCandidates(declarations, goalText, currentDeclName).map(
+  const applyLemmas: LeanSuggestion[] = applyCandidates(declarations, goalText, currentDeclName, undefined, input.goalHead).map(
     (name) => ({
       id: `lean-applylemma:${name}`,
       label: `apply ${name}`,

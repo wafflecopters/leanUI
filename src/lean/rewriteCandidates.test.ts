@@ -225,101 +225,100 @@ describe('targetOfGoalText', () => {
   });
 });
 
+// Fixtures below are the facts Lean actually emits for these declarations
+// (verified against the real-analysis preset), not guesses about their text.
+const fact = (
+  name: string,
+  conclHead: string | null,
+  argHeads: (string | null)[],
+  premises: number,
+  conclIsInductive = false,
+): LeanDeclaration => ({
+  name, kind: 'def', prettyType: '', line: 1, col: 0,
+  conclHead, argHeads, premises, conclIsInductive,
+});
+
 describe('comparisonCandidates ("compare these two")', () => {
-  // Exactly what the real-analysis preset reports for these.
   const LIB = [
-    decl('Either', 'Sort u → Sort v → Sort (max (max 1 u) v)', 'inductive'),
-    decl('leTotal', '{R : Real} → (a b : \u211d) → Either (a \u2264 b) (b \u2264 a)'),
+    // (a b : ℝ) → Either (a ≤ b) (b ≤ a): two args of one type, nothing else
+    // asked for, inductive result.
+    fact('leTotal', 'Either', ['Carrier', 'Carrier'], 0, true),
     // Same shape but PREMISED — not a "just compare them" move.
-    decl('ltTotalOf', '{R : Real} → (a b : \u211d) → a \u2260 b → Either (a < b) (b < a)'),
+    fact('ltTotalOf', 'Either', ['Carrier', 'Carrier'], 1, true),
     // Two args, but returns data rather than a case split.
-    decl('rmin', '{R : Real} → \u211d → \u211d → \u211d'),
+    fact('rmin', 'Carrier', ['Carrier', 'Carrier'], 2),
     // One arg.
-    decl('absCases', '{R : Real} → (a : \u211d) → Either (0 \u2264 a) (a \u2264 0)'),
+    fact('absCases', 'Either', ['Carrier'], 0, true),
   ];
-  // The context at the seeded limitAdd sorry, in scope order.
+  // The context at the seeded limitAdd sorry. `typeHead` is what Lean says each
+  // hypothesis IS — `ℝ` is `Carrier R`.
+  const H = (name: string, typeHead: string | null) => ({ name, type: '', typeHead });
   const HYPS = [
-    { name: 'x0', type: '\u211d' },
-    { name: 'L', type: '\u211d' },
-    { name: 'M', type: '\u211d' },
-    { name: '\u03b5', type: '\u211d' },
-    { name: 'epsPos', type: '0 < \u03b5' },
-    { name: 'deltaF', type: '\u211d' },
-    { name: 'fProof', type: 'EpsDeltaWitness f x0 L (\u03b5 / 2) deltaF' },
-    { name: 'deltaG', type: '\u211d' },
+    H('x0', 'Carrier'), H('L', 'Carrier'), H('M', 'Carrier'), H('\u03b5', 'Carrier'),
+    H('epsPos', 'rlt'), H('deltaF', 'Carrier'), H('fProof', 'EpsDeltaWitness'), H('deltaG', 'Carrier'),
   ];
 
   test('offers the two most recent values first — the ones you are working with', () => {
     const out = comparisonCandidates(LIB, HYPS, 'limitAdd');
     expect(out[0]).toEqual({ lemma: 'leTotal', left: 'deltaF', right: 'deltaG' });
-    // Not x0/L, which have been in scope since the statement.
     expect(out.map((c) => `${c.left},${c.right}`)).not.toContain('x0,L');
   });
 
   test('only lemmas of the comparison SHAPE qualify', () => {
-    const lemmas = new Set(comparisonCandidates(LIB, HYPS, 'limitAdd').map((c) => c.lemma));
-    expect(lemmas).toEqual(new Set(['leTotal']));
+    expect(new Set(comparisonCandidates(LIB, HYPS, 'limitAdd').map((c) => c.lemma)))
+      .toEqual(new Set(['leTotal']));
   });
 
   test('needs two values of the same type in scope', () => {
-    expect(comparisonCandidates(LIB, [{ name: 'deltaF', type: '\u211d' }], 'limitAdd')).toEqual([]);
-    expect(comparisonCandidates(LIB, [{ name: 'h', type: '0 < \u03b5' }], 'limitAdd')).toEqual([]);
+    expect(comparisonCandidates(LIB, [H('deltaF', 'Carrier')], 'limitAdd')).toEqual([]);
+    expect(comparisonCandidates(LIB, [H('h', 'rlt')], 'limitAdd')).toEqual([]);
   });
 
-  test('nothing to compare with when the file declares no inductives', () => {
-    const noInductives = LIB.filter((d) => d.kind !== 'inductive');
-    expect(comparisonCandidates(noInductives, HYPS, 'limitAdd')).toEqual([]);
+  test('nothing to compare with when no lemma has an inductive result', () => {
+    expect(comparisonCandidates(LIB.filter((d) => !d.conclIsInductive), HYPS, 'limitAdd')).toEqual([]);
   });
 });
 
 describe('valueCandidates ("what could I put here?")', () => {
-  // As the real-analysis preset reports them.
   const LIB = [
-    decl('rmin', '{R : Real} → \u211d → \u211d → \u211d'),
-    decl('radd', '{R : Real} → \u211d → \u211d → \u211d'),
-    decl('rneg', '{R : Real} → \u211d → \u211d'),
+    fact('rmin', 'Carrier', ['Carrier', 'Carrier'], 2),
+    fact('radd', 'Carrier', ['Carrier', 'Carrier'], 2),
+    fact('rneg', 'Carrier', ['Carrier'], 1),
     // Result is a proposition, not a value of the goal's type.
-    decl('rlt', '{R : Real} → \u211d → \u211d → Type'),
+    fact('rlt', null, ['Carrier', 'Carrier'], 2),
     // Argument isn't the goal's type.
-    decl('realOfRat', '(R : Real) → MyRat → \u211d'),
+    fact('realOfRat', 'Carrier', ['Real', 'MyRat'], 2),
     // Three arguments — not a one-step combination.
-    decl('rmid3', '{R : Real} → \u211d → \u211d → \u211d → \u211d'),
+    fact('rmid3', 'Carrier', ['Carrier', 'Carrier', 'Carrier'], 3),
   ];
+  const H = (name: string, typeHead: string | null) => ({ name, type: '', typeHead });
   const HYPS = [
-    { name: 'x0', type: '\u211d' },
-    { name: 'L', type: '\u211d' },
-    { name: '\u03b5', type: '\u211d' },
-    { name: 'epsPos', type: '0 < \u03b5' },
-    { name: 'deltaF', type: '\u211d' },
-    { name: 'deltaG', type: '\u211d' },
+    H('x0', 'Carrier'), H('L', 'Carrier'), H('\u03b5', 'Carrier'),
+    H('epsPos', 'rlt'), H('deltaF', 'Carrier'), H('deltaG', 'Carrier'),
   ];
 
   test('offers the δ the proof actually needs, and in scope order', () => {
-    const out = valueCandidates(LIB, '\u211d', HYPS, 'limitAdd');
-    // `rmin deltaF deltaG` is never a bare hypothesis — it has to be BUILT, and
-    // it is the whole reason this list combines values rather than just listing
-    // them. Argument order follows the context, not the recency ranking.
+    const out = valueCandidates(LIB, 'Carrier', HYPS, 'limitAdd');
+    // Never a bare hypothesis — it has to be BUILT.
     expect(out).toContain('rmin deltaF deltaG');
     expect(out).not.toContain('rmin deltaG deltaF');
   });
 
   test('in-scope values come first, most recent first', () => {
-    const out = valueCandidates(LIB, '\u211d', HYPS, 'limitAdd');
-    expect(out.slice(0, 2)).toEqual(['deltaG', 'deltaF']);
+    expect(valueCandidates(LIB, 'Carrier', HYPS, 'limitAdd').slice(0, 2)).toEqual(['deltaG', 'deltaF']);
   });
 
   test('only operations that take and return the goal type', () => {
-    const out = valueCandidates(LIB, '\u211d', HYPS, 'limitAdd');
-    const built = out.filter((e) => e.includes(' '));
+    const built = valueCandidates(LIB, 'Carrier', HYPS, 'limitAdd').filter((e) => e.includes(' '));
     expect(built).toEqual(expect.arrayContaining(['rmin deltaF deltaG', 'radd deltaF deltaG', 'rneg deltaG']));
-    // Wrong result type, wrong argument type, wrong arity.
     expect(built.some((e) => e.startsWith('rlt '))).toBe(false);
     expect(built.some((e) => e.startsWith('realOfRat '))).toBe(false);
     expect(built.some((e) => e.startsWith('rmid3 '))).toBe(false);
   });
 
   test('nothing to offer when no value of that type is in scope', () => {
-    expect(valueCandidates(LIB, '\u211d', [{ name: 'h', type: '0 < \u03b5' }], 'limitAdd')).toEqual([]);
+    expect(valueCandidates(LIB, 'Carrier', [H('h', 'rlt')], 'limitAdd')).toEqual([]);
     expect(valueCandidates(LIB, 'MyNat', HYPS, 'limitAdd')).toEqual([]);
+    expect(valueCandidates(LIB, null, HYPS, 'limitAdd')).toEqual([]);
   });
 });
