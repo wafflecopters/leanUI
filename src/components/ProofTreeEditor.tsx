@@ -1054,15 +1054,18 @@ function HaveProseItem({
 
   return (
     <div style={{ ...rowStyle, ...(hasError ? { backgroundColor: 'rgba(248, 81, 73, 0.06)', borderLeft: '2px solid #f85149' } : {}) }} {...rowHandlers}>
+      {/* `h : T`, the order mathematics writes it in — name first, then what it
+          says. This read backwards ("Observe that 0 < ε/2 (h₂)"): the fact came
+          first and the name it is being given trailed behind in parentheses,
+          which is the shape of an aside, not of a definition. */}
       <span style={{ ...prose, ...errorStyle }}>Observe that{' '}</span>
-      {displayType ? (
-        <InlineKaTeX latex={displayType} style={{ fontSize: '13px' }} />
-      ) : (
-        <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px' }} />
-      )}
-      <span style={prose}>{' '}(</span>
       {nameEditor}
-      <span style={prose}>)</span>
+      {displayType && (
+        <>
+          <span style={prose}>{' : '}</span>
+          <InlineKaTeX latex={displayType} style={{ fontSize: '13px' }} />
+        </>
+      )}
       {kind.hasProofTree ? (
         /* Interactive proof subtree — the subgoal is rendered as a child prose item */
         null
