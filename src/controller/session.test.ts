@@ -417,6 +417,24 @@ describe('selection', () => {
     expect(s.selectHypothesis('epsPos')).toEqual({ ok: true });
   });
 
+  // The prose now offers a hypothesis's moves from the NAME as it appears in a
+  // case pattern, anywhere in the proof — which is only safe because a name the
+  // cursor can't see selects nothing and so shows nothing. No separate
+  // in-scope check guards that tray; this is it.
+  test('an out-of-scope name yields an empty action tray, not a stale one', async () => {
+    const s = open();
+    await s.refresh();
+    s.selectHypothesis('epsPos');
+    await s.refresh();
+    expect(s.getState().selection.hypothesis).toBe('epsPos');
+
+    expect(s.selectHypothesis('notHere').ok).toBe(false);
+    await s.refresh();
+    expect(s.getState().selection.hypothesis).toBe('epsPos'); // unchanged, not clobbered
+    expect(s.getState().actions.filter((a) => a.group === 'hypothesis')
+      .every((a) => a.id.includes('epsPos'))).toBe(true);
+  });
+
   test('selection is cleared when the proof changes', async () => {
     const s = open();
     await s.refresh();

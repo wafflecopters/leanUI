@@ -403,8 +403,13 @@ export function ProofTreeEditor({ history, onHistoryChange, registry, goalMapOve
     () => ({ applySubgoalCount, caseBranchCount, rewriteSideGoalCount }),
     [applySubgoalCount, caseBranchCount, rewriteSideGoalCount],
   );
+  const hypTrayValue = useMemo(
+    () => ({ suggestions: hypSuggestions, onSelect: onHypothesisSelect, onApply: handleApplySuggestion }),
+    [hypSuggestions, onHypothesisSelect, handleApplySuggestion],
+  );
 
   return (
+    <HypothesisTray.Provider value={hypTrayValue}>
     <LeanCounters.Provider value={leanCounters}>
     <div
       ref={containerRef}
@@ -515,6 +520,7 @@ export function ProofTreeEditor({ history, onHistoryChange, registry, goalMapOve
       </SplitPane>
     </div>
     </LeanCounters.Provider>
+    </HypothesisTray.Provider>
   );
 }
 
@@ -1397,6 +1403,23 @@ const applyBtnStyle: React.CSSProperties = {
  * subgoals the lemma actually leaves, and every conditional rewrite lost its
  * side goals.
  */
+/**
+ * The hypothesis action tray, for names shown in the PROSE.
+ *
+ * A case pattern (`Case (mk (deltaG, gProof))`) names hypotheses the proof then
+ * works with, and those names are right there in the sentence — but clicking
+ * one only ever renamed it, so "destructure gProof" meant leaving the prose and
+ * finding the name again in the context panel. The tray is the same one that
+ * panel uses, and it is safe to offer anywhere: every action in it was
+ * validated at the real cursor, and selecting a name that isn't in scope there
+ * yields nothing to show.
+ */
+const HypothesisTray = createContext<{
+  suggestions?: readonly TacticSuggestion[];
+  onSelect?: (name: string | null) => void;
+  onApply?: (s: TacticSuggestion) => void;
+}>({});
+
 const LeanCounters = createContext<{
   applySubgoalCount?: (name: string) => number;
   /** Branches a split on this scrutinee opens — one per constructor of its
@@ -3340,13 +3363,23 @@ function CaseHeaderProseItem({
 }) {
   const [selectedParamIndex, setSelectedParamIndex] = useState<number | null>(null);
   const caseContainerRef = useRef<HTMLDivElement>(null);
+  const tray = useContext(HypothesisTray);
 
   const paramNames = kind.constructorParamNames;
   const hasParams = paramNames && paramNames.length > 0;
 
+  // Clicking a bound name both selects it for renaming AND asks the session for
+  // that hypothesis's moves, so `Destructure gProof` is one click from the name
+  // itself. Out-of-scope names simply produce an empty tray (the session checks
+  // scope at the cursor), so this needs no guard of its own.
+  const selectParam = useCallback((idx: number | null) => {
+    setSelectedParamIndex(idx);
+    tray.onSelect?.(idx === null ? null : (paramNames?.[idx] ?? null));
+  }, [tray, paramNames]);
+
   const handleParamClick = (idx: number, e: React.MouseEvent) => {
     e.stopPropagation();
-    setSelectedParamIndex(prev => prev === idx ? null : idx);
+    selectParam(selectedParamIndex === idx ? null : idx);
   };
 
   const handleRename = useCallback((newName: string) => {
@@ -3366,8 +3399,8 @@ function CaseHeaderProseItem({
     if (active instanceof HTMLInputElement) {
       handleRename(active.value);
     }
-    setSelectedParamIndex(null);
-  }, [handleRename]);
+    selectParam(null);
+  }, [handleRename, selectParam]);
 
   // Render the label with clickable param names.
   // For induction: "scrutinee = Constructor(param1, param2)"
@@ -3436,6 +3469,26 @@ function CaseHeaderProseItem({
         {renderLabelWithClickableParams()}
         <span style={prose}>):</span>
       </div>
+      {/* What you can DO with the clicked name — the same validated tray the
+          context panel shows, brought to where the name is written. */}
+      {selectedParamIndex !== null && (tray.suggestions?.length ?? 0) > 0 && (
+        <div style={{
+          display: 'flex', gap: '4px', flexWrap: 'wrap',
+          marginTop: '3px', marginBottom: '2px',
+          paddingLeft: `${(item.depth + 1) * 20}px`,
+        }}>
+          {tray.suggestions!.map((sg) => (
+            <button
+              key={sg.id}
+              style={{ ...suggestionBtnStyle, fontSize: '11px', padding: '2px 8px' }}
+              onClick={(e) => { e.stopPropagation(); tray.onApply?.(sg); selectParam(null); }}
+              title={sg.description}
+            >
+              <InlineKaTeX latex={sg.labelLatex ?? sg.label} style={{ fontSize: '11px' }} />
+            </button>
+          ))}
+        </div>
+      )}
       {/* Inline rename for selected param — same style as tactic suggestions */}
       {selectedParamIndex !== null && paramNames && (
         <InlineBinderRenameRow
@@ -3444,7 +3497,7 @@ function CaseHeaderProseItem({
           renameKey={`${item.nodeId}-${selectedParamIndex}`}
           defaultValue={paramNames[selectedParamIndex]}
           onConfirm={handleRename}
-          onCancel={() => setSelectedParamIndex(null)}
+          onCancel={() => selectParam(null)}
           autoFocus
         />
       )}
