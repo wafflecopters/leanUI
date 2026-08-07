@@ -306,9 +306,63 @@ describe('generateProofProse', () => {
       ],
     };
     const items = generateProofProse(induction, 10, mkGoalMap([]));
-    expect((items[1].kind as any).isBaseCase).toBe(true);
+    // A SOLE case has no header row of its own, so it is item 0 (see below).
+    expect((items[0].kind as any).isBaseCase).toBe(true);
     // Falls back to label when no labelLatex
-    expect((items[1].kind as any).labelLatex).toBe('True');
+    expect((items[0].kind as any).labelLatex).toBe('True');
+  });
+
+  // A split with one case is a DESTRUCTURING, not a case analysis: `cases hG
+  // with | mk a b` names the parts of something with only one shape. It used to
+  // get a header row plus two levels of indent, the same as a real split, so a
+  // chain of them (destructure the pair, destructure its second half, …) walked
+  // off the right edge of the page while saying nothing.
+  test('a sole case folds the header into its own row and costs no indent', () => {
+    const hole: ProofNode = { tag: 'hole', id: 10 };
+    const induction: ProofNode = {
+      tag: 'induction',
+      id: 1,
+      scrutinee: 'hG',
+      isCases: true,
+      collapsed: false,
+      cases: [
+        {
+          tag: 'case', id: 2, label: 'mk', body: hole, collapsed: false,
+          constructorName: 'mk', constructorParamNames: ['deltaG', 'gProof'],
+        },
+      ],
+    };
+    const items = generateProofProse(induction, 10, mkGoalMap([]));
+
+    // No separate inductionHeader row: caseHeader + hole, nothing else.
+    expect(items.map((i) => i.kind.tag)).toEqual(['caseHeader', 'hole']);
+    // It carries the header text instead, so the row reads "By cases on hG: Case (…)".
+    expect((items[0].kind as any).lead).toEqual({ scrutinee: 'hG', isCases: true });
+    // And costs NO indentation — the body sits where the split did.
+    expect(items[0].depth).toBe(0);
+    expect(items[1].depth).toBe(0);
+  });
+
+  test('two cases keep their header row and their indent — that IS a case analysis', () => {
+    const l: ProofNode = { tag: 'hole', id: 10 };
+    const r: ProofNode = { tag: 'hole', id: 11 };
+    const induction: ProofNode = {
+      tag: 'induction',
+      id: 1,
+      scrutinee: 'leTotal a b',
+      isCases: true,
+      collapsed: false,
+      cases: [
+        { tag: 'case', id: 2, label: 'left', body: l, collapsed: false, constructorName: 'left', constructorParamNames: ['h'] },
+        { tag: 'case', id: 3, label: 'right', body: r, collapsed: false, constructorName: 'right', constructorParamNames: ['h'] },
+      ],
+    };
+    const items = generateProofProse(induction, 10, mkGoalMap([]));
+
+    expect(items.map((i) => i.kind.tag)).toEqual(['inductionHeader', 'caseHeader', 'hole', 'caseHeader', 'hole']);
+    expect(items.map((i) => i.depth)).toEqual([0, 1, 2, 1, 2]);
+    // No folded lead — the header has its own row here.
+    expect((items[1].kind as any).lead).toBeUndefined();
   });
 
   test('nested intros → chain → exact produces correct depth and order', () => {

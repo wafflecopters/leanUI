@@ -65,6 +65,11 @@ export type ProseItemKind =
       constructorName?: string;
       scrutinee?: string;
       isCases?: boolean;
+      /** Set when this is the split's ONLY case, which makes the split a
+       *  destructuring rather than a case analysis: the "By cases on x" header
+       *  gets no row of its own and is folded into this one, so the pair reads
+       *  as a single line at a single indent level. */
+      lead?: { scrutinee: string; scrutineeLatex?: string; isCases?: boolean };
     }
   | { tag: 'exact'; exprLatex: string; solved: boolean; goalLatex?: string; error?: string; proofExprLatex?: string; isValueType?: boolean }
   | { tag: 'hole'; goalLatex?: string; isValueType?: boolean; solved?: boolean }
@@ -458,7 +463,16 @@ export function generateProofProse(
           walk(node.cases[0].body, depth);
           break;
         }
-        emit(node.id, depth, { tag: 'inductionHeader', scrutinee: node.scrutinee, scrutineeLatex: info?.scrutineeLatex, isCases: node.isCases });
+        // A split with ONE case is a destructuring — `cases hG with | mk a b`
+        // names the parts of something that only has one shape. Giving it a
+        // header row and two levels of indent, the way a real case analysis
+        // gets, marched a chain of them off the right edge of the page for no
+        // information. So a sole case folds its header into its own row and
+        // costs no indentation; a genuine split (2+ branches) keeps both.
+        const soleCase = node.cases.length === 1;
+        if (!soleCase) {
+          emit(node.id, depth, { tag: 'inductionHeader', scrutinee: node.scrutinee, scrutineeLatex: info?.scrutineeLatex, isCases: node.isCases });
+        }
         for (let i = 0; i < node.cases.length; i++) {
           const c = node.cases[i];
           let isBaseCase = !c.constructorParamNames || c.constructorParamNames.length === 0;
@@ -483,7 +497,7 @@ export function generateProofProse(
           // names are the ones the case binds, so they resolve in its own goal.
           const caseHypTypes = new Map((caseInfo?.hypotheses ?? []).map((h) => [h.name, h.type]));
           const paramTypeLatex = c.constructorParamNames?.map((n) => caseHypTypes.get(n) ?? '');
-          emit(c.id, depth + 1, {
+          emit(c.id, soleCase ? depth : depth + 1, {
             tag: 'caseHeader',
             labelLatex: registryLabel ?? c.labelLatex ?? c.label,
             isBaseCase,
@@ -492,8 +506,11 @@ export function generateProofProse(
             constructorName: c.constructorName,
             scrutinee: node.scrutinee,
             isCases: node.isCases,
+            ...(soleCase
+              ? { lead: { scrutinee: node.scrutinee, scrutineeLatex: info?.scrutineeLatex, isCases: node.isCases } }
+              : {}),
           });
-          walk(c.body, depth + 2);
+          walk(c.body, soleCase ? depth : depth + 2);
         }
         break;
       }

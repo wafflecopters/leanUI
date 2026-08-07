@@ -3416,6 +3416,19 @@ function CaseHeaderProseItem({
   return (
     <div ref={caseContainerRef} onBlur={handleCaseContainerBlur} tabIndex={-1} style={{ outline: 'none' }}>
       <div style={{ ...rowStyle, fontWeight: 600 }} {...rowHandlers}>
+        {/* A sole case carries its own "By cases on x:" — the split has no
+            header row of its own, so the destructuring reads as one line. */}
+        {kind.lead && (
+          <>
+            <span style={{ ...prose, fontWeight: 400 }}>
+              {describeInductionHeader({ tag: 'inductionHeader', scrutinee: kind.lead.scrutinee, isCases: kind.lead.isCases }).lead}{' '}
+            </span>
+            {kind.lead.scrutineeLatex
+              ? <InlineKaTeX latex={kind.lead.scrutineeLatex} style={{ fontSize: '13px' }} />
+              : <InlineProseName name={kind.lead.scrutinee} />}
+            <span style={{ ...prose, fontWeight: 400 }}>{': '}</span>
+          </>
+        )}
         <span style={{ color: kind.isCases ? '#79c0ff' : (kind.isBaseCase ? '#d2a8ff' : '#79c0ff') }}>
           {kind.isCases ? 'Case' : (kind.isBaseCase ? 'Base case' : 'Inductive step')}
         </span>
