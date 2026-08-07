@@ -426,6 +426,56 @@ describe('ProofSession against real Lean', () => {
     },
     10 * MINUTES,
   );
+
+  // The user's question was "even with the pill gone, how do I build this
+  // MYSELF?" — and the answer was: you can't. `cases` had no manual form at
+  // all, and `Induction` took an identifier, so a split on a TERM like
+  // `leTotal a b` ("either deltaF ≤ deltaG or the other way round") was
+  // reachable only if a suggestion happened to offer it.
+  test(
+    'a case split on a lemma application can be typed by hand, and opens both branches',
+    async () => {
+      const s = open('limitAdd');
+      await s.refresh();
+
+      const ran = s.runTactic('cases', 'leTotal deltaF deltaG');
+      expect(ran.ok).toBe(true);
+      await s.refresh();
+
+      // TWO branches, because `Either` has two constructors — not the two
+      // Nat-shaped cases the editor used to print for every split, and not the
+      // single branch a count of "1" would have left (which Lean would then
+      // reject for unsolved goals).
+      expect(s.proofSource()).toContain('cases leTotal deltaF deltaG');
+      await s.refresh(); // enrichment names the branches from Lean's tags
+      const src = s.proofSource();
+      // The preset's `Either` — its constructors are `left`/`right`, and the
+      // names come from Lean rather than from anything spelled out here.
+      expect(src).toContain('| left');
+      expect(src).toContain('| right');
+      expect(s.getState().status.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    },
+    10 * MINUTES,
+  );
+
+  // Branch counts come from the extractor, not from a guess: a hypothesis
+  // carries its type's constructor count and a lemma carries its conclusion's.
+  test(
+    'Lean reports how many branches a split opens',
+    async () => {
+      const s = open('limitAdd');
+      await s.refresh();
+
+      // `hF : ∃δ …` is a one-constructor structure.
+      const hyps = s.hypothesesWithTypes();
+      expect(hyps.find((h) => h.name === 'fProof')?.ctors).toBe(1);
+      // `ε : ℝ` is not an inductive at all — splitting it is not a 2-way split.
+      expect(hyps.find((h) => h.name === 'ε')?.ctors ?? 0).toBe(0);
+      // `leTotal a b` concludes an `Either`.
+      expect(declarations.find((d) => d.name === 'leTotal')?.conclCtors).toBe(2);
+    },
+    10 * MINUTES,
+  );
 });
 
 /** First outline node with the given label. */

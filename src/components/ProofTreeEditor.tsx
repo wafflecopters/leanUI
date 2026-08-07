@@ -119,6 +119,9 @@ export interface ProofTreeEditorProps {
   /** Lean-backed `apply` subgoal-count estimate (the TT kernel isn't available);
    *  its presence also marks the Lean backend (hides TT-only buttons like Fold). */
   applySubgoalCount?: (name: string) => number;
+  /** Branches a split on this scrutinee opens — one per constructor of its
+   *  type. `null` when nothing in scope knows. */
+  caseBranchCount?: (scrutinee: string) => number | null;
   rewriteSideGoalCount?: (name: string) => number;
   /** Lean backend: replaces the kernel-computed hypothesis action tray
    *  (Exact/Apply/Destructure/Use …) shown under a clicked CONTEXT hypothesis. */
@@ -203,7 +206,7 @@ type TacticMode = null | ProofTreeManualTacticMode;
 /** Stable empty list, so memo deps don't churn. */
 const EMPTY_SUGGESTIONS: readonly TacticSuggestion[] = [];
 
-export function ProofTreeEditor({ history, onHistoryChange, registry, goalMapOverride, typedContextOverride, interactiveGoalOverride, onGoalPathSelect, goalExtraSlot, applySubgoalCount, rewriteSideGoalCount, hypSuggestionsOverride, onHypothesisSelect, onApplySuggestionOverride, termBuilderProvider }: ProofTreeEditorProps) {
+export function ProofTreeEditor({ history, onHistoryChange, registry, goalMapOverride, typedContextOverride, interactiveGoalOverride, onGoalPathSelect, goalExtraSlot, applySubgoalCount, caseBranchCount, rewriteSideGoalCount, hypSuggestionsOverride, onHypothesisSelect, onApplySuggestionOverride, termBuilderProvider }: ProofTreeEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const state = history.current;
 
@@ -397,8 +400,8 @@ export function ProofTreeEditor({ history, onHistoryChange, registry, goalMapOve
   }, [state, moveCursor]);
 
   const leanCounters = useMemo(
-    () => ({ applySubgoalCount, rewriteSideGoalCount }),
-    [applySubgoalCount, rewriteSideGoalCount],
+    () => ({ applySubgoalCount, caseBranchCount, rewriteSideGoalCount }),
+    [applySubgoalCount, caseBranchCount, rewriteSideGoalCount],
   );
 
   return (
@@ -480,6 +483,7 @@ export function ProofTreeEditor({ history, onHistoryChange, registry, goalMapOve
                 onSetTermBuilder={() => {}}
                 holeExtraSlot={goalExtraSlot}
                 applySubgoalCount={applySubgoalCount}
+            caseBranchCount={caseBranchCount}
                 rewriteSideGoalCount={rewriteSideGoalCount}
                 termBuilderProvider={termBuilderProvider}
               />
@@ -1395,6 +1399,9 @@ const applyBtnStyle: React.CSSProperties = {
  */
 const LeanCounters = createContext<{
   applySubgoalCount?: (name: string) => number;
+  /** Branches a split on this scrutinee opens — one per constructor of its
+   *  type. `null` when nothing in scope knows. */
+  caseBranchCount?: (scrutinee: string) => number | null;
   rewriteSideGoalCount?: (name: string) => number;
 }>({});
 
@@ -1551,6 +1558,8 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
       computeApplySubgoalCount: (_root, _cursorNodeId, name) =>
         counters.applySubgoalCount ? counters.applySubgoalCount(name) : 1,
       computeRewriteSideGoalCount: counters.rewriteSideGoalCount,
+      computeCaseBranchCount: (scrutinee) =>
+        counters.caseBranchCount ? counters.caseBranchCount(scrutinee) : null,
     });
     if (result) onPushChange(result);
     onTacticMode(null);
@@ -1582,6 +1591,9 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
           <button style={btnStyle} onClick={(e) => { e.stopPropagation(); onTacticMode({ tactic: 'induction' }); }}>
             Induct...
           </button>
+          <button style={btnStyle} onClick={(e) => { e.stopPropagation(); onTacticMode({ tactic: 'cases' }); }}>
+            Cases...
+          </button>
           <button style={btnStyle} onClick={(e) => { e.stopPropagation(); onTacticMode({ tactic: 'exact' }); }}>
             Exact...
           </button>
@@ -1611,6 +1623,7 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
           <span style={keywordStyle}>
             {activeTactic === 'intros' ? 'Given' :
              activeTactic === 'induction' ? 'Induct on' :
+             activeTactic === 'cases' ? 'By cases on' :
              activeTactic === 'unfold' ? 'Unfold' :
              activeTactic === 'fold' ? 'Fold' :
              activeTactic === 'rewrite' ? 'Rewrite' :
@@ -1626,6 +1639,7 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
             placeholder={
               activeTactic === 'intros' ? 'n, m, f' :
               activeTactic === 'induction' ? 'variable name' :
+              activeTactic === 'cases' ? 'hF   or   leTotal a b' :
               activeTactic === 'unfold' ? 'definition name' :
               activeTactic === 'fold' ? 'definition name' :
               activeTactic === 'rewrite' ? 'lemma name' :
@@ -2207,6 +2221,9 @@ interface ProseViewProps {
   // (Lean-backed suggestion pills); mirrors where the TT path showed them.
   holeExtraSlot?: React.ReactNode;
   applySubgoalCount?: (name: string) => number;
+  /** Branches a split on this scrutinee opens — one per constructor of its
+   *  type. `null` when nothing in scope knows. */
+  caseBranchCount?: (scrutinee: string) => number | null;
   rewriteSideGoalCount?: (name: string) => number;
   termBuilderProvider?: TermBuilderProvider;
 }
@@ -2218,7 +2235,7 @@ function ProofProseView({
   editingNames, onEditingNames, editingSuggestionId, onEditingSuggestionId,
   onApplySuggestion, onStartEditingSuggestion,
   selectedBinder, onSelectBinder,
-  termBuilder, onSetTermBuilder, holeExtraSlot, applySubgoalCount, rewriteSideGoalCount, termBuilderProvider,
+  termBuilder, onSetTermBuilder, holeExtraSlot, applySubgoalCount, caseBranchCount, rewriteSideGoalCount, termBuilderProvider,
 }: ProseViewProps) {
   if (items.length === 0) {
     return <div style={{ padding: '8px 12px', color: '#484f58', fontStyle: 'italic' }}>No proof steps yet.</div>;
@@ -2282,6 +2299,7 @@ function ProofProseView({
             onSetTermBuilder={onSetTermBuilder}
             holeExtraSlot={holeExtraSlot}
             applySubgoalCount={applySubgoalCount}
+            caseBranchCount={caseBranchCount}
             rewriteSideGoalCount={rewriteSideGoalCount}
             termBuilderProvider={termBuilderProvider}
           />
@@ -2333,6 +2351,9 @@ interface ProseItemViewProps {
   // Extra content rendered inline above the active hole's tactic buttons.
   holeExtraSlot?: React.ReactNode;
   applySubgoalCount?: (name: string) => number;
+  /** Branches a split on this scrutinee opens — one per constructor of its
+   *  type. `null` when nothing in scope knows. */
+  caseBranchCount?: (scrutinee: string) => number | null;
   rewriteSideGoalCount?: (name: string) => number;
   termBuilderProvider?: TermBuilderProvider;
 }
@@ -3432,7 +3453,7 @@ function ProseItemView({
   editingNames, onEditingNames, editingSuggestionId, onEditingSuggestionId,
   onApplySuggestion, onStartEditingSuggestion,
   selectedBinder, onSelectBinder,
-  termBuilder, onSetTermBuilder, holeExtraSlot, applySubgoalCount, rewriteSideGoalCount, termBuilderProvider,
+  termBuilder, onSetTermBuilder, holeExtraSlot, applySubgoalCount, caseBranchCount, rewriteSideGoalCount, termBuilderProvider,
 }: ProseItemViewProps) {
   const [hovered, setHovered] = useState(false);
   const { kind } = item;
@@ -3798,6 +3819,7 @@ function ProseItemView({
           onSetTermBuilder={onSetTermBuilder}
           holeExtraSlot={holeExtraSlot}
           applySubgoalCount={applySubgoalCount}
+            caseBranchCount={caseBranchCount}
           rewriteSideGoalCount={rewriteSideGoalCount}
           termBuilderProvider={termBuilderProvider}
         />
@@ -3850,6 +3872,9 @@ interface HoleProseViewProps {
   /** Extra content rendered above the tactic buttons (Lean suggestion pills). */
   holeExtraSlot?: React.ReactNode;
   applySubgoalCount?: (name: string) => number;
+  /** Branches a split on this scrutinee opens — one per constructor of its
+   *  type. `null` when nothing in scope knows. */
+  caseBranchCount?: (scrutinee: string) => number | null;
   rewriteSideGoalCount?: (name: string) => number;
   termBuilderProvider?: TermBuilderProvider;
 }
@@ -3860,7 +3885,7 @@ function HoleProseView({
   interactiveGoal, suggestions, selectedPath, onSelectPath,
   editingNames, onEditingNames, editingSuggestionId, onEditingSuggestionId,
   onApplySuggestion, onStartEditingSuggestion,
-  holeExtraSlot, applySubgoalCount, rewriteSideGoalCount,
+  holeExtraSlot, applySubgoalCount, caseBranchCount, rewriteSideGoalCount,
 }: HoleProseViewProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const activeTactic = tacticMode?.tactic ?? null;
@@ -3881,10 +3906,11 @@ function HoleProseView({
       computeApplySubgoalCount: (_root, _cursorNodeId, name) =>
         applySubgoalCount ? applySubgoalCount(name) : 1,
       computeRewriteSideGoalCount: rewriteSideGoalCount,
+      computeCaseBranchCount: (scrutinee) => (caseBranchCount ? caseBranchCount(scrutinee) : null),
     });
     if (result) onPushChange(result);
     onTacticMode(null);
-  }, [tacticMode, state, onPushChange, onTacticMode, typedContext, registry, applySubgoalCount, rewriteSideGoalCount]);
+  }, [tacticMode, state, onPushChange, onTacticMode, typedContext, registry, applySubgoalCount, caseBranchCount, rewriteSideGoalCount]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
@@ -3940,6 +3966,7 @@ function HoleProseView({
           {[
             { tactic: 'intros' as const, label: 'Intros' },
             { tactic: 'induction' as const, label: 'Induction' },
+            { tactic: 'cases' as const, label: 'Cases' },
             { tactic: 'exact' as const, label: 'Exact' },
             { tactic: 'unfold' as const, label: 'Unfold' },
             { tactic: 'fold' as const, label: 'Fold' },
@@ -3967,6 +3994,7 @@ function HoleProseView({
           <span style={keywordStyle}>
             {activeTactic === 'intros' ? 'Given' :
              activeTactic === 'induction' ? 'Induct on' :
+             activeTactic === 'cases' ? 'By cases on' :
              activeTactic === 'unfold' ? 'Unfold' :
              activeTactic === 'fold' ? 'Fold' :
              activeTactic === 'rewrite' ? 'Rewrite' :
@@ -3983,6 +4011,7 @@ function HoleProseView({
             placeholder={
               activeTactic === 'intros' ? 'n, m, f' :
               activeTactic === 'induction' ? 'variable name' :
+              activeTactic === 'cases' ? 'hF   or   leTotal a b' :
               activeTactic === 'unfold' ? 'definition name' :
               activeTactic === 'rewrite' || activeTactic === 'rewrite_rev' ? 'lemma name' :
               activeTactic === 'apply' ? 'lemma name' :

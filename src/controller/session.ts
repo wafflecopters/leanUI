@@ -52,6 +52,7 @@ import { appliedExprWithHoles, parseSlots, type ParsedSlots } from '../lean/term
 import { spliceTacticBlock } from '../lean/spliceTacticBlock';
 import { proofTreeToLean, proofTreeToSource } from '../lean/proofTreeToLean';
 import { applySubgoalCount, rewriteSideGoalCount, unfoldableDefs } from '../lean/rewriteCandidates';
+import { caseBranchCount } from '../lean/caseBranches';
 import {
   subtermTextMap,
   taggedText,
@@ -107,7 +108,7 @@ export interface ProofSessionOptions {
 
 /** Manual tactic ids the session accepts (`tactic.<id>`). */
 const MANUAL_TACTICS = new Set<ProofTreeManualTacticMode['tactic']>([
-  'intros', 'induction', 'exact', 'unfold', 'fold', 'rewrite', 'rewrite_rev', 'apply', 'simp', 'have',
+  'intros', 'induction', 'cases', 'exact', 'unfold', 'fold', 'rewrite', 'rewrite_rev', 'apply', 'simp', 'have',
 ]);
 
 export class ProofSessionError extends Error {}
@@ -627,6 +628,8 @@ export class ProofSession {
       computeApplySubgoalCount: (_root, _cursor, name) =>
         applySubgoalCount(this.declarations, name),
       computeRewriteSideGoalCount: (name) => rewriteSideGoalCount(this.declarations, name),
+      computeCaseBranchCount: (scrutinee) =>
+        caseBranchCount(this.declarations, this.hypothesesWithTypes(), scrutinee),
     });
     if (!next) return { ok: false, error: `${tactic} could not be applied here` };
     // A tactic that CLOSES its goal leaves the cursor on the finished step,
@@ -959,6 +962,7 @@ export class ProofSession {
     type: string;
     typeHead?: string | null;
     isFun?: boolean;
+    ctors?: number;
     fields?: readonly string[];
   }> {
     // The rendered type (for text ranking) PLUS what the elaborator says the
@@ -971,7 +975,7 @@ export class ProofSession {
         return {
           name,
           type: taggedText(h.type),
-          ...(f ? { typeHead: f.typeHead, isFun: f.isFun, fields: f.fields } : {}),
+          ...(f ? { typeHead: f.typeHead, isFun: f.isFun, ctors: f.ctors, fields: f.fields } : {}),
         };
       }),
     );

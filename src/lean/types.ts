@@ -35,6 +35,8 @@ export interface LeanHypFact {
   typeHead: string | null;
   /** Is it a function? (Then it can be USED: applied to arguments.) */
   isFun: boolean;
+  /** Constructors of the (unfolded) type — branches a `cases` on it opens. */
+  ctors?: number;
   /** Field names, when the type is a structure. */
   fields: string[];
 }
@@ -95,6 +97,9 @@ export interface LeanDeclaration {
   conclHead?: string | null;
   /** Is that head an inductive type? (A case split can be done on it.) */
   conclIsInductive?: boolean;
+  /** Constructors of that inductive — branches a `cases` on this lemma's
+   *  result opens (`leTotal a b` concludes an `Either`, so two). */
+  conclCtors?: number;
   /** Head constant of each EXPLICIT argument's type, in order. */
   argHeads?: (string | null)[];
   /** How many goals a backwards step leaves: the explicit arguments the

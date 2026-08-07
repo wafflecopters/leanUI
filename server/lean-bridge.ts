@@ -317,6 +317,9 @@ export interface LeanHypFact {
   name: string;
   typeHead: string | null;
   isFun: boolean;
+  /** Constructors of the hypothesis's (unfolded) type — how many branches a
+   *  `cases` on it opens. 0 when the type isn't an inductive. */
+  ctors?: number;
   fields: string[];
 }
 
@@ -367,6 +370,9 @@ export interface LeanDeclaration {
   conclHead?: string | null;
   /** Is that head an inductive type? */
   conclIsInductive?: boolean;
+  /** Constructors of that inductive — branches a `cases` on this lemma's
+   *  result opens (`leTotal a b` concludes an `Either`, so two). */
+  conclCtors?: number;
   /** Head constant of each EXPLICIT argument's type, in order. */
   argHeads?: (string | null)[];
   /** Goals a backwards step leaves (explicit args the conclusion doesn't fix). */
@@ -447,6 +453,7 @@ export function parseAnalyzeJson(
           name: String(h?.name ?? ''),
           typeHead: typeof h?.typeHead === 'string' ? h.typeHead : null,
           isFun: h?.isFun === true,
+          ...(typeof h?.ctors === 'number' ? { ctors: h.ctors } : {}),
           fields: Array.isArray(h?.fields) ? h.fields.map((x: any) => String(x)) : [],
         }))
       : [];
@@ -482,6 +489,7 @@ export function parseAnalyzeJson(
           ...(typeof d.prettyValue === 'string' ? { prettyValue: d.prettyValue } : {}),
           ...(typeof d.conclHead === 'string' ? { conclHead: d.conclHead } : {}),
           ...(typeof d.conclIsInductive === 'boolean' ? { conclIsInductive: d.conclIsInductive } : {}),
+          ...(typeof d.conclCtors === 'number' ? { conclCtors: d.conclCtors } : {}),
           ...(Array.isArray(d.argHeads)
             ? { argHeads: d.argHeads.map((h: any) => (typeof h === 'string' ? h : null)) }
             : {}),

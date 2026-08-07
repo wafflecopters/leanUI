@@ -51,6 +51,15 @@ const TACTIC_FORMS: Array<{
     param: { name: 'scrutinee', kind: 'identifier', placeholder: 'n', required: true },
   },
   {
+    tactic: 'cases',
+    label: 'Cases on…',
+    // An EXPRESSION, not just a name: `cases leTotal a b` is how a proof says
+    // "either a ≤ b or b ≤ a", and it was previously reachable only if a
+    // suggestion pill happened to offer it.
+    description: 'Split on a hypothesis or a term — one branch per constructor',
+    param: { name: 'scrutinee', kind: 'expression', placeholder: 'hF   or   leTotal a b', required: true },
+  },
+  {
     tactic: 'exact',
     label: 'Exact…',
     description: 'Close the goal with a term',

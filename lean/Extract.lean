@@ -183,12 +183,23 @@ unsafe def analyzeFile (cache : EnvCache) (path : String) : IO Json := do
                     | some info => info.fieldNames.map (·.toString)
                     | none => #[]
                   | none => #[]
+                -- How many branches a `cases` on this hypothesis opens. Only the
+                -- environment knows — a structure splits into one, an `Either`
+                -- into two — and guessing it is how the editor ended up printing
+                -- two Nat-shaped cases for every split regardless of the type.
+                let ctors : Nat :=
+                  match headUnfolded with
+                  | some n => match envH.find? n with
+                    | some (.inductInfo ind) => ind.ctors.length
+                    | _ => 0
+                  | none => 0
                 rows := rows.push <| Json.mkObj
                   [("name", Json.str ldecl.userName.toString),
                    ("typeHead", match headName with
                      | some n => Json.str n.toString
                      | none => Json.null),
                    ("isFun", Json.bool red.isForall),
+                   ("ctors", natJ ctors),
                    ("fields", Json.arr (fields.map Json.str))]
               pure rows
             let plain := toString (← Meta.ppGoal g)
@@ -299,7 +310,7 @@ unsafe def analyzeFile (cache : EnvCache) (path : String) : IO Json := do
       -- reshaped by every notation the preset defines. `convertEps` was
       -- unreachable because its binder is spelled `epsilon` and the goal says
       -- `ε` — one thing with two spellings, invisible to text matching.
-      let (conclHead, conclIsInductive, argHeads, premises) ←
+      let (conclHead, conclIsInductive, conclCtors, argHeads, premises) ←
         Meta.forallTelescopeReducing ci.type fun args body => do
           let envD ← getEnv
           -- NOT unfolded, deliberately. `rlt a b` whnfs to `Pair …` — as does
@@ -318,6 +329,15 @@ unsafe def analyzeFile (cache : EnvCache) (path : String) : IO Json := do
               | some (.inductInfo _) => true
               | _ => false
             | none => false
+          -- Branches a `cases` on THIS lemma's result opens: `leTotal a b`
+          -- concludes an `Either`, so splitting on it gives two. (Kept separate
+          -- from `isInd` — `False` is an inductive with no constructors.)
+          let ctorCount :=
+            match ch with
+            | some n => match envD.find? n with
+              | some (.inductInfo ind) => ind.ctors.length
+              | _ => 0
+            | none => 0
           let mut heads : Array Json := #[]
           let mut goalsLeft := 0
           for a in args do
@@ -332,7 +352,7 @@ unsafe def analyzeFile (cache : EnvCache) (path : String) : IO Json := do
             -- proofs (3), while `apply convertEps` asks for one thing (1).
             unless bodyRed.hasAnyFVar (· == a.fvarId!) do
               goalsLeft := goalsLeft + 1
-          pure (ch, isInd, heads, goalsLeft)
+          pure (ch, isInd, ctorCount, heads, goalsLeft)
       let mut fields : List (String × Json) :=
         [("name", Json.str declName.toString),
          ("kind", Json.str kindStr),
@@ -342,6 +362,7 @@ unsafe def analyzeFile (cache : EnvCache) (path : String) : IO Json := do
            | some n => Json.str n.toString
            | none => Json.null),
          ("conclIsInductive", Json.bool conclIsInductive),
+         ("conclCtors", natJ conclCtors),
          ("argHeads", Json.arr argHeads),
          ("premises", natJ premises),
          ("line", natJ pos.line), ("col", natJ pos.column)]

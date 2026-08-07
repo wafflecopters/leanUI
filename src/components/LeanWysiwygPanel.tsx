@@ -7,6 +7,7 @@ import { LeanMathEditor } from './LeanMathEditor';
 import { ProofTreeEditor } from './ProofTreeEditor';
 import { proofSeedBlock } from '../lean/extractTacticBlock';
 import { applySubgoalCount, rewriteSideGoalCount } from '../lean/rewriteCandidates';
+import { caseBranchCount } from '../lean/caseBranches';
 import { taggedToInteractiveGoal } from '../lean/leanInteractiveGoal';
 import type { TacticSuggestion } from '../proof-tree/suggestion-types';
 import { useProofSession } from '../controller/useProofSession';
@@ -483,6 +484,9 @@ function LeanProofEditor({
         onGoalPathSelect={(path) => session.selectSubterm(path)}
         goalExtraSlot={suggestionSlot}
         applySubgoalCount={(name) => applySubgoalCount(allDeclarations, name)}
+        caseBranchCount={(scrutinee) =>
+          caseBranchCount(allDeclarations, session.hypothesesWithTypes(), scrutinee)
+        }
         rewriteSideGoalCount={(name) => rewriteSideGoalCount(allDeclarations, name)}
         hypSuggestionsOverride={hypTraySuggestions}
         onHypothesisSelect={(name) => session.selectHypothesis(name)}

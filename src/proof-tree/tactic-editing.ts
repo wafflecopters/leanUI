@@ -33,6 +33,7 @@ import {
 export type ProofTreeManualTacticMode =
   | { tactic: 'intros' }
   | { tactic: 'induction' }
+  | { tactic: 'cases' }
   | { tactic: 'exact' }
   | { tactic: 'unfold' }
   | { tactic: 'fold' }
@@ -61,6 +62,11 @@ export interface ProofTreeManualTacticContext {
    *  rewrite is created with that many side-goal holes, so a conditional
    *  rewrite's obligations are visible immediately. */
   readonly computeRewriteSideGoalCount?: (name: string) => number;
+  /** How many branches a split on `scrutinee` opens — one per constructor of
+   *  its type, answered from the extractor's facts (`src/lean/caseBranches.ts`).
+   *  `null` means nothing in scope knows; the caller opens a single branch
+   *  rather than inventing a shape. */
+  readonly computeCaseBranchCount?: (scrutinee: string) => number | null;
 }
 
 export type ProofTreeBinderRenameTarget =
@@ -90,13 +96,24 @@ export function convertMathEditorSourceToUnicode(source: string): string {
  * name the constructor cases up front. On Lean the names come from the goal
  * round-trip instead (`enrichInductionCases` renames the placeholder cases once
  * Lean reports them), so this starts with placeholder branches.
+ *
+ * How MANY branches comes from `ctx.computeCaseBranchCount` — one per
+ * constructor of the scrutinee's type. This used to be two, always, labelled
+ * `n = 0` and `n = k'`: Nat's shape written into a layer that is supposed to
+ * work for any type. That is right for Nat, leaves a stray empty branch on a
+ * one-constructor structure, and silently loses branches on anything wider.
+ * When nothing knows the type we open ONE branch — an honest "I don't know yet"
+ * that the round-trip corrects — rather than guessing a shape.
  */
 function applyInductionFromContext(
   state: ProofTreeState,
   scrutinee: string,
   tacticName: 'induction' | 'cases',
+  ctx?: ProofTreeManualTacticContext,
 ): ProofTreeState | null {
-  return applyInduction(state, scrutinee, [`${scrutinee} = 0`, `${scrutinee} = k'`], tacticName);
+  const branches = ctx?.computeCaseBranchCount?.(scrutinee) ?? 1;
+  const labels = Array.from({ length: Math.max(1, branches) }, () => '?');
+  return applyInduction(state, scrutinee, labels, tacticName);
 }
 
 function inferInductionSuggestionTacticName(
@@ -478,7 +495,7 @@ export function applySuggestionToProofTreeState(
 
   if (suggestion.id.startsWith('induction-')) {
     const scrutinee = suggestion.id.slice('induction-'.length);
-    return applyInductionFromContext(state, scrutinee, inferInductionSuggestionTacticName(suggestion));
+    return applyInductionFromContext(state, scrutinee, inferInductionSuggestionTacticName(suggestion), ctx);
   }
 
   if (suggestion.id.startsWith('fold-')) {
@@ -578,7 +595,18 @@ export function applyManualProofTreeTactic(
     case 'induction': {
       const scrutinee = value.trim();
       if (!scrutinee) return null;
-      return applyInductionFromContext(state, scrutinee, 'induction');
+      return applyInductionFromContext(state, scrutinee, 'induction', ctx);
+    }
+
+    // `cases` splits on an arbitrary EXPRESSION, not just a hypothesis name —
+    // `cases leTotal a b` is how a proof does "either a ≤ b or b ≤ a", and
+    // without this the only route to it was a suggestion pill happening to
+    // offer it. How many branches it opens is measured afterwards (the session
+    // trials it and expands the node), since only Lean knows.
+    case 'cases': {
+      const scrutinee = value.trim();
+      if (!scrutinee) return null;
+      return applyInductionFromContext(state, scrutinee, 'cases', ctx);
     }
 
     case 'exact': {
