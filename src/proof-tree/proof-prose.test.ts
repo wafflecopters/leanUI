@@ -337,10 +337,15 @@ describe('generateProofProse', () => {
     // No separate inductionHeader row: caseHeader + hole, nothing else.
     expect(items.map((i) => i.kind.tag)).toEqual(['caseHeader', 'hole']);
     // It carries the header text instead, so the row reads "By cases on hG: Case (…)".
-    expect((items[0].kind as any).lead).toEqual({ scrutinee: 'hG', isCases: true });
+    expect((items[0].kind as any).lead).toEqual({ nodeId: 1, scrutinee: 'hG', isCases: true });
     // And costs NO indentation — the body sits where the split did.
     expect(items[0].depth).toBe(0);
     expect(items[1].depth).toBe(0);
+    // `lead.nodeId` is the SPLIT, not the case. Deleting this row has to remove
+    // the split; without it the row had no delete at all and a one-case
+    // destructure could not be undone from the prose.
+    expect((items[0].kind as any).lead.nodeId).toBe(induction.id);
+    expect(items[0].nodeId).not.toBe(induction.id);
   });
 
   test('two cases keep their header row and their indent — that IS a case analysis', () => {

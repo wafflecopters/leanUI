@@ -69,7 +69,13 @@ export type ProseItemKind =
        *  destructuring rather than a case analysis: the "By cases on x" header
        *  gets no row of its own and is folded into this one, so the pair reads
        *  as a single line at a single indent level. */
-      lead?: { scrutinee: string; scrutineeLatex?: string; isCases?: boolean };
+      lead?: {
+        /** The induction node this row stands in for — what deleting it removes. */
+        nodeId: ProofNodeId;
+        scrutinee: string;
+        scrutineeLatex?: string;
+        isCases?: boolean;
+      };
     }
   | { tag: 'exact'; exprLatex: string; solved: boolean; goalLatex?: string; error?: string; proofExprLatex?: string; isValueType?: boolean }
   | { tag: 'hole'; goalLatex?: string; isValueType?: boolean; solved?: boolean }
@@ -507,7 +513,7 @@ export function generateProofProse(
             scrutinee: node.scrutinee,
             isCases: node.isCases,
             ...(soleCase
-              ? { lead: { scrutinee: node.scrutinee, scrutineeLatex: info?.scrutineeLatex, isCases: node.isCases } }
+              ? { lead: { nodeId: node.id, scrutinee: node.scrutinee, scrutineeLatex: info?.scrutineeLatex, isCases: node.isCases } }
               : {}),
           });
           walk(c.body, soleCase ? depth : depth + 2);

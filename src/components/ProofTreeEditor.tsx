@@ -2279,12 +2279,18 @@ function ProofProseView({
       <style>{'.proof-prose .katex-display { margin: 0.25em 0; }'}</style>
       {items.map((item, idx) => {
         // Deletable items: anything except hole, qed, caseHeader
+        // A sole case has no header row of its own, so it carries the header's
+        // delete too — otherwise a one-case destructure cannot be removed at all.
+        const soleCaseOf = item.kind.tag === 'caseHeader' ? item.kind.lead?.nodeId : undefined;
         const isDeletable = item.kind.tag === 'intro' || item.kind.tag === 'unfold'
           || item.kind.tag === 'rewrite' || item.kind.tag === 'apply'
           || item.kind.tag === 'exact' || item.kind.tag === 'inductionHeader'
-          || item.kind.tag === 'have' || item.kind.tag === 'simp' || item.kind.tag === 'suffices';
+          || item.kind.tag === 'have' || item.kind.tag === 'simp' || item.kind.tag === 'suffices'
+          || soleCaseOf !== undefined;
         const handleDelete = isDeletable ? () => {
-          const result = clearProofTreeNode(state, item.nodeId);
+          // Deleting the merged row removes the SPLIT, not the case: the case is
+          // the whole of it, and `clearNode` on a case is not a thing.
+          const result = clearProofTreeNode(state, soleCaseOf ?? item.nodeId);
           if (result) onPushChange(result);
         } : undefined;
 
@@ -3353,7 +3359,7 @@ function IntroProseItem({
 // ============================================================================
 
 function CaseHeaderProseItem({
-  item, kind, rowStyle, rowHandlers, prose,
+  item, kind, rowStyle, rowHandlers, prose, deleteBtn,
   state, onPushChange,
 }: {
   item: ProseItem;
@@ -3361,6 +3367,7 @@ function CaseHeaderProseItem({
   rowStyle: React.CSSProperties;
   rowHandlers: ProseRowHandlers;
   prose: React.CSSProperties;
+  deleteBtn?: React.ReactNode;
   state: ProofTreeState;
   onPushChange: (s: ProofTreeState) => void;
 }) {
@@ -3471,6 +3478,7 @@ function CaseHeaderProseItem({
         <span style={prose}> (</span>
         {renderLabelWithClickableParams()}
         <span style={prose}>):</span>
+        {deleteBtn}
       </div>
       {/* What you can DO with the clicked name — the same validated tray the
           context panel shows, brought to where the name is written. */}
@@ -3593,7 +3601,8 @@ function ProseItemView({
   // Deletable items get an (x) button on hover
   const isDeletable = kind.tag === 'intro' || kind.tag === 'unfold' || kind.tag === 'rewrite'
     || kind.tag === 'apply' || kind.tag === 'exact' || kind.tag === 'inductionHeader'
-          || kind.tag === 'simp' || kind.tag === 'have' || kind.tag === 'suffices';
+    || kind.tag === 'simp' || kind.tag === 'have' || kind.tag === 'suffices'
+    || (kind.tag === 'caseHeader' && kind.lead !== undefined);
 
   const deleteBtn = isDeletable && onDelete && hovered ? (
     <button
@@ -3752,6 +3761,7 @@ function ProseItemView({
           rowStyle={rowStyle}
           rowHandlers={rowHandlers}
           prose={prose}
+          deleteBtn={deleteBtn}
           state={state}
           onPushChange={onPushChange}
         />
