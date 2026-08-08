@@ -283,6 +283,7 @@ export function findFirstHole(node: ProofNode): ProofNode | null {
     case 'exact':
       return null;
     case 'intros':
+    case 'destructure':
     case 'unfold':
     case 'fold':
       return findFirstHole(node.child);

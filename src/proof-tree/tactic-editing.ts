@@ -144,6 +144,7 @@ function findInductionAndCase(
       return null;
     }
     case 'intros':
+    case 'destructure':
     case 'unfold':
     case 'fold':
     case 'rewrite':
@@ -193,6 +194,7 @@ function replaceHaveNodeAtId(
 
   switch (root.tag) {
     case 'intros':
+    case 'destructure':
     case 'unfold':
     case 'fold':
     case 'rewrite': {
@@ -275,6 +277,7 @@ function rewriteHaveReferenceSubtree(
         proofTree: node.proofTree ? rewriteHaveReferenceSubtree(node.proofTree, oldName, newName) : undefined,
       };
     case 'intros':
+    case 'destructure':
     case 'unfold':
     case 'fold':
     case 'rewrite':

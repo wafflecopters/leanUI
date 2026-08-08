@@ -26,6 +26,8 @@ export function nodeLabel(node: ProofNode): string {
       return '?';
     case 'intros':
       return `${node.names.length === 1 ? 'intro' : 'intros'} ${node.names.join(' ')}`.trim();
+    case 'destructure':
+      return `obtain \u27e8${node.names.join(', ')}\u27e9 := ${node.scrutinee}`;
     case 'induction':
       return `${node.isCases ? 'cases' : 'induction'} ${node.scrutinee}`;
     case 'exact':

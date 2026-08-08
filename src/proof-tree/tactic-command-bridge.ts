@@ -116,6 +116,12 @@ export function proofTreeToTacticCommands(node: ProofNode): TacticCommand[] {
     case 'hole':
       return [];
 
+    case 'destructure':
+      return [
+        { name: 'obtain', args: [`\u27e8${node.names.join(', ')}\u27e9 := ${node.scrutinee}`] },
+        ...proofTreeToTacticCommands(node.child),
+      ];
+
     case 'intros': {
       const introName = node.names.length === 1 ? 'intro' : 'intros';
       const intro: TacticCommand = {

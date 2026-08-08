@@ -37,6 +37,11 @@ export interface LeanHypFact {
   isFun: boolean;
   /** Constructors of the (unfolded) type — branches a `cases` on it opens. */
   ctors?: number;
+  /** Every leaf name a one-line `obtain ⟨…⟩ := h` binds — one-constructor
+   *  structures flattened all the way down. Empty when there is nothing to
+   *  destructure. Names may repeat (two nested pairs both have a `fst`); the
+   *  caller uniquifies. */
+  flatFields?: string[];
   /** Field names, when the type is a structure. */
   fields: string[];
 }

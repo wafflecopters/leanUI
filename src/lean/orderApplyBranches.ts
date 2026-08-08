@@ -55,6 +55,7 @@ export function orderApplyBranches(input: OrderApplyBranchesInput): OrderApplyBr
       case 'exact':
         return node;
       case 'intros':
+      case 'destructure':
       case 'unfold':
       case 'fold': {
         const child = walk(node.child);

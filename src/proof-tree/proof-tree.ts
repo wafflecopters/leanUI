@@ -26,6 +26,7 @@ export function resetProofIds(start = 1): void { _nextProofNodeId = start; }
 export type ProofNode =
   | HoleNode
   | IntrosNode
+  | DestructureNode
   | InductionNode
   | ExactNode
   | UnfoldNode
@@ -44,6 +45,27 @@ export interface HoleNode {
 export interface IntrosNode {
   readonly tag: 'intros';
   readonly id: ProofNodeId;
+  readonly names: readonly string[];
+  readonly child: ProofNode;
+}
+
+/**
+ * `obtain ⟨a, b, c⟩ := e` — take a value apart and name its pieces.
+ *
+ * NOT an `InductionNode` with one case, even though `cases e with | mk a b`
+ * proves the same thing. A value with one constructor has nothing to case on;
+ * there are no branches, so there is no reason for the rest of the proof to
+ * indent under one. Lean's `cases` alternatives also cannot nest — they take
+ * plain names — so a pair-of-pair needed one `cases` per level, each indenting
+ * again. `obtain` takes the whole shape in one step, which is both what Lean
+ * prefers and what a paper writes.
+ */
+export interface DestructureNode {
+  readonly tag: 'destructure';
+  readonly id: ProofNodeId;
+  /** The term being taken apart — a hypothesis name, or any expression. */
+  readonly scrutinee: string;
+  /** One name per leaf of the pattern, in order. */
   readonly names: readonly string[];
   readonly child: ProofNode;
 }
@@ -248,6 +270,14 @@ export function mkIntros(names: readonly string[], child: ProofNode): IntrosNode
   return { tag: 'intros', id: freshProofId(), names, child };
 }
 
+export function mkDestructure(
+  scrutinee: string,
+  names: readonly string[],
+  child: ProofNode,
+): DestructureNode {
+  return { tag: 'destructure', id: freshProofId(), scrutinee, names, child };
+}
+
 export function mkInduction(scrutinee: string, cases: readonly CaseNode[], isCases?: boolean): InductionNode {
   return { tag: 'induction', id: freshProofId(), scrutinee, cases, collapsed: false, isCases };
 }
@@ -368,6 +398,7 @@ export function findNode(root: ProofNode, id: ProofNodeId): ProofNode | null {
     case 'exact':
       return null;
     case 'intros':
+    case 'destructure':
     case 'unfold':
     case 'fold':
       return findNode(root.child, id);
@@ -423,6 +454,7 @@ export function findCase(root: ProofNode, id: ProofNodeId): CaseNode | null {
     case 'exact':
       return null;
     case 'intros':
+    case 'destructure':
     case 'unfold':
     case 'fold':
       return findCase(root.child, id);
@@ -480,6 +512,7 @@ export function isCursorInSubtree(node: ProofNode, cursorId: ProofNodeId): boole
     case 'exact':
       return false;
     case 'intros':
+    case 'destructure':
     case 'unfold':
     case 'fold':
       return isCursorInSubtree(node.child, cursorId);
@@ -525,6 +558,7 @@ function linearizeImpl(node: ProofNode, depth: number, out: LinearEntry[]): void
     case 'exact':
       break;
     case 'intros':
+    case 'destructure':
     case 'unfold':
     case 'fold':
       linearizeImpl(node.child, depth + 1, out);
@@ -579,6 +613,7 @@ export function replaceNode(root: ProofNode, targetId: ProofNodeId, replacement:
     case 'exact':
       return root;
     case 'intros':
+    case 'destructure':
     case 'unfold':
     case 'fold': {
       const newChild = replaceNode(root.child, targetId, replacement);
@@ -648,6 +683,7 @@ export function updateCase(
     case 'exact':
       return root;
     case 'intros':
+    case 'destructure':
     case 'unfold':
     case 'fold': {
       const newChild = updateCase(root.child, caseId, updater);
@@ -920,6 +956,7 @@ export function editCaseParamName(
         }
         return null;
       case 'intros':
+      case 'destructure':
       case 'unfold':
       case 'fold':
         return findInductionParent(root.child, targetCaseId);
@@ -1039,6 +1076,9 @@ function computeContextImpl(
     case 'exact':
       return null;
 
+    // A destructure binds names just as an intro does — the pieces it names
+    // are in scope for everything below it.
+    case 'destructure':
     case 'intros': {
       const extended: ContextEntry[] = [
         ...hypotheses,

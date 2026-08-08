@@ -320,6 +320,11 @@ export interface LeanHypFact {
   /** Constructors of the hypothesis's (unfolded) type — how many branches a
    *  `cases` on it opens. 0 when the type isn't an inductive. */
   ctors?: number;
+  /** Every leaf name a one-line `obtain ⟨…⟩ := h` binds — one-constructor
+   *  structures flattened all the way down. Empty when there is nothing to
+   *  destructure. Names may repeat (two nested pairs both have a `fst`); the
+   *  caller uniquifies. */
+  flatFields?: string[];
   fields: string[];
 }
 
@@ -454,6 +459,7 @@ export function parseAnalyzeJson(
           typeHead: typeof h?.typeHead === 'string' ? h.typeHead : null,
           isFun: h?.isFun === true,
           ...(typeof h?.ctors === 'number' ? { ctors: h.ctors } : {}),
+          ...(Array.isArray(h?.flatFields) ? { flatFields: h.flatFields.map((x: any) => String(x)) } : {}),
           fields: Array.isArray(h?.fields) ? h.fields.map((x: any) => String(x)) : [],
         }))
       : [];

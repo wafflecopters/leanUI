@@ -33,6 +33,32 @@ open Lean Elab Meta Widget
 
 private def natJ (n : Nat) : Json := toJson n
 
+/-- The LEAF field names of a value, flattening one-constructor structures all
+    the way down: a `DPair` whose second component is itself a pair reports
+    three names, not two.
+
+    This is what a one-line destructuring needs. `cases … with | mk a b` cannot
+    nest (Lean's alternatives take plain names), so destructuring such a value
+    took one `cases` per level, each indenting the rest of the proof; `obtain
+    ⟨a, b, c⟩ := h` does it in one step — but only if we know how many names to
+    write, which is a question about the TYPE that only the environment can
+    answer. Structures are the guard: `getStructureInfo?` answers only for
+    single-constructor types, which are exactly the ones with nothing to case
+    on. `depth` bounds the walk so a recursive structure cannot spin. -/
+private partial def flatFieldNames (v : Expr) (depth : Nat) : MetaM (Array String) := do
+  if depth == 0 then return #[]
+  let ty ← try Meta.whnf (← Meta.inferType v) catch _ => return #[]
+  let some head := ty.getAppFn.constName? | return #[]
+  let some info := getStructureInfo? (← getEnv) head | return #[]
+  let mut out : Array String := #[]
+  for f in info.fieldNames do
+    let some proj ← (try some <$> Meta.mkProjection v f catch _ => pure none) | return #[]
+    let nested ← flatFieldNames proj (depth - 1)
+    -- A field that is itself a one-constructor structure contributes ITS leaves;
+    -- anything else (a real, a proof of an inequality, a function) is a leaf.
+    out := if nested.isEmpty then out.push f.toString else out ++ nested
+  return out
+
 /-- Serialize a `CodeWithInfos` (`TaggedText SubexprInfo`) tree to JSON for the
     WYSIWYG math editor. `pos` is the `SubExpr.Pos` of the subexpression — the
     stable id used as the math editor's `Group` htmlId (click-to-select target).
@@ -193,6 +219,15 @@ unsafe def analyzeFile (cache : EnvCache) (path : String) : IO Json := do
                     | some (.inductInfo ind) => ind.ctors.length
                     | _ => 0
                   | none => 0
+                -- Every name a one-line `obtain ⟨…⟩ := h` would have to bind.
+                -- Depth 2 — the value and ONE level of nesting — because that
+                -- is the shape these statements have ("a δ, together with the
+                -- facts about it") and it is where a reader stops. Deeper is
+                -- not more informative, it is less: at depth 3 this preset's
+                -- `0 < δ` comes apart into the pair it is defined as, which
+                -- nobody thinks of as two facts. Anyone who wants that level
+                -- destructures again — which now costs a row, not an indent.
+                let flat ← flatFieldNames ldecl.toExpr 2
                 rows := rows.push <| Json.mkObj
                   [("name", Json.str ldecl.userName.toString),
                    ("typeHead", match headName with
@@ -200,7 +235,8 @@ unsafe def analyzeFile (cache : EnvCache) (path : String) : IO Json := do
                      | none => Json.null),
                    ("isFun", Json.bool red.isForall),
                    ("ctors", natJ ctors),
-                   ("fields", Json.arr (fields.map Json.str))]
+                   ("fields", Json.arr (fields.map Json.str)),
+                   ("flatFields", Json.arr (flat.map Json.str))]
               pure rows
             let plain := toString (← Meta.ppGoal g)
             -- Prop targets are claims to PROVE; non-Prop targets (ℝ, ℕ, a
