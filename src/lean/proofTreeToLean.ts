@@ -123,6 +123,13 @@ function emitNode(em: Emitter, node: ProofNode, depth: number): void {
       emitChild(em, node.child, depth);
       return;
     }
+    // A destructure chains like an intro — no branch, so no indent. The names
+    // are chosen when the step is made, so nothing has to be renamed later.
+    case 'destructure': {
+      em.emit(depth, `obtain \u27e8${node.names.join(', ')}\u27e9 := ${node.scrutinee}`, node.id);
+      emitChild(em, node.child, depth);
+      return;
+    }
     case 'exact': {
       const expr = node.expr.trim() || 'sorry';
       // `raw` exact carries a whole tactic (omega/rfl/decide/…) — print verbatim.

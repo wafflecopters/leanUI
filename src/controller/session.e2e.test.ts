@@ -458,6 +458,55 @@ describe('ProofSession against real Lean', () => {
     10 * MINUTES,
   );
 
+  // Destructuring used to insert an UNNAMED branch and wait a round-trip for
+  // Lean to name it — so the row read "Case (case)" with pieces the proof could
+  // not refer to until something else triggered a refresh. `obtain` names them
+  // as the step is made.
+  test(
+    'destructuring names the pieces immediately, with no branch and no indent',
+    async () => {
+      const s = open('limitAdd');
+      await s.refresh();
+      s.selectHypothesis('fProof');
+      await s.refresh();
+
+      const act = s.getState().actions.find((a) => a.id.endsWith('cases:fProof'))!;
+      expect(act).toBeDefined();
+      // An `obtain`, because Lean reported the shape — not the branch form.
+      expect(act.detail?.tactic).toMatch(/^obtain \u27e8/);
+
+      s.dispatch({ id: act.id });
+      await s.refresh(); // ONE round-trip, not two
+
+      expect(s.proofSource()).toContain('obtain \u27e8fst, snd\u27e9 := fProof');
+      const names = s.getState().goal!.hypotheses.map((h) => h.name);
+      expect(names).toContain('fst');
+      expect(names).toContain('snd');
+      // Accessible immediately: no inaccessible daggers waiting to be renamed.
+      expect(names.some((n) => n.includes('\u271d'))).toBe(false);
+      expect(s.getState().status.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    },
+    10 * MINUTES,
+  );
+
+  // `⟨a, b, c⟩` is Lean's anonymous constructor and associates to the RIGHT, so
+  // a flat name list can only describe the right spine. Flattening an earlier
+  // field describes a left-nested shape and Lean rejects the pattern.
+  test(
+    'the reported shape nests only where the pattern can',
+    async () => {
+      const s = open('limitAdd');
+      await s.refresh();
+      const hyps = s.hypothesesWithTypes();
+      // `fProof : EpsDeltaWitness …` is a pair whose FIRST field is itself a
+      // pair. Flattening it would need ⟨⟨a,b⟩,c⟩, which ⟨a,b,c⟩ does not mean.
+      expect(hyps.find((h) => h.name === 'fProof')?.flatFields).toEqual(['fst', 'snd']);
+      // A real, not a structure: nothing to take apart.
+      expect(hyps.find((h) => h.name === 'deltaF')?.flatFields ?? []).toEqual([]);
+    },
+    10 * MINUTES,
+  );
+
   // Branch counts come from the extractor, not from a guess: a hypothesis
   // carries its type's constructor count and a lemma carries its conclusion's.
   test(

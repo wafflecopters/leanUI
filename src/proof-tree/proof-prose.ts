@@ -65,6 +65,9 @@ export type ProseItemKind =
       constructorName?: string;
       scrutinee?: string;
       isCases?: boolean;
+      /** An `obtain ⟨a, b⟩ := e` row: no constructor to name, so the pattern
+       *  renders as the anonymous constructor the proof actually writes. */
+      anonymous?: boolean;
       /** Set when this is the split's ONLY case, which makes the split a
        *  destructuring rather than a case analysis: the "By cases on x" header
        *  gets no row of its own and is folded into this one, so the pair reads
@@ -518,6 +521,31 @@ export function generateProofProse(
           });
           walk(c.body, soleCase ? depth : depth + 2);
         }
+        break;
+      }
+
+      // `obtain ⟨a, b, c⟩ := e` — bound names, no branch, so no indent. Same
+      // row shape as a sole case (which is the same thing said with `cases`).
+      case 'destructure': {
+        const childInfo = goalMap.get(node.child.id);
+        const nameTypes = new Map((childInfo?.hypotheses ?? []).map((h) => [h.name, h.type]));
+        const nameTypeLatex = node.names.map((n) => nameTypes.get(n) ?? '');
+        emit(node.id, depth, {
+          tag: 'caseHeader',
+          labelLatex: '',
+          isBaseCase: false,
+          isCases: true,
+          anonymous: true,
+          constructorParamNames: node.names,
+          ...(nameTypeLatex.some((t) => t) ? { paramTypeLatex: nameTypeLatex } : {}),
+          lead: {
+            nodeId: node.id,
+            scrutinee: node.scrutinee,
+            scrutineeLatex: info?.scrutineeLatex,
+            isCases: true,
+          },
+        });
+        walk(node.child, depth);
         break;
       }
 

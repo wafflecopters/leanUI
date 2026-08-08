@@ -6,6 +6,7 @@ import {
   applyInduction,
   applySimp,
   clearNode,
+  editDestructureName,
   editIntroName,
   findCase,
   findNode,
@@ -72,7 +73,8 @@ export interface ProofTreeManualTacticContext {
 export type ProofTreeBinderRenameTarget =
   | { tag: 'have'; nodeId: ProofNodeId }
   | { tag: 'introToken'; nodeId: ProofNodeId; nameIndex: number }
-  | { tag: 'caseParam'; nodeId: ProofNodeId; paramIndex: number };
+  | { tag: 'caseParam'; nodeId: ProofNodeId; paramIndex: number }
+  | { tag: 'destructureName'; nodeId: ProofNodeId; nameIndex: number };
 
 function splitNames(value: string): string[] {
   return value.split(/[\s,]+/).filter(Boolean);
@@ -362,6 +364,9 @@ export function commitProofTreeBinderRename(
       if (node.names[target.nameIndex] === newName) return null;
       return renameIntroTokenInProofTree(state, target.nodeId, target.nameIndex, newName);
     }
+    case 'destructureName':
+      return editDestructureName(state, target.nodeId, target.nameIndex, newName);
+
     case 'caseParam': {
       const induction = findInductionAndCase(state.root, target.nodeId);
       if (!induction) return null;

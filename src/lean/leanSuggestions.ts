@@ -151,14 +151,50 @@ export function freshHypName(existing: readonly string[]): string {
  * apply it backwards, or destructure it. Each is trialed via the normal
  * validation round-trip, so only the ones that actually work surface.
  */
-export function hypothesisSuggestions(hyp: string): LeanSuggestion[] {
+export function hypothesisSuggestions(
+  hyp: string,
+  /** Leaf names of the hypothesis's shape, from the extractor. When Lean knows
+   *  them the destructure is an `obtain`, which names the pieces AS IT IS MADE.
+   *  The `cases` form inserts an UNNAMED branch and waits a round-trip for Lean
+   *  to name it; anything that disturbs that window (a stale render, a refresh
+   *  that lands late) leaves "Case (case)" on screen and pieces the proof
+   *  cannot refer to. `obtain` has no such window, and no branch to indent. */
+  flatFields: readonly string[] = [],
+): LeanSuggestion[] {
+  const names = uniqueNames(flatFields);
+  const destructure: LeanSuggestion = names.length > 0
+    ? {
+        id: `hyp-cases:${hyp}`,
+        label: `obtain \u27e8${names.join(', ')}\u27e9 := ${hyp}`,
+        tactic: `obtain \u27e8${names.join(', ')}\u27e9 := ${hyp}`,
+        kind: 'apply',
+      }
+    // Nothing known about the shape (an older extractor, or a type with more
+    // than one constructor): fall back to the branch form.
+    : {
+        id: `hyp-cases:${hyp}`,
+        label: `cases ${hyp}`,
+        tactic: `cases ${hyp}\n\u00b7\n  sorry`,
+        validateTactic: `cases ${hyp}`,
+        kind: 'apply',
+      };
   return [
     { id: `hyp-exact:${hyp}`, label: `exact ${hyp}`, tactic: `exact ${hyp}`, kind: 'exact' },
     { id: `hyp-apply:${hyp}`, label: `apply ${hyp}`, tactic: `apply ${hyp}`, kind: 'apply' },
-    // One `·` case bullet: the common destructure targets (records/structures
-    // like Limit, Pair, DPair) have a single constructor.
-    { id: `hyp-cases:${hyp}`, label: `cases ${hyp}`, tactic: `cases ${hyp}\n·\n  sorry`, validateTactic: `cases ${hyp}`, kind: 'apply' },
+    destructure,
   ];
+}
+
+/** Lean rejects a repeated binder, and nested pairs genuinely repeat: a DPair
+ *  of a Pair reports `fst, fst, snd`. Suffix the duplicates. */
+function uniqueNames(names: readonly string[]): string[] {
+  const used = new Set<string>();
+  return names.map((n) => {
+    let name = n;
+    for (let i = 1; used.has(name); i++) name = `${n}${i}`;
+    used.add(name);
+    return name;
+  });
 }
 
 /**

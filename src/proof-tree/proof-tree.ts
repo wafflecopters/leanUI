@@ -885,6 +885,19 @@ export function editIntroName(
   return { root: newRoot, cursor: state.cursor };
 }
 
+/** Rename one of a destructure's bound names (`obtain ⟨fst, snd⟩ := h`). */
+export function editDestructureName(
+  state: ProofTreeState, nodeId: ProofNodeId, nameIndex: number, newName: string,
+): ProofTreeState | null {
+  const node = findNode(state.root, nodeId);
+  if (!node || node.tag !== 'destructure') return null;
+  if (nameIndex < 0 || nameIndex >= node.names.length) return null;
+  if (node.names[nameIndex] === newName) return null;
+  const newNames = [...node.names];
+  newNames[nameIndex] = newName;
+  return { root: replaceNode(state.root, nodeId, { ...node, names: newNames }), cursor: state.cursor };
+}
+
 export function addIntroName(
   state: ProofTreeState, nodeId: ProofNodeId, name: string,
 ): ProofTreeState | null {

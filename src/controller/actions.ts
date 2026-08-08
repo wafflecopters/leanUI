@@ -173,7 +173,10 @@ function hypothesisActions(hyp: string, suggestions: readonly LeanSuggestion[]):
     } else if (s.id === `hyp-apply:${hyp}`) {
       out.push({ id: `${ACTION.hypothesis}apply:${hyp}`, label: `Apply ${hyp}`, group: 'hypothesis', description: `Apply ${hyp} to the goal`, params: [], detail: { tactic: `apply ${hyp}`, ...(s.subgoals ? { subgoals: s.subgoals } : {}) } });
     } else if (s.id === `hyp-cases:${hyp}`) {
-      out.push({ id: `${ACTION.hypothesis}cases:${hyp}`, label: `Destructure ${hyp}`, group: 'hypothesis', description: `Pattern-match on ${hyp}`, params: [], detail: { tactic: `cases ${hyp}` } });
+      // The tactic shown is the one that will RUN — it is an `obtain` when Lean
+      // knows the shape and a `cases` when it doesn't, and a hardcoded string
+      // here would go on claiming the old one.
+      out.push({ id: `${ACTION.hypothesis}cases:${hyp}`, label: `Destructure ${hyp}`, group: 'hypothesis', description: `Pattern-match on ${hyp}`, params: [], detail: { tactic: s.tactic } });
     } else if (s.id.startsWith('hyp-use:')) {
       const expr = s.id.slice('hyp-use:'.length);
       if (!expr.startsWith(`${hyp}.`)) continue;

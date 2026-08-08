@@ -51,11 +51,16 @@ private partial def flatFieldNames (v : Expr) (depth : Nat) : MetaM (Array Strin
   let some head := ty.getAppFn.constName? | return #[]
   let some info := getStructureInfo? (← getEnv) head | return #[]
   let mut out : Array String := #[]
-  for f in info.fieldNames do
+  for h : i in [0 : info.fieldNames.size] do
+    let f := info.fieldNames[i]!
     let some proj ← (try some <$> Meta.mkProjection v f catch _ => pure none) | return #[]
-    let nested ← flatFieldNames proj (depth - 1)
-    -- A field that is itself a one-constructor structure contributes ITS leaves;
-    -- anything else (a real, a proof of an inequality, a function) is a leaf.
+    -- ONLY the last field nests. `⟨a, b, c⟩` is Lean's anonymous constructor
+    -- and it associates to the RIGHT — it means `⟨a, ⟨b, c⟩⟩` — so a flat list
+    -- of names can only ever describe the right spine. Flattening an earlier
+    -- field describes a LEFT-nested shape and produces a pattern Lean rejects
+    -- (which is how this was caught: validation trialled it and dropped it).
+    let isLast := i + 1 == info.fieldNames.size
+    let nested ← if isLast then flatFieldNames proj (depth - 1) else pure #[]
     out := if nested.isEmpty then out.push f.toString else out ++ nested
   return out
 

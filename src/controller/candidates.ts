@@ -56,6 +56,7 @@ export interface CandidateInput {
     isFun?: boolean;
     /** Field names, when it is a structure. */
     fields?: readonly string[];
+    flatFields?: readonly string[];
   }>;
   /** Plain text of the clicked subterm; empty when nothing is selected. */
   selectedSubtermText?: string;
@@ -126,8 +127,8 @@ function rewriteCandidates(input: CandidateInput): LeanSuggestion[] {
 function hypothesisCandidates(input: CandidateInput): LeanSuggestion[] {
   const hyp = input.selectedHypName;
   if (!hyp) return [];
-  const out = hypothesisSuggestions(hyp);
   const facts = input.hypotheses.find((h) => h.name === hyp);
+  const out = hypothesisSuggestions(hyp, facts?.flatFields ?? []);
 
   // A hypothesis that is a FUNCTION can be USED — applied to arguments to
   // obtain the fact it yields. `dfFn : (x : ℝ) → 0 < |x - x0| → … → |f x - L| <

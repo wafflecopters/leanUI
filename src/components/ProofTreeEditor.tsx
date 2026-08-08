@@ -3394,13 +3394,12 @@ function CaseHeaderProseItem({
 
   const handleRename = useCallback((newName: string) => {
     if (selectedParamIndex === null) return;
-    const result = commitProofTreeBinderRename(state, {
-      tag: 'caseParam',
-      nodeId: item.nodeId,
-      paramIndex: selectedParamIndex,
-    }, newName);
+    const result = commitProofTreeBinderRename(state, kind.anonymous
+      ? { tag: 'destructureName', nodeId: item.nodeId, nameIndex: selectedParamIndex }
+      : { tag: 'caseParam', nodeId: item.nodeId, paramIndex: selectedParamIndex },
+      newName);
     if (result) onPushChange(result);
-  }, [selectedParamIndex, state, item.nodeId, onPushChange]);
+  }, [selectedParamIndex, state, item.nodeId, kind.anonymous, onPushChange]);
 
   // Dismiss selection when focus leaves the container
   const handleCaseContainerBlur = useCallback((e: React.FocusEvent) => {
@@ -3416,18 +3415,22 @@ function CaseHeaderProseItem({
   // For induction: "scrutinee = Constructor(param1, param2)"
   // For cases: "Constructor(param1, param2)" (no scrutinee prefix)
   const renderLabelWithClickableParams = () => {
-    if (!hasParams || !kind.constructorName) {
+    if (!hasParams || (!kind.constructorName && !kind.anonymous)) {
       // No params or missing data — render as before
       return <InlineKaTeX latex={kind.labelLatex} style={{ fontSize: '12px' }} />;
     }
 
-    const ctorTex = texNameForProse(kind.constructorName);
+    const ctorTex = texNameForProse(kind.constructorName ?? '');
     // For cases, omit the "scrutinee = " prefix since it's often a complex expression
-    const prefix = kind.isCases
-      ? `${ctorTex}\\,(`
-      : kind.scrutinee
-        ? `${texNameForProse(kind.scrutinee)} = ${ctorTex}\\,(`
-        : `${ctorTex}\\,(`;
+    // An `obtain` writes the anonymous constructor, so the prose does too —
+    // \u27e8a, b\u27e9, the notation the proof itself contains.
+    const prefix = kind.anonymous
+      ? '\\langle '
+      : kind.isCases
+        ? `${ctorTex}\\,(`
+        : kind.scrutinee
+          ? `${texNameForProse(kind.scrutinee)} = ${ctorTex}\\,(`
+          : `${ctorTex}\\,(`;
 
     return (
       <>
@@ -3451,7 +3454,7 @@ function CaseHeaderProseItem({
             </HoverType>
           </React.Fragment>
         ))}
-        <InlineKaTeX latex=")" style={{ fontSize: '12px' }} />
+        <InlineKaTeX latex={kind.anonymous ? '\\rangle' : ')'} style={{ fontSize: '12px' }} />
       </>
     );
   };
@@ -3464,20 +3467,26 @@ function CaseHeaderProseItem({
         {kind.lead && (
           <>
             <span style={{ ...prose, fontWeight: 400 }}>
-              {describeInductionHeader({ tag: 'inductionHeader', scrutinee: kind.lead.scrutinee, isCases: kind.lead.isCases }).lead}{' '}
+              {kind.anonymous
+                ? 'Write'
+                : describeInductionHeader({ tag: 'inductionHeader', scrutinee: kind.lead.scrutinee, isCases: kind.lead.isCases }).lead}{' '}
             </span>
             {kind.lead.scrutineeLatex
               ? <InlineKaTeX latex={kind.lead.scrutineeLatex} style={{ fontSize: '13px' }} />
               : <InlineProseName name={kind.lead.scrutinee} />}
-            <span style={{ ...prose, fontWeight: 400 }}>{': '}</span>
+            <span style={{ ...prose, fontWeight: 400 }}>{kind.anonymous ? ' as ' : ': '}</span>
           </>
         )}
-        <span style={{ color: kind.isCases ? '#79c0ff' : (kind.isBaseCase ? '#d2a8ff' : '#79c0ff') }}>
-          {kind.isCases ? 'Case' : (kind.isBaseCase ? 'Base case' : 'Inductive step')}
-        </span>
-        <span style={prose}> (</span>
+        {!kind.anonymous && (
+          <>
+            <span style={{ color: kind.isCases ? '#79c0ff' : (kind.isBaseCase ? '#d2a8ff' : '#79c0ff') }}>
+              {kind.isCases ? 'Case' : (kind.isBaseCase ? 'Base case' : 'Inductive step')}
+            </span>
+            <span style={prose}> (</span>
+          </>
+        )}
         {renderLabelWithClickableParams()}
-        <span style={prose}>):</span>
+        <span style={prose}>{kind.anonymous ? '.' : '):'}</span>
         {deleteBtn}
       </div>
       {/* What you can DO with the clicked name — the same validated tray the

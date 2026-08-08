@@ -897,12 +897,20 @@ export class ProofSession {
     const kind = rest.slice(0, sep);
     const target = rest.slice(sep + 1);
     switch (kind) {
+      // Run the VALIDATED suggestion, never a tactic rebuilt from the id. These
+      // three used to re-derive their own text here, so the string existed
+      // twice and the copies drifted the moment one changed: the destructure
+      // became an `obtain` in the suggestion layer while this branch went on
+      // inserting the `cases` form, silently, with every test still passing.
       case 'exact':
-        return this.insertTactic(`exact ${target}`);
       case 'apply':
-        return this.insertTactic(`apply ${target}`, action.detail?.subgoals);
-      case 'cases':
-        return this.insertTactic(`cases ${target}\n·\n  sorry`);
+      case 'cases': {
+        const applied = this.applySuggestion(`hyp-${kind}:${target}`);
+        if (applied.ok) return applied;
+        // The suggestion is gone (the goal moved under us) — fall back rather
+        // than dropping the click.
+        return this.insertTactic(`${kind} ${target}`, action.detail?.subgoals);
+      }
       case 'use':
         // How many arguments the projection still needs is Lean's answer, so
         // this can't complete synchronously. The click is accepted now and the
@@ -964,6 +972,7 @@ export class ProofSession {
     isFun?: boolean;
     ctors?: number;
     fields?: readonly string[];
+    flatFields?: readonly string[];
   }> {
     // The rendered type (for text ranking) PLUS what the elaborator says the
     // hypothesis is — see LeanHypFact. Keyed by name, because Lean reports the
@@ -975,7 +984,7 @@ export class ProofSession {
         return {
           name,
           type: taggedText(h.type),
-          ...(f ? { typeHead: f.typeHead, isFun: f.isFun, ctors: f.ctors, fields: f.fields } : {}),
+          ...(f ? { typeHead: f.typeHead, isFun: f.isFun, ctors: f.ctors, fields: f.fields, flatFields: f.flatFields } : {}),
         };
       }),
     );

@@ -14,6 +14,7 @@ import {
   type ProofNode,
   type CaseNode,
   mkHole,
+  mkDestructure,
   mkIntros,
   mkExact,
   mkUnfold,
@@ -90,6 +91,24 @@ function parseTactic(lines: Line[], pos: { i: number }, level: number, text: str
   if (m) {
     const names = m[1].trim().length ? m[1].trim().split(/\s+/) : [];
     return mkIntros(names, continuation(lines, pos, level));
+  }
+
+  // obtain \u27e8a, b, c\u27e9 := e   (also `rcases e with \u27e8a, b, c\u27e9`)
+  //
+  // A destructure with no branch. Chaining, NOT terminal: it was falling into
+  // the raw-`exact` fallback below, which swallows the continuation and ends
+  // the proof narrative — the same trap `conv in … => simp` fell into.
+  {
+    const ob = text.match(/^obtain\s*\u27e8([^\u27e9]*)\u27e9\s*:=\s*(.+)$/);
+    const rc = text.match(/^rcases\s+(.+?)\s+with\s*\u27e8([^\u27e9]*)\u27e9\s*$/);
+    const pattern = ob?.[1] ?? rc?.[2];
+    const scrutinee = ob?.[2] ?? rc?.[1];
+    if (pattern !== undefined && scrutinee !== undefined) {
+      const names = pattern.split(',').map((x) => x.trim()).filter(Boolean);
+      if (names.length > 0) {
+        return mkDestructure(scrutinee.trim(), names, continuation(lines, pos, level));
+      }
+    }
   }
 
   // exact <expr>
