@@ -484,6 +484,13 @@ describe('ProofSession against real Lean', () => {
       expect(names).toContain('snd');
       // Accessible immediately: no inaccessible daggers waiting to be renamed.
       expect(names.some((n) => n.includes('\u271d'))).toBe(false);
+      // And they carry their TYPES — the context panel lists them, and the
+      // prose can show one on hover. Several tree walkers had a `default`
+      // branch rather than an exhaustive switch, so they silently skipped the
+      // new node and everything below it lost its goal info.
+      const hyps = s.getState().goal!.hypotheses;
+      expect(hyps.find((h) => h.name === 'fst')?.text).toBe('0 < deltaF');
+      expect(hyps.find((h) => h.name === 'snd')?.text).toContain('|f x - L| < ε / 2');
       expect(s.getState().status.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
     },
     10 * MINUTES,

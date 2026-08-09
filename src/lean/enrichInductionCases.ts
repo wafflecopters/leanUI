@@ -126,7 +126,10 @@ export function enrichInductionCaseNames(
         const casesChanged = cases.some((c, i) => c !== node.cases[i]);
         return casesChanged ? { ...node, cases } : node;
       }
-      case 'intros': {
+      case 'intros':
+      // A destructure has one child and no cases of its own, but anything
+      // BELOW it still needs naming — without this the walk stopped here.
+      case 'destructure': {
         const child = walk(node.child);
         return child === node.child ? node : { ...node, child };
       }

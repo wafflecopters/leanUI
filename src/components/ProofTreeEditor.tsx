@@ -1449,6 +1449,7 @@ function ProofNodeView(props: NodeViewProps) {
   switch (props.node.tag) {
     case 'hole': return <HoleView {...props} />;
     case 'intros': return <IntrosView {...props} />;
+    case 'destructure': return <DestructureView {...props} />;
     case 'induction': return <InductionView {...props} />;
     case 'exact': return <ExactView {...props} />;
     case 'unfold': return <UnfoldView {...props} />;
@@ -1700,6 +1701,46 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
 // ============================================================================
 // IntrosView — renders "Given n, m, and f,"
 // ============================================================================
+
+/** `obtain ⟨a, b⟩ := e` in the TREE view. Without it the node fell out of
+ *  `ProofNodeView`'s switch and rendered nothing — taking the whole subtree
+ *  below it off the Tactics tab. */
+function DestructureView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, registry, goalMap }: NodeViewProps) {
+  if (node.tag !== 'destructure') return null;
+  const isFocused = cursorId === node.id;
+
+  const handleDelete = useCallback(() => {
+    const result = clearProofTreeNode(state, node.id);
+    if (result) onPushChange(result);
+  }, [state, node.id, onPushChange]);
+
+  return (
+    <>
+      <TacticRow nodeId={node.id} depth={depth} isFocused={isFocused} onClickNode={onClickNode} onDelete={handleDelete}>
+        <span style={keywordStyle}>obtain </span>
+        <InlineKaTeX
+          latex={`\\langle ${node.names.map((n) => texNameForProse(n)).join(',\\, ')} \\rangle`}
+          style={{ fontSize: '13px' }}
+        />
+        <span style={mutedStyle}> := </span>
+        <InlineProseName name={node.scrutinee} />
+      </TacticRow>
+      <ProofNodeView
+        node={node.child}
+        depth={depth}
+        cursorId={cursorId}
+        state={state}
+        tacticMode={tacticMode}
+        onTacticMode={onTacticMode}
+        onPushChange={onPushChange}
+        onClickNode={onClickNode}
+        typedContext={typedContext}
+        registry={registry}
+        goalMap={goalMap}
+      />
+    </>
+  );
+}
 
 function IntrosView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, registry, goalMap }: NodeViewProps) {
   if (node.tag !== 'intros') return null;

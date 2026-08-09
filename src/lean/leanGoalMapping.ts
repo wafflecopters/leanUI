@@ -111,6 +111,7 @@ export function collectBranchTags(root: ProofNode): Map<ProofNodeId, string> {
       case 'exact':
         return;
       case 'intros':
+      case 'destructure':
       case 'unfold':
       case 'fold':
         return visit(n.child);
