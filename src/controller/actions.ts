@@ -167,15 +167,17 @@ function suggestionAction(s: LeanSuggestion): ActionDescriptor {
  *  results so only moves Lean accepts appear. */
 function hypothesisActions(hyp: string, suggestions: readonly LeanSuggestion[]): ActionDescriptor[] {
   const out: ActionDescriptor[] = [];
+  let destructured = false;
   for (const s of suggestions) {
     if (s.id === `hyp-exact:${hyp}`) {
       out.push({ id: `${ACTION.hypothesis}exact:${hyp}`, label: `Exact ${hyp}`, group: 'hypothesis', description: `Close the goal with ${hyp}`, params: [], detail: { tactic: `exact ${hyp}`, closes: true } });
     } else if (s.id === `hyp-apply:${hyp}`) {
       out.push({ id: `${ACTION.hypothesis}apply:${hyp}`, label: `Apply ${hyp}`, group: 'hypothesis', description: `Apply ${hyp} to the goal`, params: [], detail: { tactic: `apply ${hyp}`, ...(s.subgoals ? { subgoals: s.subgoals } : {}) } });
-    } else if (s.id === `hyp-cases:${hyp}`) {
-      // The tactic shown is the one that will RUN — it is an `obtain` when Lean
-      // knows the shape and a `cases` when it doesn't, and a hardcoded string
-      // here would go on claiming the old one.
+    } else if ((s.id === `hyp-cases:${hyp}` || s.id === `hyp-cases-alt:${hyp}`) && !destructured) {
+      // Whichever destructure survived validation, preferring the `obtain`
+      // (it comes first). The tactic shown is the one that will RUN — a
+      // hardcoded string here would go on claiming the old form.
+      destructured = true;
       out.push({ id: `${ACTION.hypothesis}cases:${hyp}`, label: `Destructure ${hyp}`, group: 'hypothesis', description: `Pattern-match on ${hyp}`, params: [], detail: { tactic: s.tactic } });
     } else if (s.id.startsWith('hyp-use:')) {
       const expr = s.id.slice('hyp-use:'.length);

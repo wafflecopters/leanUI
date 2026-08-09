@@ -162,26 +162,33 @@ export function hypothesisSuggestions(
   flatFields: readonly string[] = [],
 ): LeanSuggestion[] {
   const names = uniqueNames(flatFields);
-  const destructure: LeanSuggestion = names.length > 0
-    ? {
-        id: `hyp-cases:${hyp}`,
-        label: `obtain \u27e8${names.join(', ')}\u27e9 := ${hyp}`,
-        tactic: `obtain \u27e8${names.join(', ')}\u27e9 := ${hyp}`,
-        kind: 'apply',
-      }
-    // Nothing known about the shape (an older extractor, or a type with more
-    // than one constructor): fall back to the branch form.
-    : {
-        id: `hyp-cases:${hyp}`,
-        label: `cases ${hyp}`,
-        tactic: `cases ${hyp}\n\u00b7\n  sorry`,
-        validateTactic: `cases ${hyp}`,
-        kind: 'apply',
-      };
+  // The branch form is ALWAYS offered as a second candidate, not as an
+  // either/or. Both go through validation, and if the `obtain` pattern doesn't
+  // fit the shape it is dropped — at which point this is the difference between
+  // "destructure falls back to the older form" and "the button disappears".
+  // (It disappeared: a wrong pattern from a stale extractor took the only
+  // candidate down with it, and the tray silently lost its Destructure.)
+  const fallback: LeanSuggestion = {
+    // Keeps the primary id when it is the ONLY destructure, so the action
+    // vocabulary doesn't change shape depending on what Lean happened to know.
+    id: names.length > 0 ? `hyp-cases-alt:${hyp}` : `hyp-cases:${hyp}`,
+    label: `cases ${hyp}`,
+    tactic: `cases ${hyp}\n\u00b7\n  sorry`,
+    validateTactic: `cases ${hyp}`,
+    kind: 'apply',
+  };
   return [
     { id: `hyp-exact:${hyp}`, label: `exact ${hyp}`, tactic: `exact ${hyp}`, kind: 'exact' },
     { id: `hyp-apply:${hyp}`, label: `apply ${hyp}`, tactic: `apply ${hyp}`, kind: 'apply' },
-    destructure,
+    ...(names.length > 0
+      ? [{
+          id: `hyp-cases:${hyp}`,
+          label: `obtain \u27e8${names.join(', ')}\u27e9 := ${hyp}`,
+          tactic: `obtain \u27e8${names.join(', ')}\u27e9 := ${hyp}`,
+          kind: 'apply' as const,
+        }]
+      : []),
+    fallback,
   ];
 }
 

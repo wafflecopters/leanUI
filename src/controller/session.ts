@@ -907,6 +907,12 @@ export class ProofSession {
       case 'cases': {
         const applied = this.applySuggestion(`hyp-${kind}:${target}`);
         if (applied.ok) return applied;
+        // The destructure has two candidates (obtain, then the branch form);
+        // run the one that survived.
+        if (kind === 'cases') {
+          const alt = this.applySuggestion(`hyp-cases-alt:${target}`);
+          if (alt.ok) return alt;
+        }
         // The suggestion is gone (the goal moved under us) — fall back rather
         // than dropping the click.
         return this.insertTactic(`${kind} ${target}`, action.detail?.subgoals);
