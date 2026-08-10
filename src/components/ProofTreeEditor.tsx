@@ -55,6 +55,7 @@ import {
   type SelectedBinder,
 } from '../proof-tree/goal-interaction-state';
 import { renderNameLatex, normalizeBinderNameInput } from '../proof-tree/name-latex';
+import { exprToLatex } from '../proof-tree/expr-latex';
 import type { TermBuilderDisplay, TermBuilderProvider } from '../proof-tree/term-builder-types';
 import {
   addInductionCaseInProofTree,
@@ -182,15 +183,14 @@ function InlineKaTeX({ latex, style, displayMode }: { latex: string; style?: Rea
   return <span ref={ref} style={style} />;
 }
 
-/** Convert a plain-text math expression to LaTeX. Simple heuristic. */
+/** Convert a plain-text Lean expression to LaTeX. The real work lives in
+ *  `proof-tree/expr-latex.ts` (pure, tested): tokenizes and sends every
+ *  identifier through the same `renderNameLatex` the prose view uses, so
+ *  `h2` subscripts, `eps_delta` keeps its underscore instead of becoming a
+ *  spurious subscript, multi-char names render upright rather than as an
+ *  italic run, and application args are separated by thin spaces. */
 function textToLatex(text: string): string {
-  return text
-    .replace(/'/g, "'")     // prime
-    .replace(/\bNat\b/g, '\\mathbb{N}')
-    .replace(/\bType\b/g, '\\text{Type}')
-    .replace(/->/g, '\\to ')
-    .replace(/=>/g, '\\Rightarrow ')
-    .replace(/\brefl\b/g, '\\text{refl}');
+  return exprToLatex(text);
 }
 
 // ============================================================================
