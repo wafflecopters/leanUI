@@ -154,7 +154,7 @@ export function describeExactProse(kind: ExactKind): ExactProseDescription {
   if (kind.solved) {
     return {
       mode: 'solved',
-      lead: kind.isValueType ? 'Use' : 'The result follows from',
+      lead: kind.isValueType ? 'Take' : 'The result follows from',
       displayLatex,
     };
   }

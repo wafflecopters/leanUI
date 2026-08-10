@@ -62,6 +62,16 @@ function hasGreek(name: string): boolean {
   return false;
 }
 
+/** Names people spell out in ASCII for Greek binders. Deliberately short —
+ *  each entry risks a false positive on a real word, so only the ones that
+ *  actually appear as binder names. */
+const SPELLED_GREEK: Record<string, string> = {
+  alpha: '\\alpha', beta: '\\beta', gamma: '\\gamma', delta: '\\delta',
+  epsilon: '\\varepsilon', eps: '\\varepsilon', zeta: '\\zeta', eta: '\\eta',
+  theta: '\\theta', lambda: '\\lambda', mu: '\\mu', sigma: '\\sigma',
+  phi: '\\varphi', psi: '\\psi', omega: '\\omega',
+};
+
 function renderGreek(greekCmd: string, wrapper: NameWrapper): string {
   // \boldsymbol works in math mode and has Greek metrics; \textbf does not.
   return wrapper === 'textbf' ? `\\boldsymbol{${greekCmd}}` : greekCmd;
@@ -142,6 +152,21 @@ export function renderNameLatex(name: string, wrapper: NameWrapper = 'text'): st
   if (/^[a-zA-Z]\d+$/.test(name)) {
     const head = wrapper === 'textbf' ? `\\textbf{${name[0]}}` : name[0];
     return `${head}_{${name.slice(1)}}`;
+  }
+
+  // Spelled-out Greek head + SHORT tail: `deltaF` → δ_F, `delta` → δ — the
+  // same binder the goal view already shows as δ_F. The tail must be one
+  // capital letter or digits, so ordinary words never false-positive
+  // (`epsPos` keeps its name; `deltaFdeltaG` is not a subscript).
+  {
+    const m = name.match(/^([a-z]+?)([A-Z]|\d+)?$/);
+    const spelled = m ? SPELLED_GREEK[m[1]] : undefined;
+    if (m && spelled) {
+      const head = renderGreek(spelled, wrapper);
+      if (m[2] === undefined) return head;
+      const tail = wrapper === 'textbf' ? `\\textbf{${m[2]}}` : m[2];
+      return `${head}_{${tail}}`;
+    }
   }
 
   // Mixed Greek anywhere else: split into Greek/ASCII runs.

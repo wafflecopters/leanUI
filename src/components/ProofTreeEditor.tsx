@@ -2655,7 +2655,7 @@ function HaveExprBlock({
 
   if (proofLatex) {
     return (
-      <div style={{ paddingLeft: '20px' }}>
+      <div style={{ paddingLeft: '20px', opacity: 0.75 }}>
         <span style={prose}>since{' '}</span>
         <span
           onClick={onOpenBuilder}
@@ -2810,12 +2810,12 @@ function ApplyLeadFragment({
   prose: React.CSSProperties;
 }) {
   if (phrase === 'constructor') {
-    return <span style={prose}>which is true, {constructorPhrase}</span>;
+    return <span style={prose}>This holds {constructorPhrase}</span>;
   }
 
   return (
     <>
-      <span style={prose}>which is true, by{' '}</span>
+      <span style={prose}>This holds by{' '}</span>
       <InlineProseName name={theoremName ?? ''} />
     </>
   );
@@ -2843,7 +2843,7 @@ function UnfoldProseItem({
   return (
     <ProseRow rowStyle={rowStyle} rowHandlers={rowHandlers} deleteBtn={deleteBtn}>
       {mustShowPrefix(kind.preGoalLatex)}
-      <span style={prose}>which is true, by definition of{' '}</span>
+      <span style={prose}>This holds by definition of{' '}</span>
       <InlineProseName name={kind.name} />
       {errorSuffix}
       {renderGoalSection(kind.goalLatex, ', if')}
@@ -2904,7 +2904,7 @@ function RewriteProseItem({
   return (
     <ProseRow rowStyle={rowStyle} rowHandlers={rowHandlers} deleteBtn={deleteBtn}>
       {mustShowPrefix(kind.preGoalLatex)}
-      <span style={prose}>which is true, because{' '}</span>
+      <span style={prose}>This holds because{' '}</span>
       {rewriteReference.mode === 'equation' ? (
         <>
           <InlineKaTeX latex={rewriteReference.equationLatex ?? ''} style={{ fontSize: '12px' }} />

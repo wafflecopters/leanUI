@@ -29,7 +29,8 @@ describe('exprToLatex', () => {
 
   test('abs bars gap on the outside, stay tight inside', () => {
     expect(exprToLatex('ltLeTrans |x - x0| deltaF h1 a')).toBe(
-      '\\textsf{ltLeTrans}\\,|x-x_{0}|\\,\\textsf{deltaF}\\,h_{1}\\,a',
+      // `deltaF` renders as the δ_F the goal view shows — same name pipeline.
+      '\\textsf{ltLeTrans}\\,|x-x_{0}|\\,\\delta_{F}\\,h_{1}\\,a',
     );
   });
 

@@ -127,7 +127,7 @@ describe('prose-row-helpers', () => {
       }),
     ).toEqual({
       mode: 'solved',
-      lead: 'Use',
+      lead: 'Take',
       displayLatex: 'f(x)',
     });
 
