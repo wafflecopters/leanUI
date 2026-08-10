@@ -209,6 +209,51 @@ function stripImplicitBinder(nodes: MathNode[]): MathNode[] | null {
  * Only fires on a leading `(` that is actually a binder (top-level `:` before
  * the matching `)` then `\to`).
  */
+function recognizeForallTelescope(nodes: MathNode[]): MathNode[] | null {
+  if (nodes.length === 0 || !isOpSymbol(nodes[0], '\\forall')) return null;
+  let i = 1;
+  const groups: Array<{ implicit: boolean; vars: MathNode[]; type: MathNode[] }> = [];
+  while (i < nodes.length) {
+    const open = nodes[i];
+    const isImp = isOpSymbol(open, '{');
+    const isExp = isOpSymbol(open, '(');
+    if (!isImp && !isExp) break;
+    const closeCh = isImp ? '}' : ')';
+    let depth = 0;
+    let close = -1;
+    let colon = -1;
+    for (let j = i; j < nodes.length; j++) {
+      if (isOpSymbol(nodes[j], isImp ? '{' : '(')) depth++;
+      else if (isOpSymbol(nodes[j], closeCh)) {
+        depth--;
+        if (depth === 0) { close = j; break; }
+      } else if (depth === 1 && colon === -1 && isOpSymbol(nodes[j], ':')) colon = j;
+    }
+    if (close === -1 || colon === -1) return null;
+    groups.push({
+      implicit: isImp,
+      vars: nodes.slice(i + 1, colon),
+      type: nodes.slice(colon + 1, close),
+    });
+    i = close + 1;
+  }
+  if (groups.length === 0 || i >= nodes.length || !isOpSymbol(nodes[i], ',')) return null;
+  const body = restructure(nodes.slice(i + 1));
+  const explicit = groups.filter((g) => !g.implicit);
+  if (explicit.length === 0) return body;
+  const out: MathNode[] = [mkSymbol('\\forall')];
+  explicit.forEach((g, gi) => {
+    if (gi > 0) out.push(mkText('and'));
+    g.vars.forEach((v, vi) => {
+      if (vi > 0) out.push(mkSymbol(','));
+      out.push(v);
+    });
+    out.push(mkSymbol('\\in'), ...restructure(g.type));
+  });
+  out.push(mkSymbol(','), ...body);
+  return out;
+}
+
 function recognizeForall(nodes: MathNode[]): MathNode[] | null {
   if (nodes.length === 0 || !isOpSymbol(nodes[0], '(')) return null;
   // Find the matching close paren for the opening one.
@@ -285,6 +330,15 @@ function restructure(nodes: MathNode[]): MathNode[] {
   // Dependent Pi binders → ∀ (outermost; do before infix splits).
   const forall = recognizeForall(nodes);
   if (forall) return forall;
+
+  // A NATIVE `∀ {K : F} {W : G} (n : Nat) (vs : T), body` binder telescope.
+  // Untreated, the `{}` braces reach KaTeX as invisible grouping and the
+  // binders MASH into "K : Field'W : VectorSpace(K)(n : Nat)…". Implicit
+  // groups are elided (readers infer them — same policy as
+  // stripImplicitBinder); explicit ones join with "and"; when nothing
+  // explicit remains the ∀ disappears entirely.
+  const telescope = recognizeForallTelescope(nodes);
+  if (telescope) return telescope;
 
   // Fraction / superscript / subscript: these bind TIGHTER than everything
   // around them, so they take only the ADJACENT operands (an atom or a

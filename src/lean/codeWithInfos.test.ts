@@ -446,3 +446,17 @@ describe('projections and list append', () => {
     );
   });
 });
+
+describe('forall binder telescopes', () => {
+  test('implicit groups are elided; explicit groups get separators', () => {
+    // Rendered as the mashed "K : Field'W : VectorSpace(K)(n : Nat)…" before:
+    // the {} braces reached KaTeX as invisible grouping.
+    expect(mathTextToLatex('∀ {K : Nat} {W : Nat} (n : Nat) (vs : Nat), vs ≤ n')).toBe(
+      '\\forall n \\in \\operatorname{Nat}\\;\\text{and}\\;\\operatorname{vs} \\in \\operatorname{Nat},\\operatorname{vs} \\leq n',
+    );
+  });
+
+  test('an all-implicit telescope drops the ∀ entirely', () => {
+    expect(mathTextToLatex('∀ {K : Nat}, K = K')).toBe('K = K');
+  });
+});
