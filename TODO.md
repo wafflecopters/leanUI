@@ -93,3 +93,20 @@ Gate: the adversarial reviewer's report (agent still running). When it lands, tr
 3. Statement binder chain mashes: `∀K : Field'W : VectorSpace(K)(n : Nat)…` — no separators between ∀-binders in the theorem header rendering.
 4. Anonymous-ctor exacts read raw: "By ⟨[], h, nilIndependent⟩." — consider "Take bs := [] with …" phrasing (value+proofs tuple).
 Constraint for ALL fixes: every row stays clickable/editable exactly as now (names renameable, subterms selectable, rows deletable) — presentation changes must be display-layer or preset-notation only, never lossy rewrites of the tree.
+
+## /loop 2 TRIAGE of the adversarial report (2026-08-10)
+Already fixed since the review ran: dev-build break (mid-edit hot reload), a(.succ)/W(.V)/vs(.length) projection mangles, "++" spacing, settled "no goals" false errors. limitAdd's open right case = intended exercise (won't-fix). Remaining, ranked:
+
+R1. **Daggered names leak** (basisExistsAux): `K✝ : Field'` in CONTEXT (auto-bound section variable never named in the statement — fix in preset: bind K/W explicitly in the theorem signature) and `x✝ : Independent ∨ …` in the Let-line (an unnamed intro — find why the case hyp shows daggered in intro prose; likely the Let-line lists a hypothesis the split later names; dedup with R6).
+R2. **Statement header binder soup**: `∀K : Field'W : VectorSpace(K)(n : Nat)…` — no separators between ∀ binders; mixed bare/parenthesized styles. Render "Let K be a …"-style or at minimum comma-separate binders. (Renderer: recognizeForall chain.)
+R3. **Justifications are terms, not reasons** (global #1): "since divTwoPos(ε, epsPos)". SMART-UI mechanism preserving editability: preset lemmas get /-- doc comments --/ ("halving preserves positivity", "the triangle inequality"); extractor surfaces docstrings; the citation renders the DOC TEXT with the term on hover/click (term stays the editable truth). Fall back to current call-style when no doc.
+R4. **fx vs f(x) inconsistency** (limitAdd): `|fx − L|` in Goal-1/absTriangle rows vs `f(x)` in displays — the app rule doesn't fire inside |…| bars in mathTextToLatex. Make juxtaposition inside bars apply too.
+R5. **Goal-N scaffolding → suffices voice**: "This holds by construction, after showing 2 subgoals: Goal 1: We must choose a value of type ℝ. By δ_F." → "It suffices to exhibit δ; take δ := δ_F." Merge value-goal header+exact (existing TODO item); vary "We must show" (suffices/remains/i.e.).
+R6. **Let-line duplicates the split**: basisExistsAux's Let lists the disjunction hyp, then "Either …" restates it verbatim. When an intro'd hyp is immediately case-split, drop it from the Let-line.
+R7. **Induction-on-data case labels**: "Case (zero.nil):"/"Case (cons (a, rest)):" → conditions "vs = []" / "vs = a :: rest" (we know the constructor + scrutinee; render the equation). Also triangleSum "Inductive step (n = succ (n))" BINDS THE SAME LETTER — uniquify the case param against the scrutinee name (enrichment bug, real).
+R8. **⟨tuple⟩ exacts**: "By ⟨[], h, nilIndependent⟩." → "Take bs := [] …" phrasing for ∃-witness tuples (value + proofs).
+R9. **Proof./∎ framing**: open with "Proof." row, end with ∎ (qed item exists; ensure it appears when complete, and add the opener).
+R10. **Chips in prose**: "(mulDistribLeft) ×" delete buttons and "✓ solved" rows inside the document — keep the affordances but move to hover-reveal/margin styling.
+R11. Font consistency pass: one convention for lemma names vs hypothesis names vs variables (currently 3 systems); `epsPos`/`hlen` in math italic reads as products (texNameForProse for ALL name sites).
+R12. Misc punctuation: dangling colons at row ends; "if" hanging before displays; capitalize-after-display.
+Won't-fix (by design, note in status): suggestion tray/goal panel in the open case (it IS an editor); unevaluated `ε/2 + ε/2` and `(0+1)·0` (honest goals from Lean — a Compute pill exists for the user to take).
