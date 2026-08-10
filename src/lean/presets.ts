@@ -2333,13 +2333,46 @@ theorem nilIndependent : Independent W [] := by
   intro v pre post h
   cases pre <;> simp_all
 
--- THE exercise: a space spanned by SOME list has a basis. Extract it by
--- recursion on the spanning list: either vs is independent — done — or some
--- vector lies in the span of the others; drop it (spanDrop) and recurse on
--- the strictly shorter list.
-theorem basisExists (vs : List W.V) (h : Spans W vs) :
+-- Classically, a list is independent or some vector lies in the span of the
+-- others. (The negation-pushing lives HERE, once, so the main proof below
+-- reads as a clean case split.)
+theorem independentOrDependent (vs : List W.V) :
+    Independent W vs ∨ (∃ v pre post, vs = pre ++ v :: post ∧ InSpan W (pre ++ post) v) := by
+  cases Classical.em (Independent W vs) with
+  | inl h => exact Or.inl h
+  | inr h =>
+    right
+    simp only [Independent, Classical.not_forall, Classical.not_imp, Classical.not_not] at h
+    obtain ⟨v, pre, post, h1, h2⟩ := h
+    exact ⟨v, pre, post, h1, h2⟩
+
+-- THE theorem: a space spanned by SOME list has a basis. Extraction, by
+-- induction on a length bound: either vs is independent — it IS a basis — or
+-- some vector lies in the span of the others; drop it (the span survives, by
+-- spanDrop) and continue with the strictly shorter list.
+theorem basisExistsAux (n : Nat) : ∀ vs : List W.V, vs.length ≤ n → Spans W vs →
     ∃ bs : List W.V, Basis W bs := by
-  sorry
+  induction n with
+  | zero =>
+    intro vs hlen h
+    cases vs with
+    | nil => exact ⟨[], h, nilIndependent⟩
+    | cons a rest => simp at hlen
+  | succ n ih =>
+    intro vs hlen h
+    cases independentOrDependent vs with
+    | inl hind => exact ⟨vs, h, hind⟩
+    | inr hdep =>
+      obtain ⟨v, pre, post, hvs, hspan⟩ := hdep
+      apply ih (pre ++ post)
+      · rw [hvs] at hlen
+        simp [List.length_append] at hlen ⊢
+        omega
+      · exact spanDrop vs pre post v hvs hspan h
+
+theorem basisExists (vs : List W.V) (h : Spans W vs) :
+    ∃ bs : List W.V, Basis W bs :=
+  basisExistsAux vs.length vs (Nat.le_refl _) h
 `;
 
 const MATHLIB = `import Mathlib

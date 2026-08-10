@@ -115,3 +115,33 @@ describe('triangleSum reads like mathematics', () => {
     expect(items.length).toBeGreaterThan(4);
   });
 });
+
+describe('basisExists reads like mathematics', () => {
+  let items: ProseItem[];
+  beforeAll(async () => {
+    items = await proseFor('Vector Spaces (basis)', 'basisExistsAux');
+  }, 10 * MIN);
+
+  test('the length induction has a header with base and step', () => {
+    const header = items.find((i) => i.kind.tag === 'inductionHeader');
+    expect(header).toBeDefined();
+  });
+
+  test('the independence dichotomy reads by meaning, not by constructor', () => {
+    // `cases independentOrDependent vs` introduces ONE hypothesis per branch,
+    // so the header reads "Either Independent … or ∃ …".
+    const header = items.find((i) => (i.kind as unknown as { caseMeanings?: string[] }).caseMeanings);
+    expect(header).toBeDefined();
+    expect((header!.kind as unknown as { caseMeanings: string[] }).caseMeanings).toHaveLength(2);
+  });
+
+  test('the dependent-vector witness is destructured in one line', () => {
+    // obtain ⟨v, pre, post, hvs, hspan⟩ := hdep
+    const writes = items.filter((i) => (i.kind as { anonymous?: boolean }).anonymous);
+    expect(writes.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('no inaccessible daggers surface anywhere', () => {
+    for (const i of items) expect(latexOf(i)).not.toContain('✝');
+  });
+});
