@@ -199,7 +199,10 @@ function buildIntroGroups(
   parentHyps: readonly TypedHypothesis[],
   childHyps: readonly TypedHypothesis[],
 ): IntroGroup[] {
-  const newHyps = childHyps.slice(parentHyps.length);
+  // Inaccessible (daggered) hypotheses are Lean's internal bookkeeping — e.g.
+  // `cases (term)` asserts its major premise as `x✝` — and are NOT something
+  // the sentence introduced. Never render them as bindings.
+  const newHyps = childHyps.slice(parentHyps.length).filter((h) => !h.name.includes('✝'));
   if (newHyps.length === 0) return [];
 
   const stepNames = new Set(newHyps.map((h) => h.name));

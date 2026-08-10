@@ -2244,31 +2244,34 @@ structure VectorSpace (K : Field') where
   smul_add : ∀ a u v, smul a (add u v) = add (smul a u) (smul a v)
   add_smul : ∀ a b v, smul (K.add a b) v = add (smul a v) (smul b v)
 
-variable {K : Field'} {W : VectorSpace K}
+-- K and W are bound EXPLICITLY on every declaration (no section variable):
+-- a section-included implicit that the statement never names shows up in the
+-- goal context under Lean's inaccessible dagger (K✝), which is an internal
+-- encoding no reader should see.
 
 -- Membership in the span, as an inductive: the zero vector is in it, and it
 -- is closed under adding a scaled generator. (An inductive beats the
 -- ∃-of-coefficient-lists form: every span lemma becomes an induction on the
 -- derivation instead of coefficient-list surgery.)
-inductive InSpan (W : VectorSpace K) (vs : List W.V) : W.V → Prop where
+inductive InSpan {K : Field'} (W : VectorSpace K) (vs : List W.V) : W.V → Prop where
   | zero : InSpan W vs W.zero
   | step (c : K.F) (v : W.V) (hv : v ∈ vs) {u : W.V} (hu : InSpan W vs u) :
       InSpan W vs (W.add (W.smul c v) u)
 
 -- vs spans the whole space.
-def Spans (W : VectorSpace K) (vs : List W.V) : Prop :=
+def Spans {K : Field'} (W : VectorSpace K) (vs : List W.V) : Prop :=
   ∀ v, InSpan W vs v
 
 -- No vector of vs is in the span of the OTHERS.
-def Independent (W : VectorSpace K) (vs : List W.V) : Prop :=
+def Independent {K : Field'} (W : VectorSpace K) (vs : List W.V) : Prop :=
   ∀ v pre post, vs = pre ++ v :: post → ¬ InSpan W (pre ++ post) v
 
-def Basis (W : VectorSpace K) (vs : List W.V) : Prop :=
+def Basis {K : Field'} (W : VectorSpace K) (vs : List W.V) : Prop :=
   Spans W vs ∧ Independent W vs
 
 -- Scaling zero gives zero: not an axiom, but forced by distributivity plus
 -- cancellation (s = s + s only for s = 0).
-theorem smulZero (c : K.F) : W.smul c W.zero = W.zero := by
+theorem smulZero {K : Field'} {W : VectorSpace K} (c : K.F) : W.smul c W.zero = W.zero := by
   have h : W.smul c W.zero = W.add (W.smul c W.zero) (W.smul c W.zero) := by
     rw [← W.smul_add, W.add_zero]
   have h2 := congrArg (fun x => W.add x (W.neg (W.smul c W.zero))) h
@@ -2277,14 +2280,14 @@ theorem smulZero (c : K.F) : W.smul c W.zero = W.zero := by
   exact h2.symm
 
 -- The span is closed under addition: induct on the left derivation.
-theorem spanAdd (ws : List W.V) {a b : W.V}
+theorem spanAdd {K : Field'} {W : VectorSpace K} (ws : List W.V) {a b : W.V}
     (ha : InSpan W ws a) (hb : InSpan W ws b) : InSpan W ws (W.add a b) := by
   induction ha with
   | zero => rw [W.add_comm, W.add_zero]; exact hb
   | step c v hv hu ih => rw [W.add_assoc]; exact InSpan.step c v hv ih
 
 -- The span is closed under scaling: scale each step of the derivation.
-theorem spanSmul (ws : List W.V) (c : K.F) {a : W.V}
+theorem spanSmul {K : Field'} {W : VectorSpace K} (ws : List W.V) (c : K.F) {a : W.V}
     (ha : InSpan W ws a) : InSpan W ws (W.smul c a) := by
   induction ha with
   | zero => rw [smulZero]; exact InSpan.zero
@@ -2295,7 +2298,7 @@ theorem spanSmul (ws : List W.V) (c : K.F) {a : W.V}
 -- Anything in the span of vs is in the span of ws, provided every GENERATOR
 -- of vs is: induct on the derivation, rebuilding each step with the two
 -- closure lemmas.
-theorem spanMono (vs ws : List W.V)
+theorem spanMono {K : Field'} {W : VectorSpace K} (vs ws : List W.V)
     (hgen : ∀ v, v ∈ vs → InSpan W ws v) {u : W.V}
     (hu : InSpan W vs u) : InSpan W ws u := by
   induction hu with
@@ -2303,7 +2306,7 @@ theorem spanMono (vs ws : List W.V)
   | step c v hv hu ih => exact spanAdd ws (spanSmul ws c (hgen v hv)) ih
 
 -- Every generator is in the span: c := one, rest := zero.
-theorem generatorInSpan (vs : List W.V) (v : W.V) (hv : v ∈ vs) :
+theorem generatorInSpan {K : Field'} {W : VectorSpace K} (vs : List W.V) (v : W.V) (hv : v ∈ vs) :
     InSpan W vs v := by
   have h := InSpan.step K.one v hv InSpan.zero
   rw [W.add_zero, W.smul_one] at h
@@ -2313,7 +2316,7 @@ theorem generatorInSpan (vs : List W.V) (v : W.V) (hv : v ∈ vs) :
 -- of basis extraction. Every generator of vs is in the span of pre ++ post
 -- (v by hv, the others by membership), so spanMono carries every derivation
 -- across.
-theorem spanDrop (vs pre post : List W.V) (v : W.V)
+theorem spanDrop {K : Field'} {W : VectorSpace K} (vs pre post : List W.V) (v : W.V)
     (hvs : vs = pre ++ v :: post)
     (hv : InSpan W (pre ++ post) v)
     (hs : Spans W vs) : Spans W (pre ++ post) := by
@@ -2329,14 +2332,14 @@ theorem spanDrop (vs pre post : List W.V) (v : W.V)
   · exact hs u
 
 -- The empty list is trivially independent.
-theorem nilIndependent : Independent W [] := by
+theorem nilIndependent {K : Field'} {W : VectorSpace K} : Independent W [] := by
   intro v pre post h
   cases pre <;> simp_all
 
 -- Classically, a list is independent or some vector lies in the span of the
 -- others. (The negation-pushing lives HERE, once, so the main proof below
 -- reads as a clean case split.)
-theorem independentOrDependent (vs : List W.V) :
+theorem independentOrDependent {K : Field'} {W : VectorSpace K} (vs : List W.V) :
     Independent W vs ∨ (∃ v pre post, vs = pre ++ v :: post ∧ InSpan W (pre ++ post) v) := by
   cases Classical.em (Independent W vs) with
   | inl h => exact Or.inl h
@@ -2353,14 +2356,14 @@ theorem independentOrDependent (vs : List W.V) :
 -- Dropping one vector strictly shrinks the list — the bound for the
 -- recursion. (Library lemma: tactic machinery like simp-at/omega lives here,
 -- so the MAIN proof below stays within the editor's renderable subset.)
-theorem lengthDrop (v : W.V) (pre post : List W.V) {n : Nat} (vs : List W.V)
+theorem lengthDrop {K : Field'} {W : VectorSpace K} (v : W.V) (pre post : List W.V) {n : Nat} (vs : List W.V)
     (hvs : vs = pre ++ v :: post) (hlen : vs.length ≤ n + 1) :
     (pre ++ post).length ≤ n := by
   subst hvs
   simp [List.length_append] at hlen ⊢
   omega
 
-theorem basisExistsAux (n : Nat) : ∀ vs : List W.V, vs.length ≤ n → Spans W vs →
+theorem basisExistsAux {K : Field'} {W : VectorSpace K} (n : Nat) : ∀ vs : List W.V, vs.length ≤ n → Spans W vs →
     ∃ bs : List W.V, Basis W bs := by
   induction n with
   | zero =>
@@ -2376,7 +2379,7 @@ theorem basisExistsAux (n : Nat) : ∀ vs : List W.V, vs.length ≤ n → Spans 
       obtain ⟨v, pre, post, hvs, hspan⟩ := hdep
       exact ih (pre ++ post) (lengthDrop v pre post vs hvs hlen) (spanDrop vs pre post v hvs hspan h)
 
-theorem basisExists (vs : List W.V) (h : Spans W vs) :
+theorem basisExists {K : Field'} {W : VectorSpace K} (vs : List W.V) (h : Spans W vs) :
     ∃ bs : List W.V, Basis W bs :=
   basisExistsAux vs.length vs (Nat.le_refl _) h
 `;

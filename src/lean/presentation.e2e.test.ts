@@ -27,6 +27,7 @@ async function proseFor(presetName: string, declName: string): Promise<ProseItem
 }
 
 async function sessionProse(presetName: string, declName: string): Promise<{ items: ProseItem[]; errors: string[] }> {
+  // (returns context hypothesis names too — see noDaggers below)
   const preset = LEAN_PRESETS.find((p) => p.name === presetName);
   if (!preset) throw new Error(`missing preset ${presetName}`);
   const base = await analyzeLeanSource(preset.code, { timeoutMs: 10 * MIN });
@@ -47,8 +48,24 @@ async function sessionProse(presetName: string, declName: string): Promise<{ ite
   const errors = s.getState().status.diagnostics
     .filter((d) => d.severity === 'error')
     .map((d) => d.text.split('\n')[0]);
+  lastContextNames = s.hypothesesWithTypes().map((h) => h.name);
   s.dispose();
   return { items, errors };
+}
+
+/** Context names of the most recent sessionProse run. */
+let lastContextNames: string[] = [];
+
+/** No Lean-internal daggered name may reach the reader: not in prose latex,
+ *  not in intro bindings, not in the context panel. `K✝` (an unnamed section
+ *  variable) and `x✝` (a cases-on-term assert) both shipped once. */
+function expectNoDaggers(items: ProseItem[]): void {
+  for (const i of items) {
+    expect(latexOf(i)).not.toContain('✝');
+    const groups = (i.kind as { groups?: Array<{ tokens: Array<{ name: string }> }> }).groups;
+    for (const g of groups ?? []) for (const t of g.tokens) expect(t.name).not.toContain('✝');
+  }
+  for (const n of lastContextNames) expect(n).not.toContain('✝');
 }
 
 /** Every latex string an item would put on screen. */
@@ -90,6 +107,10 @@ describe('limitAdd reads like mathematics', () => {
     }
   });
 
+  test('no daggered names anywhere the reader looks', () => {
+    expectNoDaggers(items);
+  });
+
   test('no single-constructor case ceremony (mk) anywhere in the prose', () => {
     for (const i of items) {
       if (i.kind.tag === 'caseHeader') {
@@ -115,8 +136,8 @@ describe('triangleSum reads like mathematics', () => {
     expect(flags).toContain(false);
   });
 
-  test('no inaccessible daggers surface anywhere', () => {
-    for (const i of items) expect(latexOf(i)).not.toContain('✝');
+  test('no daggered names anywhere the reader looks', () => {
+    expectNoDaggers(items);
   });
 
   test('every step row Lean reported on shows some goal or content', () => {
@@ -153,7 +174,7 @@ describe('basisExists reads like mathematics', () => {
     expect(writes.length).toBeGreaterThanOrEqual(1);
   });
 
-  test('no inaccessible daggers surface anywhere', () => {
-    for (const i of items) expect(latexOf(i)).not.toContain('✝');
+  test('no daggered names anywhere the reader looks', () => {
+    expectNoDaggers(items);
   });
 });
