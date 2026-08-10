@@ -74,3 +74,13 @@ application style, display-math sizing.
 - **Preset notation for the statement itself**: an `Add (Carrier R → Carrier R)` instance so `limitAdd` can be STATED as `Limit (f + g) x0 (L + M)` (goals then print `(f+g)(x)`), and a display form for `EpsDeltaWitness` (its ∀-meaning, or a compact `δ ⊨ (f, x₀, L, ε)` if too wide). Statement changes → the seeded proof must be re-verified by replay, so this wants its own pass.
 - **Choose-merge**: a `have h := …` immediately followed by `obtain ⟨a, b⟩ := h` is the mathematician's "Choose a and b with … since …" — fuse the two prose rows into one. Design note: keep the bound names clickable (rename targets the DESTRUCTURE node's names), which is why the quick version wasn't shipped.
 - **Merge value-goal lines**: "Goal 1: We must choose a value of type ℝ. / Take δ_F." into one row: "Take δ_F : ℝ." (needs the subgoalHeader to see its branch's solving exact).
+
+## /loop: natural presentation (limitAdd + triangleSum + vector-space basis)
+Active loop goal: these three proofs read decently natural. Iterate: pick top gap → implement generically → verify vs real Lean → pin with tests → commit → screenshot-compare.
+1. Destructure rows show CONDITION types inline (user request): "Write fProof as ⟨dfPos : 0 < δ_F, fFn⟩." — types from the child goal's hypotheses, shown when prop-like (isProp/dependsOn signal), muted for data.
+2. EpsDeltaWitness display form (preset unexpander → its ∀-meaning); update goal-text e2e assertions; replay-verify seed.
+3. Choose-merge: have+obtain fusion → "Choose δ_F and fProof with … since …" (keep rename affordance: rename targets destructure names).
+4. Citations: "since divTwoPos(ε, epsPos)" → instantiated-fact-first or name-as-citation; fix missing app gap in since-exprs (`(ε/2)h₂`).
+5. "This holds by construction, after showing 2 subgoals: / Goal 1 …" → paper voice: for ∃/structure intro: "Take δ := δ_F. It remains to show …" (merge value goal + witness); nested Goal blocks flatten when a branch is one line.
+6. Presets/batteries: triangleSum (NAT_MATH) prose battery; NEW from-scratch finite-dim vector-space preset (span/linear-independence/basis, `every finite VS has a basis` as the exercise) — stress-tests genericity beyond ℝ.
+7. Presentation e2e: for each of the three proofs, a test that renders prose items and asserts shape properties (no `mk` ceremony, no raw-term justifications, conditions folded, no repeated adjacent goals) — generic assertions, not golden text.
