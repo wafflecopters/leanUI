@@ -85,3 +85,11 @@ Active loop goal: these three proofs read decently natural. Iterate: pick top ga
 5. "This holds by construction, after showing 2 subgoals: / Goal 1 …" → paper voice: for ∃/structure intro: "Take δ := δ_F. It remains to show …" (merge value goal + witness); nested Goal blocks flatten when a branch is one line.
 6. ✅ DONE — presentation battery DONE (limitAdd + triangleSum, 8/8). Vector-space preset LANDED (Field'/VectorSpace/combo/InSpan/Spans/Independent/Basis in core Prop; nilIndependent + nilSpanCombo proved; spanDrop and basisExists are the sorry exercises). NEXT: prove spanDrop + basisExists (strong induction on list length, classical case on independence), seed the proof, add its battery describe.
 7. ✅ DONE — Presentation e2e: for each of the three proofs, a test that renders prose items and asserts shape properties (no `mk` ceremony, no raw-term justifications, conditions folded, no repeated adjacent goals) — generic assertions, not golden text.
+
+## /loop 2: adversarial presentation pass (WITHOUT breaking editability)
+Gate: the adversarial reviewer's report (agent still running). When it lands, triage every offense into: renderer fix / prose-generator fix / preset notation / won't-fix (with reason), then implement top-down. Already-known offenses from the user's screenshots (fix regardless of report):
+1. Projection rendering: `vs.length` renders as `vs(.length)`, `a.succ` as `a(.succ)`, `W.V` as `W(.V)` — the f(x)-application style treats a dotted projection as a call with a leading-dot argument. Postfix projections must render as `vs.length` (or better: `.length` → |vs| style only via preset notation). Pipeline: codeWithInfos tokenize/restructure.
+2. `++` renders as `+ +` (two spaced pluses) — List append must be one operator token.
+3. Statement binder chain mashes: `∀K : Field'W : VectorSpace(K)(n : Nat)…` — no separators between ∀-binders in the theorem header rendering.
+4. Anonymous-ctor exacts read raw: "By ⟨[], h, nilIndependent⟩." — consider "Take bs := [] with …" phrasing (value+proofs tuple).
+Constraint for ALL fixes: every row stays clickable/editable exactly as now (names renameable, subterms selectable, rows deletable) — presentation changes must be display-layer or preset-notation only, never lossy rewrites of the tree.
