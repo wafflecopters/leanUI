@@ -3560,7 +3560,11 @@ function CaseHeaderProseItem({
       <div style={{ ...rowStyle, fontWeight: 600 }} {...rowHandlers}>
         {/* A sole case carries its own "By cases on x:" — the split has no
             header row of its own, so the destructuring reads as one line. */}
-        {kind.lead && (
+        {kind.lead && kind.chooseSinceLatex !== undefined ? (
+          /* Fused have+destructure: "Choose ⟨δ_F, fProof⟩ since J." — the
+             scrutinee name never surfaces; it existed only to be unpacked. */
+          <span style={{ ...prose, fontWeight: 400 }}>Choose{' '}</span>
+        ) : kind.lead && (
           <>
             <span style={{ ...prose, fontWeight: 400 }}>
               {kind.anonymous
@@ -3607,7 +3611,16 @@ function CaseHeaderProseItem({
         ) : (
           renderLabelWithClickableParams()
         )}
-        <span style={prose}>{kind.anonymous ? '.' : kind.meaningLatex ? ':' : '):'}</span>
+        {kind.chooseSinceLatex !== undefined ? (
+          /* The justification, in the margin voice — a citation, not a claim. */
+          <span style={{ opacity: 0.75 }}>
+            <span style={prose}>{' '}since{' '}</span>
+            <InlineKaTeX latex={kind.chooseSinceLatex} style={{ fontSize: '13px' }} />
+            <span style={prose}>.</span>
+          </span>
+        ) : (
+          <span style={prose}>{kind.anonymous ? '.' : kind.meaningLatex ? ':' : '):'}</span>
+        )}
         {deleteBtn}
       </div>
       {/* What you can DO with the clicked name — the same validated tray the

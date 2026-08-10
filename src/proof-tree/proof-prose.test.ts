@@ -713,3 +713,44 @@ describe('destructure condition types', () => {
     expect(row.paramIsCondition).toEqual([false, true]);
   });
 });
+
+describe('choose-merge (have + obtain of its name)', () => {
+  test('fuses into one row carrying the justification', () => {
+    const hole: ProofNode = { tag: 'hole', id: 10 };
+    const d: ProofNode = { tag: 'destructure', id: 6, scrutinee: 'hF', names: ['deltaF', 'fProof'], child: hole };
+    const hv: ProofNode = { tag: 'have', id: 5, name: 'hF', expr: 'limF.eps_delta e h2', child: d };
+    const goalMap = new Map<number, any>([
+      [5, { goalLatex: 'G', hypotheses: [], proofExprLatex: 'J' }],
+      [10, { goalLatex: 'G', hypotheses: [
+        { name: 'deltaF', type: 'R', dependsOn: [] },
+        { name: 'fProof', type: 'W', dependsOn: ['deltaF'] },
+      ] }],
+    ]);
+    const items = generateProofProse(hv, 10, goalMap as any);
+    // ONE row for the pair (plus the hole) — not an Observe and a Write.
+    expect(items.map((i) => i.kind.tag)).toEqual(['caseHeader', 'hole']);
+    const row: any = items[0].kind;
+    expect(row.anonymous).toBe(true);
+    expect(row.chooseSinceLatex).toBe('J');
+    expect(row.constructorParamNames).toEqual(['deltaF', 'fProof']);
+    expect(row.paramIsCondition).toEqual([false, true]);
+  });
+
+  test('does NOT fuse when the destructure unpacks a different name', () => {
+    const hole: ProofNode = { tag: 'hole', id: 10 };
+    const d: ProofNode = { tag: 'destructure', id: 6, scrutinee: 'other', names: ['a'], child: hole };
+    const hv: ProofNode = { tag: 'have', id: 5, name: 'hF', expr: 'e', child: d };
+    const items = generateProofProse(hv, 10, new Map());
+    expect(items[0].kind.tag).toBe('have');
+    expect(items.some((i) => i.kind.tag === 'caseHeader')).toBe(true); // separate Write row
+  });
+
+  test('does NOT fuse a have with its own proof subtree', () => {
+    const hole: ProofNode = { tag: 'hole', id: 10 };
+    const pt: ProofNode = { tag: 'hole', id: 11 };
+    const d: ProofNode = { tag: 'destructure', id: 6, scrutinee: 'hF', names: ['a'], child: hole };
+    const hv: ProofNode = { tag: 'have', id: 5, name: 'hF', expr: '?', child: d, proofTree: pt };
+    const items = generateProofProse(hv, 10, new Map());
+    expect(items[0].kind.tag).toBe('have');
+  });
+});

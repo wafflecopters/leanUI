@@ -87,6 +87,10 @@ export type ProseItemKind =
        *  Prop-likeness: genuinely Prop, OR the type depends on a name the
        *  PROOF introduced (initial declaration binders don't count). */
       paramIsCondition?: readonly boolean[];
+      /** Fused have+destructure: `have hF := J` immediately unpacked by
+       *  `obtain ⟨a, b⟩ := hF` reads as ONE sentence — "Choose a and b since
+       *  J." — the way a paper introduces a witness. Holds J's latex. */
+      chooseSinceLatex?: string;
       /** An `obtain ⟨a, b⟩ := e` row: no constructor to name, so the pattern
        *  renders as the anonymous constructor the proof actually writes. */
       anonymous?: boolean;
@@ -612,6 +616,36 @@ export function generateProofProse(
       }
 
       case 'have': {
+        // `have hF := J` immediately unpacked by `obtain ⟨…⟩ := hF`: the pair
+        // is the mathematician's "Choose δ_F and fProof … since J" — one
+        // sentence, not an Observe + a Write. Only when the have has no
+        // proof subtree and the destructure consumes exactly its name.
+        if (!node.proofTree && node.child.tag === 'destructure' && node.child.scrutinee === node.name
+            && info?.proofExprLatex) {
+          const d = node.child;
+          const dInfo = goalMap.get(d.child.id);
+          const byName = new Map((dInfo?.hypotheses ?? []).map((h) => [h.name, h]));
+          const types = d.names.map((n) => byName.get(n)?.type ?? '');
+          const conds = d.names.map((n) => {
+            const h = byName.get(n);
+            if (!h) return false;
+            return h.isProp === true || (h.dependsOn ?? []).some((dep) => !initialNames.has(dep));
+          });
+          emit(d.id, depth, {
+            tag: 'caseHeader',
+            labelLatex: '',
+            isBaseCase: false,
+            isCases: true,
+            anonymous: true,
+            constructorParamNames: d.names,
+            ...(conds.some(Boolean) ? { paramIsCondition: conds } : {}),
+            ...(types.some(Boolean) ? { paramTypeLatex: types } : {}),
+            chooseSinceLatex: info.proofExprLatex,
+            lead: { nodeId: d.id, scrutinee: node.name, isCases: true },
+          });
+          walk(d.child, depth);
+          break;
+        }
         const childInfo = goalMap.get(node.child.id);
         const childGoalLatex = childInfo?.goalLatex;
         // Find the hypothesis type from the child's context (last entry with this name)
