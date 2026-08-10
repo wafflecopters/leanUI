@@ -47,7 +47,56 @@ const open = (declName: string) =>
 const labels = (s: ProofSession) =>
   s.getState().suggestions.map((x) => x.label);
 
+
+// The state the seeded limitAdd USED to open at, before the template carried
+// the user's whole left case: setup done, both witnesses still packed
+// (fProof/gProof in scope). The mid-proof behaviors below are pinned AT this
+// point, so they rebuild it from the blank declaration instead of depending on
+// how much proof the template happens to ship with.
+const MID_PREFIX = `constructor
+intro ε epsPos
+have h2 : 0 < ε / 2 := divTwoPos ε epsPos
+have hF := limF.eps_delta (ε / 2) h2
+cases hF with
+| mk deltaF fProof =>
+  have hG := limG.eps_delta (ε / 2) h2
+  cases hG with
+  | mk deltaG gProof =>
+    sorry`;
+
+const openMidProof = async (): Promise<ProofSession> => {
+  const s = open('limitAddFromScratch');
+  await s.refreshGoals();
+  s.insertTactic(MID_PREFIX);
+  await s.refreshGoals();
+  await s.refreshGoals(); // second pass lets enrichment settle the case names
+  return s;
+};
+
 describe('ProofSession against real Lean', () => {
+  // The template ships with the proof as built in the editor: everything
+  // through the left case of the δ-comparison, with the right case open.
+  test(
+    'the seeded limitAdd opens at the right case of the comparison, incomplete',
+    async () => {
+      const s = open('limitAdd');
+      await s.refresh();
+      const st = s.getState();
+      expect(st.status.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+      // An open sorry means NOT complete. This lied once: the outline walk
+      // skipped destructure nodes, so every hole below the first `obtain` was
+      // invisible and the proof read "✓ complete" over an unproved case.
+      expect(st.status.complete).toBe(false);
+      expect(st.status.openGoals).toBe(1);
+      // The cursor sits in the right case, with the left case's vocabulary
+      // in scope and the comparison hypothesis available.
+      expect(st.goal!.targetText).toContain('EpsDeltaWitness');
+      const names = s.hypothesesWithTypes().map((h) => h.name);
+      expect(names).toEqual(expect.arrayContaining(['deltaF', 'deltaG', 'dfPos', 'fFn', 'dgPos', 'gFn', 'a']));
+    },
+    10 * MINUTES,
+  );
+
   test(
     'opening a theorem reports its real goal and context',
     async () => {
@@ -318,9 +367,9 @@ describe('ProofSession against real Lean', () => {
   // engine knows about `leTotal`, ordering, or the reals — the lemma is found by
   // its SHAPE (two explicit args of one type, no premises, an inductive result).
   test(
-    'the seeded limitAdd offers "compare deltaF and deltaG", and taking it opens both branches',
+    'at the δ-comparison point, "compare deltaF and deltaG" is offered, and taking it opens both branches',
     async () => {
-      const s = open('limitAdd');
+      const s = await openMidProof();
       await s.refresh();
 
       // The preset opens mid-proof, with both deltas destructured out.
@@ -360,7 +409,7 @@ describe('ProofSession against real Lean', () => {
   test(
     'a value goal offers the values — including the rmin that makes the proof work',
     async () => {
-      const s = open('limitAdd');
+      const s = await openMidProof();
       await s.refresh();
 
       const ctor = s.getState().suggestions.find((x) => x.tactic === 'constructor')!;
@@ -406,7 +455,7 @@ describe('ProofSession against real Lean', () => {
   test(
     'destructuring a one-constructor structure binds accessible, nameable fields',
     async () => {
-      const s = open('limitAdd');
+      const s = await openMidProof();
       await s.refresh();
       s.insertTactic('cases fProof');
       await s.refresh();
@@ -435,7 +484,7 @@ describe('ProofSession against real Lean', () => {
   test(
     'a case split on a lemma application can be typed by hand, and opens both branches',
     async () => {
-      const s = open('limitAdd');
+      const s = await openMidProof();
       await s.refresh();
 
       const ran = s.runTactic('cases', 'leTotal deltaF deltaG');
@@ -465,7 +514,7 @@ describe('ProofSession against real Lean', () => {
   test(
     'destructuring names the pieces immediately, with no branch and no indent',
     async () => {
-      const s = open('limitAdd');
+      const s = await openMidProof();
       await s.refresh();
       s.selectHypothesis('fProof');
       await s.refresh();
@@ -502,7 +551,7 @@ describe('ProofSession against real Lean', () => {
   test(
     'the reported shape nests only where the pattern can',
     async () => {
-      const s = open('limitAdd');
+      const s = await openMidProof();
       await s.refresh();
       const hyps = s.hypothesesWithTypes();
       // `fProof : EpsDeltaWitness …` is a pair whose FIRST field is itself a
@@ -519,7 +568,7 @@ describe('ProofSession against real Lean', () => {
   test(
     'Lean reports how many branches a split opens',
     async () => {
-      const s = open('limitAdd');
+      const s = await openMidProof();
       await s.refresh();
 
       // `hF : ∃δ …` is a one-constructor structure.

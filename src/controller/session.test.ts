@@ -444,6 +444,23 @@ describe('selection', () => {
   });
 });
 
+
+describe('destructure visibility', () => {
+  // The outline walk skipped destructure nodes entirely, so every hole below
+  // an `obtain` vanished from the outline — and with no visible open hole,
+  // `complete` reported true over an unproved goal.
+  test('an open hole below a destructure keeps the proof incomplete', async () => {
+    const s = open();
+    await s.refresh();
+    s.insertTactic('obtain ⟨pa, pb⟩ := epsPos\nsorry');
+    await s.refresh();
+    const st = s.getState();
+    expect(st.outline.children.length).toBeGreaterThan(0); // subtree visible
+    expect(st.status.openGoals).toBeGreaterThan(0);
+    expect(st.status.complete).toBe(false);
+  });
+});
+
 describe('history', () => {
   test('undo restores the previous proof', async () => {
     const s = open();

@@ -101,6 +101,7 @@ function build(node: ProofNode, ctx: BuildContext, branch?: string): OutlineNode
     case 'exact':
       break;
     case 'intros':
+    case 'destructure':
     case 'unfold':
     case 'fold':
       push(node.child);

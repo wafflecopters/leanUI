@@ -8,6 +8,7 @@
 import { TacticCommand, CasePattern, allPatternVarNames, desugarNestedCaseBranch } from './tactic-command';
 import {
   ProofNode,
+  mkDestructure,
   mkHole,
   mkIntros,
   mkInduction,
@@ -122,6 +123,19 @@ export function tacticCommandsToProofTree(commands: readonly TacticCommand[]): P
     case 'erw': {
       const erwCont = rest.length > 0 ? tacticCommandsToProofTree(rest) : mkExact('refl');
       return buildRewriteChain(cmd.args, erwCont, true);
+    }
+
+    case 'obtain': {
+      // One arg, shaped `⟨a, b⟩ := scrutinee` (built by the command bridge).
+      // Falling through to default would DROP the destructure silently.
+      const m = (cmd.args[0] ?? '').match(/^⟨([^⟩]*)⟩\s*:=\s*(.+)$/);
+      if (m) {
+        const names = m[1].split(',').map((x) => x.trim()).filter(Boolean);
+        if (names.length > 0) {
+          return mkDestructure(m[2].trim(), names, tacticCommandsToProofTree(rest));
+        }
+      }
+      return tacticCommandsToProofTree(rest);
     }
 
     case 'unfold':

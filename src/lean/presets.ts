@@ -1574,18 +1574,16 @@ def convertEps {R : Real} (epsilon v : Carrier R)
 
 -- THE demo exercise: limitAdd, deliberately unfinished.
 --
--- Seeded with the setup every ε-δ sum proof opens with, so the interesting part
--- is what you do NEXT rather than re-deriving the first eight steps by hand on
--- every reload: split ε in half, pull a δ out of each hypothesis, and destructure
--- both into a witness and its proof.
+-- Seeded with the proof as built IN the editor (2026-08): the ε split, a δ from
+-- each hypothesis, both witnesses destructured, and — after comparing δF and
+-- δG — the full left case: witness δF, positivity, and the ε/2 + ε/2 estimate
+-- via subAddSub → absTriangle → convertEps → addLtBoth.
 --
--- What's left at the sorry is the actual idea: deltaF and deltaG are both in
--- scope, and you have to combine them — δ := rmin deltaF deltaG, whose positivity
--- is minPos and which is ≤ each side by minLeLeft / minLeRight. From there
--- absTriangle bounds |(f+g) - (L+M)| by the two halves and convertEps turns
--- ε/2 + ε/2 back into ε. The full term proof lives in
--- src/lean/realAnalysisPositivity.e2e.test.ts (verified sorry-free) if you want
--- to check the destination.
+-- The RIGHT case (δG ≤ δF) is deliberately open: it is the same argument with
+-- the roles of f and g swapped, and it is the current exercise. (An
+-- alternative closing both at once: witness rmin deltaF deltaG, minPos,
+-- minLeLeft/minLeRight — see src/lean/realAnalysisPositivity.e2e.test.ts for
+-- the sorry-free ground truth.)
 def limitAdd {R : Real} (f g : Carrier R → Carrier R) (x0 L M : Carrier R)
     (limF : Limit f x0 L) (limG : Limit g x0 M) :
     Limit (fun x => radd (f x) (g x)) x0 (radd L M) := by
@@ -1598,7 +1596,33 @@ def limitAdd {R : Real} (f g : Carrier R → Carrier R) (x0 L M : Carrier R)
     have hG := limG.eps_delta (ε / 2) h2
     cases hG with
     | mk deltaG gProof =>
-      sorry
+      obtain ⟨dfPos, fFn⟩ := fProof
+      obtain ⟨dgPos, gFn⟩ := gProof
+      cases leTotal deltaF deltaG with
+      | left a =>
+        constructor
+        case eps_delta.mk.mk.left.fst =>
+          exact deltaF
+        case eps_delta.mk.mk.left.snd =>
+          constructor
+          case fst =>
+            exact dfPos
+          case snd =>
+            intro x h h1
+            have fHalfEps := fFn x h h1
+            have h3 := ltLeTrans (rabs (rsub x x0)) deltaF deltaG h1 a
+            have gHalfEps := gFn x h h3
+            apply leLtTrans
+            case b =>
+              exact |f x - L| + |g x - M|
+            case hab =>
+              rw [subAddSub]
+              exact absTriangle (f x - L) (g x - M)
+            case hbc =>
+              apply convertEps
+              exact addLtBoth |f x - L| (ε / 2) |g x - M| (ε / 2) fHalfEps gHalfEps
+      | right a =>
+        sorry
 
 -- The same exercise with nothing filled in — for building the whole thing from
 -- the first click (and for the tests that check each of those clicks works).

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from 'vitest';
-import { createInitialState, mkCase, mkExact, mkHave, mkHole, mkInduction, mkIntros, mkSimp, resetProofIds } from './proof-tree';
-import { buildHaveTacticCommands } from './tactic-command-bridge';
+import { createInitialState, mkCase, mkDestructure, mkExact, mkHave, mkHole, mkInduction, mkIntros, mkSimp, resetProofIds } from './proof-tree';
+import { buildHaveTacticCommands, proofTreeToTacticCommands } from './tactic-command-bridge';
+import { tacticCommandsToProofTree } from './tactic-to-tree';
 import {
   addInductionCaseInProofTree,
   applyManualProofTreeTactic,
@@ -417,5 +418,22 @@ describe('tray input normalization (latex → unicode)', () => {
     expect(root.tag).toBe('intros');
     expect(root.names).toEqual(['ε', 'hpos']);
     expect(findNode(next!.root, next!.cursor.nodeId)).toBeTruthy();
+  });
+});
+
+describe('obtain command replay', () => {
+  // The command bridge EMITS `obtain` for destructure nodes; the replay side
+  // dropped unknown commands silently, so a destructure vanished on any
+  // command round-trip.
+  test('obtain survives proofTreeToTacticCommands → tacticCommandsToProofTree', () => {
+    const tree = mkDestructure('fProof', ['dfPos', 'fFn'], mkHole());
+    const cmds = proofTreeToTacticCommands(tree);
+    expect(cmds[0]).toEqual({ name: 'obtain', args: ['⟨dfPos, fFn⟩ := fProof'] });
+    const back = tacticCommandsToProofTree(cmds);
+    expect(back.tag).toBe('destructure');
+    if (back.tag !== 'destructure') return;
+    expect(back.scrutinee).toBe('fProof');
+    expect(back.names).toEqual(['dfPos', 'fFn']);
+    expect(back.child.tag).toBe('hole');
   });
 });
