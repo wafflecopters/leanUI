@@ -427,3 +427,22 @@ describe('mathTextToLatex applications', () => {
     expect(mathTextToLatex('0 < ε / 2')).toBe('0<\\frac{\\varepsilon }{2}');
   });
 });
+
+describe('projections and list append', () => {
+  test('a postfix projection glues to its operand — never a call argument', () => {
+    // These rendered as vs(.length) / (…)(.length): the application rule
+    // treated the `.length` atom as an argument.
+    expect(mathTextToLatex('(pre ++ post).length ≤ n')).toContain('.length');
+    expect(mathTextToLatex('(pre ++ post).length ≤ n')).not.toContain('(.');
+    expect(mathTextToLatex('List W.V')).toBe('\\operatorname{List}(W.V)');
+  });
+
+  test('++ is one operator, not two pluses and not an application', () => {
+    expect(mathTextToLatex('pre ++ post')).toBe(
+      '\\operatorname{pre}+\\!\\!+\\operatorname{post}',
+    );
+    expect(mathTextToLatex('ih (pre ++ post)')).toBe(
+      '\\operatorname{ih}(\\operatorname{pre}+\\!\\!+\\operatorname{post})',
+    );
+  });
+});

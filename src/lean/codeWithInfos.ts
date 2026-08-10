@@ -139,6 +139,14 @@ export function tokenizeText(s: string): MathNode[] {
       i++;
       continue;
     }
+    if (ch === '+' && chars[i + 1] === '+') {
+      // List append `++` — one operator, typeset tight. Two separate `+`
+      // symbols rendered as the baffling "pre +  + post".
+      flush();
+      nodes.push(mkSymbol('+\\!\\!+'));
+      i += 2;
+      continue;
+    }
     if (PUNCT.has(ch)) {
       flush();
       // `*` displays as the math centered dot `·` (the TT editor's convention);
@@ -312,6 +320,23 @@ function restructure(nodes: MathNode[]): MathNode[] {
     return [mkBigOp(op, null, null, mkRow(body))];
   }
 
+  // Postfix projections: an atom spelled `.length` GLUES to the operand
+  // before it — `vs.length`, `(pre ++ post).length` — it is never a call
+  // argument. (The application rule below used to render `vs(.length)`.)
+  for (let i = 1; i < nodes.length; i++) {
+    const n = nodes[i];
+    if (n.tag !== 'Symbol' || !/^\.[A-Za-z_]/.test((n as SymbolNode).value)) continue;
+    const prev = nodes[i - 1];
+    if (!isAppAtom(prev)) continue;
+    const merged =
+      prev.tag === 'Symbol'
+        ? mkSymbol((prev as SymbolNode).value + (n as SymbolNode).value)
+        // A group/parenthesized operand keeps its own structure (and its
+        // click-target ids); the projection rides along in a plain group.
+        : mkGroup('', [prev, mkSymbol((n as SymbolNode).value)]);
+    return restructure([...nodes.slice(0, i - 1), merged, ...nodes.slice(i + 1)]);
+  }
+
   // Function application: a run of value atoms with no infix operator between
   // them is `head arg₁ arg₂ …` (juxtaposition = application in Lean). Render it
   // the mathematical way, `head(arg₁, arg₂, …)` — so `f x` shows as `f(x)`.
@@ -373,7 +398,7 @@ function operandStartingAt(nodes: MathNode[], start: number): { end: number; ope
 
 /** Symbols that are operators/punctuation (NOT application operands). */
 const APP_STOP = new Set([
-  '+', '-', '=', '<', '>', '/', '*', ':', '|', ',', '(', ')', '[', ']', '{', '}', '^', '_', "'",
+  '+', '+\\!\\!+', '-', '=', '<', '>', '/', '*', ':', '|', ',', '(', ')', '[', ']', '{', '}', '^', '_', "'",
   '\\to', '\\cdot', '\\leq', '\\geq', '\\neq', '\\in', '\\notin', '\\wedge', '\\vee',
   '\\forall', '\\exists', '\\neg', '\\mapsto', '\\iff', '\\times', '\\circ', '\\equiv',
   '\\approx', '\\sim', '\\subseteq', '\\subset', '\\cup', '\\cap', '\\vdash', '\\longrightarrow',
