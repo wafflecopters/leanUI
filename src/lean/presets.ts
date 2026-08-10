@@ -2205,6 +2205,97 @@ def demoTestLiterals (R : Real) :
     rle (realOfNat R (.succ .zero)) (realOfNat R (.succ (.succ .zero))) := sorry
 `;
 
+const VECTOR_SPACE = `-- Linear algebra from scratch: vector spaces, span, independence, basis.
+-- THE exercise: every finite (list-spanned) vector space has a basis.
+-- Fresh preset, so it uses core Prop connectives (∃, ∧, ∨) throughout —
+-- goals and hypotheses read as ordinary logic.
+
+structure Field' where
+  F : Type
+  zero : F
+  one : F
+  add : F → F → F
+  mul : F → F → F
+  neg : F → F
+  inv : F → F  -- total; inv zero unspecified
+  add_comm : ∀ a b, add a b = add b a
+  add_assoc : ∀ a b c, add (add a b) c = add a (add b c)
+  add_zero : ∀ a, add a zero = a
+  add_neg : ∀ a, add a (neg a) = zero
+  mul_comm : ∀ a b, mul a b = mul b a
+  mul_assoc : ∀ a b c, mul (mul a b) c = mul a (mul b c)
+  mul_one : ∀ a, mul a one = a
+  mul_inv : ∀ a, a ≠ zero → mul a (inv a) = one
+  distrib : ∀ a b c, mul a (add b c) = add (mul a b) (mul a c)
+  zero_ne_one : zero ≠ one
+
+structure VectorSpace (K : Field') where
+  V : Type
+  zero : V
+  add : V → V → V
+  neg : V → V
+  smul : K.F → V → V
+  add_comm : ∀ u v, add u v = add v u
+  add_assoc : ∀ u v w, add (add u v) w = add u (add v w)
+  add_zero : ∀ v, add v zero = v
+  add_neg : ∀ v, add v (neg v) = zero
+  smul_one : ∀ v, smul K.one v = v
+  smul_assoc : ∀ a b v, smul (K.mul a b) v = smul a (smul b v)
+  smul_add : ∀ a u v, smul a (add u v) = add (smul a u) (smul a v)
+  add_smul : ∀ a b v, smul (K.add a b) v = add (smul a v) (smul b v)
+
+variable {K : Field'} {W : VectorSpace K}
+
+-- A linear combination of a LIST of vectors (finiteness = given by a list).
+def combo (W : VectorSpace K) : List (K.F × W.V) → W.V
+  | [] => W.zero
+  | (c, v) :: rest => W.add (W.smul c v) (combo W rest)
+
+-- v lies in the span of vs.
+def InSpan (W : VectorSpace K) (vs : List W.V) (v : W.V) : Prop :=
+  ∃ cs : List (K.F × W.V), (∀ p, p ∈ cs → p.2 ∈ vs) ∧ combo W cs = v
+
+-- vs spans the whole space.
+def Spans (W : VectorSpace K) (vs : List W.V) : Prop :=
+  ∀ v, InSpan W vs v
+
+-- No vector of vs is a combination of the OTHERS.
+def Independent (W : VectorSpace K) (vs : List W.V) : Prop :=
+  ∀ v pre post, vs = pre ++ v :: post → ¬ InSpan W (pre ++ post) v
+
+def Basis (W : VectorSpace K) (vs : List W.V) : Prop :=
+  Spans W vs ∧ Independent W vs
+
+-- Removing a vector that the rest already spans keeps the span. The heart of
+-- the basis-extraction argument; proved via combo substitution.
+theorem spanDrop (vs pre post : List W.V) (v : W.V)
+    (hvs : vs = pre ++ v :: post)
+    (hv : InSpan W (pre ++ post) v)
+    (hs : Spans W vs) : Spans W (pre ++ post) := by
+  sorry
+
+-- The empty list is trivially independent.
+theorem nilIndependent : Independent W [] := by
+  intro v pre post h hin
+  cases pre <;> simp_all
+
+-- The empty list spans exactly when every vector is a combo of nothing —
+-- i.e. the space is trivial. (Not needed for the main proof; a sanity lemma.)
+theorem nilSpanCombo (v : W.V) (h : InSpan W [] v) : v = combo W [] := by
+  obtain ⟨cs, hmem, hcombo⟩ := h
+  cases cs with
+  | nil => exact hcombo.symm
+  | cons p rest => exact absurd (hmem p (by simp)) (by simp)
+
+-- THE exercise: a space spanned by SOME list has a basis. Extract it by
+-- strong induction on the spanning list's length: if vs is independent it IS
+-- a basis; otherwise some vector is spanned by the others (classically), drop
+-- it via spanDrop, and induct on the shorter list.
+theorem basisExists (vs : List W.V) (h : Spans W vs) :
+    ∃ bs : List W.V, Basis W bs := by
+  sorry
+`;
+
 const MATHLIB = `import Mathlib
 
 -- Requires the Mathlib toggle (first build is slow).
@@ -2238,6 +2329,7 @@ export const LEAN_PRESETS: LeanPreset[] = [
   { name: 'Nat Math (tactics)', code: NAT_MATH_TACTICS },
   { name: 'Peano (record)', code: PEANO },
   { name: 'Real Analysis (chain rule)', code: REAL_ANALYSIS },
+  { name: 'Vector Spaces (basis)', code: VECTOR_SPACE },
   { name: 'Mathlib (∑, ring)', code: MATHLIB, mathlib: true },
 ];
 
