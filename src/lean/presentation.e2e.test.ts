@@ -18,6 +18,15 @@ const MIN = 60_000;
 afterAll(() => shutdownLeanBridge());
 
 async function proseFor(presetName: string, declName: string): Promise<ProseItem[]> {
+  const r = await sessionProse(presetName, declName);
+  // The check that was missing when two seeded proofs shipped broken: the
+  // proof must survive the session's parse→reprint→analyze round-trip with
+  // ZERO errors. Prose shape means nothing over a broken proof.
+  expect(r.errors).toEqual([]);
+  return r.items;
+}
+
+async function sessionProse(presetName: string, declName: string): Promise<{ items: ProseItem[]; errors: string[] }> {
   const preset = LEAN_PRESETS.find((p) => p.name === presetName);
   if (!preset) throw new Error(`missing preset ${presetName}`);
   const base = await analyzeLeanSource(preset.code, { timeoutMs: 10 * MIN });
@@ -35,8 +44,11 @@ async function proseFor(presetName: string, declName: string): Promise<ProseItem
     s.getState().cursor.nodeId,
     (s as unknown as { goalMap: never }).goalMap,
   );
+  const errors = s.getState().status.diagnostics
+    .filter((d) => d.severity === 'error')
+    .map((d) => d.text.split('\n')[0]);
   s.dispose();
-  return items;
+  return { items, errors };
 }
 
 /** Every latex string an item would put on screen. */

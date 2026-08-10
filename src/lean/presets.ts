@@ -2350,6 +2350,16 @@ theorem independentOrDependent (vs : List W.V) :
 -- induction on a length bound: either vs is independent — it IS a basis — or
 -- some vector lies in the span of the others; drop it (the span survives, by
 -- spanDrop) and continue with the strictly shorter list.
+-- Dropping one vector strictly shrinks the list — the bound for the
+-- recursion. (Library lemma: tactic machinery like simp-at/omega lives here,
+-- so the MAIN proof below stays within the editor's renderable subset.)
+theorem lengthDrop (v : W.V) (pre post : List W.V) {n : Nat} (vs : List W.V)
+    (hvs : vs = pre ++ v :: post) (hlen : vs.length ≤ n + 1) :
+    (pre ++ post).length ≤ n := by
+  subst hvs
+  simp [List.length_append] at hlen ⊢
+  omega
+
 theorem basisExistsAux (n : Nat) : ∀ vs : List W.V, vs.length ≤ n → Spans W vs →
     ∃ bs : List W.V, Basis W bs := by
   induction n with
@@ -2357,18 +2367,14 @@ theorem basisExistsAux (n : Nat) : ∀ vs : List W.V, vs.length ≤ n → Spans 
     intro vs hlen h
     cases vs with
     | nil => exact ⟨[], h, nilIndependent⟩
-    | cons a rest => simp at hlen
+    | cons a rest => exact (Nat.not_succ_le_zero rest.length hlen).elim
   | succ n ih =>
     intro vs hlen h
     cases independentOrDependent vs with
     | inl hind => exact ⟨vs, h, hind⟩
     | inr hdep =>
       obtain ⟨v, pre, post, hvs, hspan⟩ := hdep
-      apply ih (pre ++ post)
-      · rw [hvs] at hlen
-        simp [List.length_append] at hlen ⊢
-        omega
-      · exact spanDrop vs pre post v hvs hspan h
+      exact ih (pre ++ post) (lengthDrop v pre post vs hvs hlen) (spanDrop vs pre post v hvs hspan h)
 
 theorem basisExists (vs : List W.V) (h : Spans W vs) :
     ∃ bs : List W.V, Basis W bs :=

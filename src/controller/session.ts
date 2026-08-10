@@ -330,7 +330,12 @@ export class ProofSession {
     this.typedContext = result.typedContext;
     this.cursorGoal = result.cursorGoal;
     this.lastError = result.error;
-    this.diagnostics = this.attributeDiagnostics(result.messages);
+    // Lines of FABRICATED continuation holes in the analyzed assembly — the
+    // `sorry` a chaining tactic's child hole prints. When the tactic already
+    // closed its goal, that sorry fires on zero goals and Lean errors "no
+    // goals to be solved" AT THE HOLE LINE. That error is ours, not the
+    // user's; a real tactic failing this way sits on a tactic line instead.
+    this.diagnostics = this.attributeDiagnostics(result.messages, result.holeLines ?? new Set());
     this.goalsBusy = false;
     this.goalsFresh = result.error === undefined;
     // Which holes are FABRICATED continuations (Lean reports no goal there)
@@ -1062,7 +1067,10 @@ export class ProofSession {
   }
 
   /** Attribute Lean's messages to proof nodes where the goal map already did. */
-  private attributeDiagnostics(messages: readonly { severity: string; text: string; startLine: number }[]): ProofDiagnostic[] {
+  private attributeDiagnostics(
+    messages: readonly { severity: string; text: string; startLine: number }[],
+    fabricatedHoleLines: ReadonlySet<number> = new Set(),
+  ): ProofDiagnostic[] {
     const byNode = new Map<string, ProofNodeId>();
     for (const [nodeId, info] of this.goalMap) {
       if (info.tacticError) byNode.set(info.tacticError, nodeId);
@@ -1075,6 +1083,10 @@ export class ProofSession {
       // The file is full of `sorry` warnings from OTHER declarations; only this
       // proof's diagnostics belong in this session's status.
       if (m.severity === 'warning' && /uses 'sorry'/.test(m.text)) continue;
+      // Our own scaffolding's error (see holeLines above): a fabricated
+      // sorry after a goal-closing tactic. The hole shows as ✓ solved; the
+      // message would blame the user for our printer's placeholder.
+      if (m.severity === 'error' && /no goals/i.test(m.text) && fabricatedHoleLines.has(m.startLine)) continue;
       if (m.severity !== 'error' && m.severity !== 'warning') continue;
       const nodeId = byNode.get(m.text);
       out.push({

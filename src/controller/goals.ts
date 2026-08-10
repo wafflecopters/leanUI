@@ -29,6 +29,9 @@ export interface GoalRoundTripInput {
 
 export interface GoalRoundTrip {
   goalMap: Map<ProofNodeId, NodeGoalInfo>;
+  /** Source lines of FABRICATED continuation holes in the analyzed assembly —
+   *  where the printer's own `sorry` placeholders sit. */
+  holeLines?: ReadonlySet<number>;
   typedContext: TypedProofContext | null;
   /** The cursor node's full Lean goal state, or null when nothing is open there. */
   cursorGoal: LeanGoalState | null;
@@ -172,8 +175,14 @@ export async function goalRoundTrip(input: GoalRoundTripInput): Promise<GoalRoun
       }
     : null;
 
+  const holeLines = new Set<number>();
+  for (const id of assembled.lean.holeNodeIds) {
+    const r = assembled.lean.nodeRanges.get(id);
+    if (r) holeLines.add(r.startLine);
+  }
   return {
     goalMap,
+    holeLines,
     typedContext,
     cursorGoal: goalStates.get(cursorId) ?? null,
     goalTexts,
