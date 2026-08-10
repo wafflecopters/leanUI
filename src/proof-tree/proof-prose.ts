@@ -54,7 +54,16 @@ export type ProseItemKind =
   | { tag: 'fold'; name: string; occurrence?: number; preGoalLatex?: string; goalLatex?: string; error?: string }
   | { tag: 'rewrite'; name: string; reverse?: boolean; occurrences?: readonly number[]; equationLatex?: string; preGoalLatex?: string; goalLatex?: string; error?: string }
   | { tag: 'apply'; name: string; preGoalLatex?: string; subgoalLatex?: string[]; appliedArgsLatex?: string[]; error?: string; proofExprs?: readonly string[] }
-  | { tag: 'inductionHeader'; scrutinee: string; scrutineeLatex?: string; isCases?: boolean }
+  | {
+      tag: 'inductionHeader';
+      scrutinee: string;
+      scrutineeLatex?: string;
+      isCases?: boolean;
+      /** What each branch MEANS — the type of the single hypothesis it
+       *  introduces (`δF ≤ δG` / `δG ≤ δF`). Present only when every case has
+       *  one, so the header can read "Either A or B." like a paper. */
+      caseMeanings?: readonly string[];
+    }
   | {
       tag: 'caseHeader';
       labelLatex: string;
@@ -65,6 +74,11 @@ export type ProseItemKind =
       constructorName?: string;
       scrutinee?: string;
       isCases?: boolean;
+      /** The type of the one hypothesis this case introduces — what the case
+       *  MEANS. A paper writes "Case δF ≤ δG:", not "Case (left (a)):". */
+      meaningLatex?: string;
+      /** The hypothesis's name, kept as a de-emphasized clickable handle. */
+      meaningName?: string;
       /** An `obtain ⟨a, b⟩ := e` row: no constructor to name, so the pattern
        *  renders as the anonymous constructor the proof actually writes. */
       anonymous?: boolean;
@@ -80,8 +94,8 @@ export type ProseItemKind =
         isCases?: boolean;
       };
     }
-  | { tag: 'exact'; exprLatex: string; solved: boolean; goalLatex?: string; error?: string; proofExprLatex?: string; isValueType?: boolean }
-  | { tag: 'hole'; goalLatex?: string; isValueType?: boolean; solved?: boolean }
+  | { tag: 'exact'; exprLatex: string; solved: boolean; goalLatex?: string; error?: string; proofExprLatex?: string; isValueType?: boolean; repeatedGoal?: boolean }
+  | { tag: 'hole'; goalLatex?: string; isValueType?: boolean; solved?: boolean; repeatedGoal?: boolean }
   | { tag: 'simp'; lemmas: readonly string[]; stepCount: number; preGoalLatex?: string; goalLatex?: string; error?: string }
   | { tag: 'have'; name: string; expr: string; typeLatex?: string; proofExprLatex?: string; preGoalLatex?: string; goalLatex?: string; error?: string; hasProofTree?: boolean }
   | { tag: 'suffices'; name: string; goalLatex?: string; byExprLatex?: string }
@@ -479,8 +493,27 @@ export function generateProofProse(
         // information. So a sole case folds its header into its own row and
         // costs no indentation; a genuine split (2+ branches) keeps both.
         const soleCase = node.cases.length === 1;
+        // What each branch MEANS: when a `cases` branch introduces exactly one
+        // hypothesis, its TYPE is the sentence a paper would write ("Case
+        // δF ≤ δG:"), and the header can read "Either A or B." — the
+        // constructor name (`left`) is plumbing. Only when EVERY branch has a
+        // single-hypothesis meaning; mixed splits keep the constructor form.
+        const parentNames = new Set((info?.hypotheses ?? []).map((h) => h.name));
+        const meanings = node.cases.map((c) => {
+          const ci = goalMap.get(c.id) ?? goalMap.get(c.body.id);
+          const fresh = (ci?.hypotheses ?? []).filter((h) => !parentNames.has(h.name));
+          return fresh.length === 1 && fresh[0].type ? { name: fresh[0].name, type: fresh[0].type } : null;
+        });
+        const meaningful =
+          !soleCase && node.isCases === true && node.cases.length >= 2 && meanings.every((m) => m !== null);
         if (!soleCase) {
-          emit(node.id, depth, { tag: 'inductionHeader', scrutinee: node.scrutinee, scrutineeLatex: info?.scrutineeLatex, isCases: node.isCases });
+          emit(node.id, depth, {
+            tag: 'inductionHeader',
+            scrutinee: node.scrutinee,
+            scrutineeLatex: info?.scrutineeLatex,
+            isCases: node.isCases,
+            ...(meaningful ? { caseMeanings: meanings.map((m) => m!.type) } : {}),
+          });
         }
         for (let i = 0; i < node.cases.length; i++) {
           const c = node.cases[i];
@@ -515,6 +548,7 @@ export function generateProofProse(
             constructorName: c.constructorName,
             scrutinee: node.scrutinee,
             isCases: node.isCases,
+            ...(meaningful ? { meaningLatex: meanings[i]!.type, meaningName: meanings[i]!.name } : {}),
             ...(soleCase
               ? { lead: { nodeId: node.id, scrutinee: node.scrutinee, scrutineeLatex: info?.scrutineeLatex, isCases: node.isCases } }
               : {}),
@@ -626,5 +660,45 @@ export function generateProofProse(
   }
 
   walk(root, 0);
-  return items;
+  return markRepeatedGoals(items);
+}
+
+/** The goal LaTeX an item DISPLAYS, if any — used to spot repetition. */
+function displayedGoal(kind: ProseItemKind): string | undefined {
+  switch (kind.tag) {
+    case 'intro':
+    case 'unfold':
+    case 'fold':
+    case 'rewrite':
+    case 'simp':
+    case 'have':
+    case 'subgoalHeader':
+    case 'hole':
+    case 'exact':
+      return kind.goalLatex;
+    case 'apply':
+      return (kind.subgoalLatex?.length ?? 0) <= 1 ? kind.subgoalLatex?.[0] : undefined;
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Flag "We must show G" rows whose G is EXACTLY the last goal already on
+ * screen, so the renderer can say "the claim above" instead of repeating a
+ * display equation. A paper states a claim once; the repeat came from case
+ * splits (each branch re-showing the goal the split didn't change) and cost a
+ * third of the proof's height. Only hole/exact rows are flagged — a transform
+ * step's goal genuinely changed, so equality there is information.
+ */
+function markRepeatedGoals(items: ProseItem[]): ProseItem[] {
+  let last: string | undefined;
+  return items.map((item) => {
+    const g = displayedGoal(item.kind);
+    if (!g) return item;
+    const repeated = g === last;
+    last = g;
+    if (!repeated || (item.kind.tag !== 'hole' && item.kind.tag !== 'exact')) return item;
+    return { ...item, kind: { ...item.kind, repeatedGoal: true } };
+  });
 }

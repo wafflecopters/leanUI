@@ -3062,6 +3062,28 @@ function InductionHeaderProseItem({
     ? <InlineKaTeX latex={kind.scrutineeLatex} style={{ fontSize: '13px' }} />
     : <InlineProseName name={kind.scrutinee} />;
 
+  // When every branch has a meaning, the header reads like a paper: "Either
+  // δF ≤ δG or δG ≤ δF." — the scrutinee term is plumbing (still visible in
+  // the Tactics tab).
+  if (kind.caseMeanings && kind.caseMeanings.length === 2) {
+    return (
+      <ProseRow rowStyle={rowStyle} rowHandlers={rowHandlers} deleteBtn={deleteBtn}>
+        <span style={prose}>Either{' '}</span>
+        <InlineKaTeX latex={kind.caseMeanings[0]} style={{ fontSize: '13px' }} />
+        <span style={prose}>{' '}or{' '}</span>
+        <InlineKaTeX latex={kind.caseMeanings[1]} style={{ fontSize: '13px' }} />
+        <span style={prose}>.</span>
+      </ProseRow>
+    );
+  }
+  if (kind.caseMeanings && kind.caseMeanings.length > 2) {
+    return (
+      <ProseRow rowStyle={rowStyle} rowHandlers={rowHandlers} deleteBtn={deleteBtn}>
+        <span style={prose}>One of the following holds:</span>
+      </ProseRow>
+    );
+  }
+
   return (
     <ProseRow rowStyle={rowStyle} rowHandlers={rowHandlers} deleteBtn={deleteBtn}>
       <span style={prose}>{header.lead}{' '}</span>
@@ -3523,11 +3545,36 @@ function CaseHeaderProseItem({
             <span style={{ color: kind.isCases ? '#79c0ff' : (kind.isBaseCase ? '#d2a8ff' : '#79c0ff') }}>
               {kind.isCases ? 'Case' : (kind.isBaseCase ? 'Base case' : 'Inductive step')}
             </span>
-            <span style={prose}> (</span>
+            <span style={prose}>{kind.meaningLatex ? ' ' : ' ('}</span>
           </>
         )}
-        {renderLabelWithClickableParams()}
-        <span style={prose}>{kind.anonymous ? '.' : '):'}</span>
+        {kind.meaningLatex ? (
+          /* The case's MEANING — the type of the hypothesis it introduces —
+             with the name as a small clickable handle: "Case δF ≤ δG (a):". */
+          <>
+            <InlineKaTeX latex={kind.meaningLatex} style={{ fontSize: '13px' }} />
+            {kind.meaningName && paramNames && paramNames.length > 0 && (
+              <>
+                <span style={{ ...prose, color: '#484f58', fontSize: '11px' }}>{' ('}</span>
+                <span
+                  onClick={(e) => handleParamClick(0, e)}
+                  style={{
+                    cursor: 'pointer',
+                    fontSize: '11px',
+                    color: '#8b949e',
+                    borderBottom: selectedParamIndex === 0 ? '2px solid #58a6ff' : '1px dotted rgba(139, 148, 158, 0.4)',
+                  }}
+                >
+                  <InlineKaTeX latex={texNameForProse(kind.meaningName)} style={{ fontSize: '11px' }} />
+                </span>
+                <span style={{ ...prose, color: '#484f58', fontSize: '11px' }}>)</span>
+              </>
+            )}
+          </>
+        ) : (
+          renderLabelWithClickableParams()
+        )}
+        <span style={prose}>{kind.anonymous ? '.' : kind.meaningLatex ? ':' : '):'}</span>
         {deleteBtn}
       </div>
       {/* What you can DO with the clicked name — the same validated tray the
@@ -3618,6 +3665,11 @@ function ProseItemView({
   // break to a centered display block for readability.
   function mustShowPrefix(preGoalLatex?: string, isValueType?: boolean): React.ReactNode {
     if (prevShowedGoal) return null;
+    // The goal is EXACTLY the last one already on screen (a case split that
+    // didn't change it): a paper states a claim once and then refers to it.
+    if ((kind.tag === 'hole' || kind.tag === 'exact') && kind.repeatedGoal) {
+      return <span style={prose}>We must show the claim above.{' '}</span>;
+    }
     // The row being edited expands its goal to a display block (room to read
     // and to click subterms); everything else stays inline when short.
     const goalLead = buildProseGoalLead(preGoalLatex, isValueType, undefined, item.isCursor);

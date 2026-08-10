@@ -595,3 +595,78 @@ describe('case params carry their types (for hover)', () => {
   });
 });
 });
+
+describe('case meanings and repeated goals', () => {
+  const HYP = (name: string, type: string) => ({ name, type });
+
+  test('a two-branch cases split reads "Either A or B", each case labeled by its meaning', () => {
+    const l: ProofNode = { tag: 'hole', id: 10 };
+    const r: ProofNode = { tag: 'hole', id: 11 };
+    const induction: ProofNode = {
+      tag: 'induction', id: 1, scrutinee: 'leTotal deltaF deltaG', isCases: true, collapsed: false,
+      cases: [
+        { tag: 'case', id: 2, label: 'left', body: l, collapsed: false, constructorName: 'left', constructorParamNames: ['a'] },
+        { tag: 'case', id: 3, label: 'right', body: r, collapsed: false, constructorName: 'right', constructorParamNames: ['a'] },
+      ],
+    };
+    const goalMap = new Map<number, any>([
+      [1, { goalLatex: 'G', hypotheses: [HYP('deltaF', '\\mathbb{R}')] }],
+      [2, { goalLatex: 'G', hypotheses: [HYP('deltaF', '\\mathbb{R}'), HYP('a', 'A \\le B')] }],
+      [3, { goalLatex: 'G', hypotheses: [HYP('deltaF', '\\mathbb{R}'), HYP('a', 'B \\le A')] }],
+    ]);
+    const items = generateProofProse(induction, 99, goalMap as any);
+    expect((items[0].kind as any).caseMeanings).toEqual(['A \\le B', 'B \\le A']);
+    expect((items[1].kind as any).meaningLatex).toBe('A \\le B');
+    expect((items[1].kind as any).meaningName).toBe('a');
+    expect((items[3].kind as any).meaningLatex).toBe('B \\le A');
+  });
+
+  test('a case introducing MULTIPLE hypotheses keeps the constructor form', () => {
+    const b: ProofNode = { tag: 'hole', id: 10 };
+    const b2: ProofNode = { tag: 'hole', id: 11 };
+    const induction: ProofNode = {
+      tag: 'induction', id: 1, scrutinee: 'n', isCases: true, collapsed: false,
+      cases: [
+        { tag: 'case', id: 2, label: 'zero', body: b, collapsed: false, constructorName: 'zero', constructorParamNames: [] },
+        { tag: 'case', id: 3, label: 'succ', body: b2, collapsed: false, constructorName: 'succ', constructorParamNames: ['k', 'ih'] },
+      ],
+    };
+    const goalMap = new Map<number, any>([
+      [1, { goalLatex: 'G', hypotheses: [] }],
+      [2, { goalLatex: 'G', hypotheses: [] }],
+      [3, { goalLatex: 'G', hypotheses: [HYP('k', '\\mathbb{N}'), HYP('ih', 'P k')] }],
+    ]);
+    const items = generateProofProse(induction, 99, goalMap as any);
+    expect((items[0].kind as any).caseMeanings).toBeUndefined();
+    expect((items[1].kind as any).meaningLatex).toBeUndefined();
+  });
+
+  test('a hole repeating the exact goal already shown is flagged; a new goal is not', () => {
+    const l: ProofNode = { tag: 'hole', id: 10 };
+    const r: ProofNode = { tag: 'hole', id: 11 };
+    const induction: ProofNode = {
+      tag: 'induction', id: 1, scrutinee: 'e', isCases: true, collapsed: false,
+      cases: [
+        { tag: 'case', id: 2, label: 'left', body: l, collapsed: false, constructorName: 'left', constructorParamNames: ['a'] },
+        { tag: 'case', id: 3, label: 'right', body: r, collapsed: false, constructorName: 'right', constructorParamNames: ['a'] },
+      ],
+    };
+    // Both branch holes still owe the SAME goal G the split did not change,
+    // and G was already displayed by the first hole.
+    const goalMap = new Map<number, any>([
+      [10, { goalLatex: 'G', hypotheses: [] }],
+      [11, { goalLatex: 'H', hypotheses: [] }],
+    ]);
+    const items = generateProofProse(induction, 99, goalMap as any);
+    const holes = items.filter((i) => i.kind.tag === 'hole');
+    expect((holes[0].kind as any).repeatedGoal).toBeUndefined();
+    // Different goal H ≠ G → not a repeat.
+    expect((holes[1].kind as any).repeatedGoal).toBeUndefined();
+
+    // Now make them identical: the second IS a repeat.
+    goalMap.set(11, { goalLatex: 'G', hypotheses: [] });
+    const again = generateProofProse(induction, 99, goalMap as any);
+    const holes2 = again.filter((i) => i.kind.tag === 'hole');
+    expect((holes2[1].kind as any).repeatedGoal).toBe(true);
+  });
+});
