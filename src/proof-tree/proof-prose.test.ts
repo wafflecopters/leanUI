@@ -670,3 +670,46 @@ describe('case meanings and repeated goals', () => {
     expect((holes2[1].kind as any).repeatedGoal).toBe(true);
   });
 });
+
+describe('destructure condition types', () => {
+  test('bound CONDITIONS carry their types inline; data does not', () => {
+    const hole: ProofNode = { tag: 'hole', id: 10 };
+    const d: ProofNode = { tag: 'destructure', id: 5, scrutinee: 'fProof', names: ['dfPos', 'fFn'], child: hole };
+    const goalMap = new Map<number, any>([
+      // Root context: the DECLARATION's binders only — deltaF is NOT among
+      // them; the proof introduced it.
+      [5, { goalLatex: 'G', hypotheses: [{ name: 'R', type: 'Real' }] }],
+      [10, { goalLatex: 'G', hypotheses: [
+        { name: 'deltaF', type: '\\mathbb{R}', dependsOn: ['R'] },
+        // Depends on deltaF, which the PROOF introduced → condition.
+        { name: 'dfPos', type: '0 < \\delta_F', dependsOn: ['R', 'deltaF'] },
+        // Also proof-dependent → condition (rendered or hover per width).
+        { name: 'fFn', type: 'longtype', dependsOn: ['deltaF'] },
+      ] }],
+    ]);
+    const items = generateProofProse(d, 10, goalMap as any);
+    const row: any = items[0].kind;
+    expect(row.tag).toBe('caseHeader');
+    expect(row.anonymous).toBe(true);
+    expect(row.paramIsCondition).toEqual([true, true]);
+    expect(row.paramTypeLatex).toEqual(['0 < \\delta_F', 'longtype']);
+  });
+
+  test('a name depending only on declaration binders is DATA', () => {
+    const hole: ProofNode = { tag: 'hole', id: 10 };
+    const d: ProofNode = { tag: 'destructure', id: 5, scrutinee: 'hF', names: ['deltaF', 'fProof'], child: hole };
+    const goalMap = new Map<number, any>([
+      [5, { goalLatex: 'G', hypotheses: [{ name: 'R', type: 'Real' }] }],
+      [10, { goalLatex: 'G', hypotheses: [
+        { name: 'R', type: 'Real' },
+        // δF : ℝ depends only on R — a declaration binder → data.
+        { name: 'deltaF', type: '\\mathbb{R}', dependsOn: ['R'] },
+        // fProof mentions deltaF (proof-introduced) → condition.
+        { name: 'fProof', type: 'W(deltaF)', dependsOn: ['deltaF'] },
+      ] }],
+    ]);
+    const items = generateProofProse(d, 10, goalMap as any);
+    const row: any = items[0].kind;
+    expect(row.paramIsCondition).toEqual([false, true]);
+  });
+});

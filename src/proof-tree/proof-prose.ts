@@ -82,6 +82,11 @@ export type ProseItemKind =
       meaningLatex?: string;
       /** The hypothesis's name, kept as a de-emphasized clickable handle. */
       meaningName?: string;
+      /** Per bound name (destructures): is it a CONDITION — a fact worth
+       *  stating inline ("dfPos : 0 < δ_F") — rather than data like δ_F : ℝ?
+       *  Prop-likeness: genuinely Prop, OR the type depends on a name the
+       *  PROOF introduced (initial declaration binders don't count). */
+      paramIsCondition?: readonly boolean[];
       /** An `obtain ⟨a, b⟩ := e` row: no constructor to name, so the pattern
        *  renders as the anonymous constructor the proof actually writes. */
       anonymous?: boolean;
@@ -285,6 +290,10 @@ export function generateProofProse(
   function emit(nodeId: ProofNodeId, depth: number, kind: ProseItemKind): void {
     items.push({ nodeId, depth, kind, isCursor: nodeId === cursorId });
   }
+
+  // Names present before the first tactic ran — the declaration's own binders.
+  // A dependency on anything OUTSIDE this set marks a fact the proof built.
+  const initialNames = new Set((goalMap.get(root.id)?.hypotheses ?? []).map((h) => h.name));
 
   /** Walk a proof branch with a labeled header, indented content. */
   function walkBranch(parentId: ProofNodeId, label: string, goalLatex: string | undefined, body: ProofNode, depth: number, isValueType?: boolean): void {
@@ -570,8 +579,18 @@ export function generateProofProse(
       // row shape as a sole case (which is the same thing said with `cases`).
       case 'destructure': {
         const childInfo = goalMap.get(node.child.id);
-        const nameTypes = new Map((childInfo?.hypotheses ?? []).map((h) => [h.name, h.type]));
-        const nameTypeLatex = node.names.map((n) => nameTypes.get(n) ?? '');
+        const byName = new Map((childInfo?.hypotheses ?? []).map((h) => [h.name, h]));
+        const nameTypeLatex = node.names.map((n) => byName.get(n)?.type ?? '');
+        // A bound name is a CONDITION when its type is Prop, or depends on a
+        // name the PROOF introduced. `dfPos : 0 < δ_F` depends on δ_F (proof-
+        // introduced) → condition; `δ_F : ℝ` depends only on the declaration's
+        // own binders → data. Works for Type-valued relations, where isProp
+        // alone says no to everything.
+        const isCondition = node.names.map((n) => {
+          const h = byName.get(n);
+          if (!h) return false;
+          return h.isProp === true || (h.dependsOn ?? []).some((d) => !initialNames.has(d));
+        });
         emit(node.id, depth, {
           tag: 'caseHeader',
           labelLatex: '',
@@ -579,6 +598,7 @@ export function generateProofProse(
           isCases: true,
           anonymous: true,
           constructorParamNames: node.names,
+          ...(isCondition.some(Boolean) ? { paramIsCondition: isCondition } : {}),
           ...(nameTypeLatex.some((t) => t) ? { paramTypeLatex: nameTypeLatex } : {}),
           lead: {
             nodeId: node.id,

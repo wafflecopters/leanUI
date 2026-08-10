@@ -77,7 +77,7 @@ application style, display-math sizing.
 
 ## /loop: natural presentation (limitAdd + triangleSum + vector-space basis)
 Active loop goal: these three proofs read decently natural. Iterate: pick top gap → implement generically → verify vs real Lean → pin with tests → commit → screenshot-compare.
-1. Destructure rows show CONDITION types inline (user request): "Write fProof as ⟨dfPos : 0 < δ_F, fFn⟩." — types from the child goal's hypotheses, shown when prop-like (isProp/dependsOn signal), muted for data.
+1. ✅ DONE — Destructure rows show CONDITION types inline: "Write fProof as ⟨dfPos : 0 < δ_F, fFn⟩." — types from the child goal's hypotheses, shown when prop-like (isProp/dependsOn signal), muted for data.
 2. EpsDeltaWitness display form (preset unexpander → its ∀-meaning); update goal-text e2e assertions; replay-verify seed.
 3. Choose-merge: have+obtain fusion → "Choose δ_F and fProof with … since …" (keep rename affordance: rename targets destructure names).
 4. Citations: "since divTwoPos(ε, epsPos)" → instantiated-fact-first or name-as-citation; fix missing app gap in since-exprs (`(ε/2)h₂`).

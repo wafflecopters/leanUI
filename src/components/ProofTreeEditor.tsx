@@ -3517,10 +3517,17 @@ function CaseHeaderProseItem({
     return (
       <>
         <InlineKaTeX latex={prefix} style={{ fontSize: '12px' }} />
-        {paramNames!.map((name, i) => (
+        {paramNames!.map((name, i) => {
+          // A CONDITION's type is stated inline — "dfPos : 0 < δ_F" — because
+          // the fact is the point of binding it. Data names (δ_F : ℝ) and
+          // types too wide to inline keep name-only, with the type on hover.
+          const t = kind.paramTypeLatex?.[i];
+          const inlineType =
+            kind.paramIsCondition?.[i] && t && visibleLatexLength(t) <= 40 ? t : undefined;
+          return (
           <React.Fragment key={i}>
             {i > 0 && <InlineKaTeX latex=",\," style={{ fontSize: '12px' }} />}
-            <HoverType typeLatex={kind.paramTypeLatex?.[i]}>
+            <HoverType typeLatex={inlineType ? undefined : t}>
               <span
                 onClick={e => handleParamClick(i, e)}
                 style={{
@@ -3534,8 +3541,15 @@ function CaseHeaderProseItem({
                 <InlineKaTeX latex={texNameForProse(name)} style={{ fontSize: '12px' }} />
               </span>
             </HoverType>
+            {inlineType && (
+              <>
+                <span style={prose}>{' : '}</span>
+                <InlineKaTeX latex={inlineType} style={{ fontSize: '12px' }} />
+              </>
+            )}
           </React.Fragment>
-        ))}
+          );
+        })}
         <InlineKaTeX latex={kind.anonymous ? '\\rangle' : ')'} style={{ fontSize: '12px' }} />
       </>
     );
