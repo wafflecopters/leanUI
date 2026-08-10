@@ -90,7 +90,7 @@ describe('ProofSession against real Lean', () => {
       expect(st.status.openGoals).toBe(1);
       // The cursor sits in the right case, with the left case's vocabulary
       // in scope and the comparison hypothesis available.
-      expect(st.goal!.targetText).toContain('EpsDeltaWitness');
+      expect(st.goal!.targetText).toContain('∧ ∀ x,');
       const names = s.hypothesesWithTypes().map((h) => h.name);
       expect(names).toEqual(expect.arrayContaining(['deltaF', 'deltaG', 'dfPos', 'fFn', 'dgPos', 'gFn', 'a']));
     },
@@ -127,7 +127,7 @@ describe('ProofSession against real Lean', () => {
       expect(s.insertTactic('constructor')).toEqual({ ok: true });
       await s.refreshGoals();
       // The way IN to an ε-δ proof: the Limit structure's single field.
-      expect(s.getState().goal!.targetText).toContain('EpsDeltaWitness');
+      expect(s.getState().goal!.targetText).toContain('∧ ∀ x,');
     },
     10 * MINUTES,
   );
@@ -201,7 +201,7 @@ describe('ProofSession against real Lean', () => {
 
       // The obligation is discharged and the cursor moved on to the rest.
       const state = s.getState();
-      expect(state.goal!.targetText).toContain('EpsDeltaWitness');
+      expect(state.goal!.targetText).toContain('∧ ∀ x,');
       expect(state.status.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
       // And the proof reads as what was done.
       expect(state.proofSource).toContain('have h1 : 0 < ε / 2 := by');
@@ -440,7 +440,7 @@ describe('ProofSession against real Lean', () => {
       s.applySuggestion(pick.id);
       await s.refresh();
       expect(s.getState().goal!.targetText).toBe(
-        'EpsDeltaWitness (fun x => f x + g x) x0 (L + M) \u03b5 (rmin deltaF deltaG)',
+        '0 < rmin deltaF deltaG ∧ ∀ x, 0 < |x - x0| → |x - x0| < rmin deltaF deltaG → |f x + g x - (L + M)| < \u03b5',
       );
       expect(s.getState().status.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
     },

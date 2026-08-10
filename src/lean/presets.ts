@@ -869,6 +869,22 @@ def realOfRat (R : Real) : MyRat → Carrier R
     ((x : Carrier R) → rlt (rzero R) (rabs (rsub x x0)) → rlt (rabs (rsub x x0)) delta →
       rlt (rabs (rsub (f x) L)) epsilon)
 
+-- Display EpsDeltaWitness as WHAT IT SAYS — a paper never names this bundle,
+-- it writes the estimate: "0 < δ and for all x, 0 < |x−x₀| < δ implies
+-- |f(x)−L| < ε". Display-only (the unexpander emits syntax, nothing is
+-- re-elaborated); the input spelling EpsDeltaWitness f x0 L ε δ still works.
+@[app_unexpander EpsDeltaWitness] def unexpEpsDeltaWitness : Lean.PrettyPrinter.Unexpander
+  | \`($_ $f $x0 $L $ε $δ) => do
+    match f with
+    -- A lambda reuses ITS OWN binder as the ∀ variable — no hygiene dagger,
+    -- and |(fun x => f x + g x) x| beta-reads as |f x + g x| for free.
+    | \`(fun $y:ident => $body) =>
+      \`(0 < $δ ∧ ∀ $y:ident, 0 < |$y - $x0| → |$y - $x0| < $δ → |$body - $L| < $ε)
+    | _ =>
+      let x := Lean.mkIdent \`x
+      \`(0 < $δ ∧ ∀ $x:ident, 0 < |$x - $x0| → |$x - $x0| < $δ → |$f $x - $L| < $ε)
+  | _ => throw ()
+
 structure Limit {R : Real} (f : Carrier R → Carrier R) (x0 L : Carrier R) where
   eps_delta : (epsilon : Carrier R) → rlt (rzero R) epsilon →
               DPair (Carrier R)
