@@ -1608,7 +1608,7 @@ def limitAdd {R : Real} (f g : Carrier R → Carrier R) (x0 L M : Carrier R)
       case snd =>
         intro x h h1
         have fHalfEps := fFn x h h1
-        have h3 := ltLeTrans (rabs (rsub x x0)) deltaF deltaG h1 a
+        have h3 := ltLeTrans |x - x0| deltaF deltaG h1 a
         have gHalfEps := gFn x h h3
         apply leLtTrans
         case b =>
