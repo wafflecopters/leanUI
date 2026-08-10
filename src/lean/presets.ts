@@ -2246,51 +2246,97 @@ structure VectorSpace (K : Field') where
 
 variable {K : Field'} {W : VectorSpace K}
 
--- A linear combination of a LIST of vectors (finiteness = given by a list).
-def combo (W : VectorSpace K) : List (K.F × W.V) → W.V
-  | [] => W.zero
-  | (c, v) :: rest => W.add (W.smul c v) (combo W rest)
-
--- v lies in the span of vs.
-def InSpan (W : VectorSpace K) (vs : List W.V) (v : W.V) : Prop :=
-  ∃ cs : List (K.F × W.V), (∀ p, p ∈ cs → p.2 ∈ vs) ∧ combo W cs = v
+-- Membership in the span, as an inductive: the zero vector is in it, and it
+-- is closed under adding a scaled generator. (An inductive beats the
+-- ∃-of-coefficient-lists form: every span lemma becomes an induction on the
+-- derivation instead of coefficient-list surgery.)
+inductive InSpan (W : VectorSpace K) (vs : List W.V) : W.V → Prop where
+  | zero : InSpan W vs W.zero
+  | step (c : K.F) (v : W.V) (hv : v ∈ vs) {u : W.V} (hu : InSpan W vs u) :
+      InSpan W vs (W.add (W.smul c v) u)
 
 -- vs spans the whole space.
 def Spans (W : VectorSpace K) (vs : List W.V) : Prop :=
   ∀ v, InSpan W vs v
 
--- No vector of vs is a combination of the OTHERS.
+-- No vector of vs is in the span of the OTHERS.
 def Independent (W : VectorSpace K) (vs : List W.V) : Prop :=
   ∀ v pre post, vs = pre ++ v :: post → ¬ InSpan W (pre ++ post) v
 
 def Basis (W : VectorSpace K) (vs : List W.V) : Prop :=
   Spans W vs ∧ Independent W vs
 
--- Removing a vector that the rest already spans keeps the span. The heart of
--- the basis-extraction argument; proved via combo substitution.
+-- Scaling zero gives zero: not an axiom, but forced by distributivity plus
+-- cancellation (s = s + s only for s = 0).
+theorem smulZero (c : K.F) : W.smul c W.zero = W.zero := by
+  have h : W.smul c W.zero = W.add (W.smul c W.zero) (W.smul c W.zero) := by
+    rw [← W.smul_add, W.add_zero]
+  have h2 := congrArg (fun x => W.add x (W.neg (W.smul c W.zero))) h
+  simp only [W.add_assoc, W.add_neg] at h2
+  rw [W.add_zero] at h2
+  exact h2.symm
+
+-- The span is closed under addition: induct on the left derivation.
+theorem spanAdd (ws : List W.V) {a b : W.V}
+    (ha : InSpan W ws a) (hb : InSpan W ws b) : InSpan W ws (W.add a b) := by
+  induction ha with
+  | zero => rw [W.add_comm, W.add_zero]; exact hb
+  | step c v hv hu ih => rw [W.add_assoc]; exact InSpan.step c v hv ih
+
+-- The span is closed under scaling: scale each step of the derivation.
+theorem spanSmul (ws : List W.V) (c : K.F) {a : W.V}
+    (ha : InSpan W ws a) : InSpan W ws (W.smul c a) := by
+  induction ha with
+  | zero => rw [smulZero]; exact InSpan.zero
+  | step c' v hv hu ih =>
+    rw [W.smul_add, ← W.smul_assoc]
+    exact InSpan.step (K.mul c c') v hv ih
+
+-- Anything in the span of vs is in the span of ws, provided every GENERATOR
+-- of vs is: induct on the derivation, rebuilding each step with the two
+-- closure lemmas.
+theorem spanMono (vs ws : List W.V)
+    (hgen : ∀ v, v ∈ vs → InSpan W ws v) {u : W.V}
+    (hu : InSpan W vs u) : InSpan W ws u := by
+  induction hu with
+  | zero => exact InSpan.zero
+  | step c v hv hu ih => exact spanAdd ws (spanSmul ws c (hgen v hv)) ih
+
+-- Every generator is in the span: c := one, rest := zero.
+theorem generatorInSpan (vs : List W.V) (v : W.V) (hv : v ∈ vs) :
+    InSpan W vs v := by
+  have h := InSpan.step K.one v hv InSpan.zero
+  rw [W.add_zero, W.smul_one] at h
+  exact h
+
+-- Removing a vector that the rest already spans keeps the span — the heart
+-- of basis extraction. Every generator of vs is in the span of pre ++ post
+-- (v by hv, the others by membership), so spanMono carries every derivation
+-- across.
 theorem spanDrop (vs pre post : List W.V) (v : W.V)
     (hvs : vs = pre ++ v :: post)
     (hv : InSpan W (pre ++ post) v)
     (hs : Spans W vs) : Spans W (pre ++ post) := by
-  sorry
+  intro u
+  apply spanMono vs (pre ++ post)
+  · intro w hw
+    rw [hvs] at hw
+    rcases List.mem_append.mp hw with hpre | hcons
+    · exact generatorInSpan _ w (List.mem_append.mpr (Or.inl hpre))
+    · rcases List.mem_cons.mp hcons with rfl | hpost
+      · exact hv
+      · exact generatorInSpan _ w (List.mem_append.mpr (Or.inr hpost))
+  · exact hs u
 
 -- The empty list is trivially independent.
 theorem nilIndependent : Independent W [] := by
-  intro v pre post h hin
+  intro v pre post h
   cases pre <;> simp_all
 
--- The empty list spans exactly when every vector is a combo of nothing —
--- i.e. the space is trivial. (Not needed for the main proof; a sanity lemma.)
-theorem nilSpanCombo (v : W.V) (h : InSpan W [] v) : v = combo W [] := by
-  obtain ⟨cs, hmem, hcombo⟩ := h
-  cases cs with
-  | nil => exact hcombo.symm
-  | cons p rest => exact absurd (hmem p (by simp)) (by simp)
-
 -- THE exercise: a space spanned by SOME list has a basis. Extract it by
--- strong induction on the spanning list's length: if vs is independent it IS
--- a basis; otherwise some vector is spanned by the others (classically), drop
--- it via spanDrop, and induct on the shorter list.
+-- recursion on the spanning list: either vs is independent — done — or some
+-- vector lies in the span of the others; drop it (spanDrop) and recurse on
+-- the strictly shorter list.
 theorem basisExists (vs : List W.V) (h : Spans W vs) :
     ∃ bs : List W.V, Basis W bs := by
   sorry
