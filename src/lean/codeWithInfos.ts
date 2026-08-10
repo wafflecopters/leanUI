@@ -588,10 +588,60 @@ export function codeWithInfosToMathRow(tagged: TaggedJson, opts?: { wrapSubterms
  */
 export function mathTextToLatex(text: string, fallback = ''): string {
   try {
+    // A TOP-LEVEL application renders call-style: `ltLeTrans |x - x0| deltaF
+    // deltaG h1 a` → `ltLeTrans(|x−x₀|, δ_F, δ_G, h₁, a)`. The tokenize→
+    // restructure path only recognized `f x y` when every arg was a plain
+    // name; one parenthesized argument broke its call-detection and the rest
+    // concatenated with NO separators at all (`…(ε/2)h₂`, `)δ_Fδ_Gh₁a`).
+    const parts = splitTopLevelApplication(text.trim());
+    if (parts && parts.length >= 2 && /^[A-Za-z_][A-Za-z0-9_'.]*$/.test(parts[0])) {
+      const args = parts.slice(1).map((a) => mathTextToLatex(stripOuterParens(a), a));
+      const head = renderStaticLatex(mkRow(restructure(tokenizeText(parts[0]))));
+      return `${head}(${args.join(', ')})`;
+    }
     return renderStaticLatex(mkRow(restructure(tokenizeText(text))));
   } catch {
     return fallback || text;
   }
+}
+
+/** Split `f a (b c) |d - e| h` into its top-level pieces, or null when the
+ *  text is an EXPRESSION rather than an application (any top-level operator:
+ *  `0 < ε / 2`, `|a| + |b|`, `fun x => …` all keep the expression path). */
+function splitTopLevelApplication(text: string): string[] | null {
+  const parts: string[] = [];
+  let depth = 0;
+  let inBar = false;
+  let cur = '';
+  for (const ch of text) {
+    if (ch === '(' || ch === '[' || ch === '⟨' || ch === '{') depth++;
+    else if (ch === ')' || ch === ']' || ch === '⟩' || ch === '}') depth--;
+    else if (ch === '|') inBar = !inBar;
+    if (depth === 0 && !inBar) {
+      if (ch === ' ') {
+        if (cur) parts.push(cur);
+        cur = '';
+        continue;
+      }
+      // An operator at top level means this is not a bare application.
+      if ('+-*/=<>≤≥≠∧∨→↔,:λ'.includes(ch)) return null;
+    }
+    cur += ch;
+  }
+  if (depth !== 0 || inBar) return null;
+  if (cur) parts.push(cur);
+  return parts;
+}
+
+function stripOuterParens(a: string): string {
+  if (!a.startsWith('(') || !a.endsWith(')')) return a;
+  // Only strip when the FIRST paren matches the LAST one.
+  let depth = 0;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] === '(') depth++;
+    else if (a[i] === ')') { depth--; if (depth === 0 && i < a.length - 1) return a; }
+  }
+  return a.slice(1, -1);
 }
 
 /**

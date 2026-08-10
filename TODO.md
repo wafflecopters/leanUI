@@ -80,7 +80,7 @@ Active loop goal: these three proofs read decently natural. Iterate: pick top ga
 1. ✅ DONE — Destructure rows show CONDITION types inline: "Write fProof as ⟨dfPos : 0 < δ_F, fFn⟩." — types from the child goal's hypotheses, shown when prop-like (isProp/dependsOn signal), muted for data.
 2. ✅ DONE — EpsDeltaWitness displays as its ∀-meaning (lambda-aware unexpander reuses the function's own binder: no hygiene dagger, no beta-redex).
 3. Choose-merge: have+obtain fusion → "Choose δ_F and fProof with … since …" (keep rename affordance: rename targets destructure names).
-4. mathTextToLatex application spacing: `ltLeTrans (…) δF δG h₁ a` renders with NO gaps between juxtaposed args once a parenthesized arg breaks call-detection (`)δ_Fδ_Gh₁a`); fix the restructure/tokenize pipeline the way expr-latex.ts fixed the tree view.
+4. ✅ DONE — mathTextToLatex application spacing: `ltLeTrans (…) δF δG h₁ a` renders with NO gaps between juxtaposed args once a parenthesized arg breaks call-detection (`)δ_Fδ_Gh₁a`); fix the restructure/tokenize pipeline the way expr-latex.ts fixed the tree view.
 5. Citations: "since divTwoPos(ε, epsPos)" → instantiated-fact-first or name-as-citation; fix missing app gap in since-exprs (`(ε/2)h₂`).
 5. "This holds by construction, after showing 2 subgoals: / Goal 1 …" → paper voice: for ∃/structure intro: "Take δ := δ_F. It remains to show …" (merge value goal + witness); nested Goal blocks flatten when a branch is one line.
 6. Presets/batteries: triangleSum (NAT_MATH) prose battery; NEW from-scratch finite-dim vector-space preset (span/linear-independence/basis, `every finite VS has a basis` as the exercise) — stress-tests genericity beyond ℝ.

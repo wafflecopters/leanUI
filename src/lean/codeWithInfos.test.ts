@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import {
+import { mathTextToLatex,
   codeWithInfosToMathRow,
   tokenizeText,
   SUBEXPR_HTML_PREFIX,
@@ -408,5 +408,22 @@ describe('data-existential display', () => {
     expect(latex).toContain('\\exists');
     expect(latex).not.toContain("'"); // prime stripped
     expect(latex).toContain('\\delta');
+  });
+});
+
+describe('mathTextToLatex applications', () => {
+  // One parenthesized argument used to break call-detection: everything after
+  // it concatenated with NO separators ("…(ε/2)h₂", ")δ_Fδ_Gh₁a").
+  test('multi-arg applications render call-style regardless of arg shape', () => {
+    expect(mathTextToLatex('ltLeTrans |x - x0| deltaF deltaG h1 a')).toBe(
+      '\\operatorname{ltLeTrans}(|x - {x}_{0}|, \\delta_{F} , \\delta_{G} , {h}_{1}, a)',
+    );
+    expect(mathTextToLatex('limF.eps_delta (ε / 2) h2')).toBe(
+      '\\operatorname{limF.eps\\_delta}(\\frac{\\varepsilon }{2}, {h}_{2})',
+    );
+  });
+
+  test('expressions with top-level operators keep the expression path', () => {
+    expect(mathTextToLatex('0 < ε / 2')).toBe('0<\\frac{\\varepsilon }{2}');
   });
 });
