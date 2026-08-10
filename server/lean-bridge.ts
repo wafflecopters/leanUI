@@ -317,6 +317,10 @@ export interface LeanHypFact {
   name: string;
   typeHead: string | null;
   isFun: boolean;
+  /** Is the hypothesis a PROPOSITION (a condition) rather than data? */
+  isProp?: boolean;
+  /** Names of other hypotheses this one's TYPE mentions. */
+  dependsOn?: string[];
   /** Constructors of the hypothesis's (unfolded) type — how many branches a
    *  `cases` on it opens. 0 when the type isn't an inductive. */
   ctors?: number;
@@ -458,6 +462,8 @@ export function parseAnalyzeJson(
           name: String(h?.name ?? ''),
           typeHead: typeof h?.typeHead === 'string' ? h.typeHead : null,
           isFun: h?.isFun === true,
+          ...(typeof h?.isProp === 'boolean' ? { isProp: h.isProp } : {}),
+          ...(Array.isArray(h?.dependsOn) ? { dependsOn: h.dependsOn.map((x: any) => String(x)) } : {}),
           ...(typeof h?.ctors === 'number' ? { ctors: h.ctors } : {}),
           ...(Array.isArray(h?.flatFields) ? { flatFields: h.flatFields.map((x: any) => String(x)) } : {}),
           fields: Array.isArray(h?.fields) ? h.fields.map((x: any) => String(x)) : [],

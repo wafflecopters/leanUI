@@ -46,6 +46,9 @@ export interface IntroToken {
 export interface IntroGroup {
   readonly tokens: readonly IntroToken[];
   readonly typeLatex: string;
+  /** Lean says this group states CONDITIONS (Props), not data — the prose
+   *  folds it into the binder: "Let x ∈ ℝ with 0 < x", names de-emphasized. */
+  readonly isProp?: boolean;
 }
 
 export type ProseItemKind =
@@ -137,6 +140,7 @@ export interface ChainStep {
 interface HypGroup {
   readonly names: string[];
   readonly typeLatex: string;
+  readonly isProp?: boolean;
 }
 
 /**
@@ -150,7 +154,7 @@ function groupHypotheses(hyps: readonly TypedHypothesis[]): HypGroup[] {
     if (last && last.typeLatex === h.type) {
       last.names.push(h.name);
     } else {
-      groups.push({ names: [h.name], typeLatex: h.type });
+      groups.push({ names: [h.name], typeLatex: h.type, ...(h.isProp !== undefined ? { isProp: h.isProp } : {}) });
     }
   }
   return groups;
@@ -189,7 +193,10 @@ function buildIntroGroups(
   const newHyps = childHyps.slice(parentHyps.length);
   if (newHyps.length === 0) return [];
 
-  const groups = groupHypotheses(newHyps);
+  const stepNames = new Set(newHyps.map((h) => h.name));
+  const condition = (h: TypedHypothesis): boolean =>
+    h.isProp === true || (h.dependsOn ?? []).some((n) => stepNames.has(n) );
+  const groups = groupHypotheses(newHyps.map((h) => ({ ...h, isProp: condition(h) })));
   let nameIdx = 0;
   return groups.map(g => ({
     tokens: g.names.map(name => {
@@ -204,6 +211,7 @@ function buildIntroGroups(
       return token;
     }),
     typeLatex: g.typeLatex,
+    ...(g.isProp !== undefined ? { isProp: g.isProp } : {}),
   }));
 }
 

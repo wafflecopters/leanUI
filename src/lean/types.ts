@@ -35,6 +35,10 @@ export interface LeanHypFact {
   typeHead: string | null;
   /** Is it a function? (Then it can be USED: applied to arguments.) */
   isFun: boolean;
+  /** Is the hypothesis a PROPOSITION (a condition) rather than data? */
+  isProp?: boolean;
+  /** Names of other hypotheses this one's TYPE mentions. */
+  dependsOn?: string[];
   /** Constructors of the (unfolded) type — branches a `cases` on it opens. */
   ctors?: number;
   /** Every leaf name a one-line `obtain ⟨…⟩ := h` binds — one-constructor

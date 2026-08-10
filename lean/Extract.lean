@@ -224,6 +224,19 @@ unsafe def analyzeFile (cache : EnvCache) (path : String) : IO Json := do
                     | some (.inductInfo ind) => ind.ctors.length
                     | _ => 0
                   | none => 0
+                -- Claim or data? "Let ε ∈ ℝ with 0 < ε" needs to know which
+                -- introduced names are CONDITIONS — and only Lean can say.
+                let hypIsProp ← try Meta.isProp ty catch _ => pure false
+                -- Which OTHER hypotheses this type mentions. `epsPos : 0 < ε`
+                -- depends on ε; that dependency (not Prop-ness, which this
+                -- preset's Type-valued relations don't have) is what marks it
+                -- a CONDITION on ε rather than a binding of its own.
+                let depSt := collectFVars {} ty
+                let mut hypDeps : Array Json := #[]
+                for fv in depSt.fvarIds do
+                  if let some d := (← getLCtx).find? fv then
+                    unless d.isImplementationDetail do
+                      hypDeps := hypDeps.push (Json.str d.userName.toString)
                 -- Every name a one-line `obtain ⟨…⟩ := h` would have to bind.
                 -- Depth 2 — the value and ONE level of nesting — because that
                 -- is the shape these statements have ("a δ, together with the
@@ -239,6 +252,8 @@ unsafe def analyzeFile (cache : EnvCache) (path : String) : IO Json := do
                      | some n => Json.str n.toString
                      | none => Json.null),
                    ("isFun", Json.bool red.isForall),
+                   ("isProp", Json.bool hypIsProp),
+                   ("dependsOn", Json.arr hypDeps),
                    ("ctors", natJ ctors),
                    ("fields", Json.arr (fields.map Json.str)),
                    ("flatFields", Json.arr (flat.map Json.str))]

@@ -17,6 +17,11 @@ export interface TypedHypothesis {
   readonly name: string;
   /** Rendered type, e.g. `0 < \varepsilon`. */
   readonly type: string;
+  /** Lean's answer to "is this a condition (Prop) or data?" — drives the
+   *  intro prose: data binds ("Let ε ∈ ℝ"), conditions attach ("with 0 < ε"). */
+  readonly isProp?: boolean;
+  /** Names of other hypotheses this one's TYPE mentions (from the elaborator). */
+  readonly dependsOn?: readonly string[];
 }
 
 export type ValidationResult =

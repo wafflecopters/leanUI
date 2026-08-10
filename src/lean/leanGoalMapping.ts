@@ -86,11 +86,17 @@ function valueGoalTags(goals: readonly LeanGoal[]): Set<string> {
 }
 
 function hypsToTyped(state: LeanGoalState): TypedHypothesis[] {
+  const facts = new Map((state.hypFacts ?? []).map((f) => [f.name, f]));
   const out: TypedHypothesis[] = [];
   for (const h of state.hyps) {
     const type = taggedToLatex(h.type, '');
     for (const name of h.names) {
-      out.push({ name, type });
+      const f = facts.get(name);
+      out.push({
+        name, type,
+        ...(f?.isProp !== undefined ? { isProp: f.isProp } : {}),
+        ...(f?.dependsOn !== undefined ? { dependsOn: f.dependsOn } : {}),
+      });
     }
   }
   return out;

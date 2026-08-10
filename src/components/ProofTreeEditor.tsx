@@ -3366,34 +3366,53 @@ function IntroProseItem({
       <div style={rowStyle} {...rowHandlers}>
         <span style={prose}>Let{' '}</span>
         {groups ? (
-          groups.map((group, gi) => (
-            <React.Fragment key={gi}>
-              {gi > 0 && (
-                gi === groups.length - 1
-                  ? <span style={prose}>{' '}and{' '}</span>
-                  : <span style={prose}>,{' '}</span>
-              )}
-              {group.tokens.map((token, ti) => (
-                <React.Fragment key={ti}>
-                  {ti > 0 && <span style={prose}>,{' '}</span>}
-                  <span
-                    onClick={e => handleTokenClick(token, e)}
-                    style={{
-                      cursor: 'pointer',
-                      borderBottom: isTokenSelected(token)
-                        ? '2px solid #58a6ff'
-                        : '1px dotted rgba(201, 209, 217, 0.4)',
-                      paddingBottom: '1px',
-                    }}
-                  >
-                    <InlineKaTeX latex={token.nameLatex} style={{ fontSize: '13px' }} />
-                  </span>
-                </React.Fragment>
-              ))}
-              <span style={prose}>{' '}: </span>
-              <InlineKaTeX latex={group.typeLatex} style={{ fontSize: '13px' }} />
-            </React.Fragment>
-          ))
+          groups.map((group, gi) => {
+            // Conditions fold into the binder — "Let x ∈ ℝ with 0 < x and
+            // |x − x₀| < δ (h, h₁)" — instead of reading as more bindings.
+            const prevProp = gi > 0 && !!groups[gi - 1].isProp;
+            const joiner =
+              gi === 0 ? null
+              : group.isProp ? (prevProp ? ' and ' : ' with ')
+              : gi === groups.length - 1 ? ' and '
+              : ', ';
+            const nameTokens = (muted: boolean) => group.tokens.map((token, ti) => (
+              <React.Fragment key={ti}>
+                {ti > 0 && <span style={prose}>,{' '}</span>}
+                <span
+                  onClick={e => handleTokenClick(token, e)}
+                  style={{
+                    cursor: 'pointer',
+                    ...(muted ? { color: '#8b949e', fontSize: '11px' } : {}),
+                    borderBottom: isTokenSelected(token)
+                      ? '2px solid #58a6ff'
+                      : `1px dotted rgba(${muted ? '139, 148, 158' : '201, 209, 217'}, 0.4)`,
+                    paddingBottom: '1px',
+                  }}
+                >
+                  <InlineKaTeX latex={token.nameLatex} style={{ fontSize: muted ? '11px' : '13px' }} />
+                </span>
+              </React.Fragment>
+            ));
+            return (
+              <React.Fragment key={gi}>
+                {joiner && <span style={prose}>{joiner}</span>}
+                {group.isProp ? (
+                  <>
+                    <InlineKaTeX latex={group.typeLatex} style={{ fontSize: '13px' }} />
+                    <span style={{ ...prose, color: '#484f58', fontSize: '11px' }}>{' ('}</span>
+                    {nameTokens(true)}
+                    <span style={{ ...prose, color: '#484f58', fontSize: '11px' }}>)</span>
+                  </>
+                ) : (
+                  <>
+                    {nameTokens(false)}
+                    <span style={prose}>{' '}: </span>
+                    <InlineKaTeX latex={group.typeLatex} style={{ fontSize: '13px' }} />
+                  </>
+                )}
+              </React.Fragment>
+            );
+          })
         ) : (
           <InlineKaTeX latex={kind.latex} style={{ fontSize: '13px' }} />
         )}
