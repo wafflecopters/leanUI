@@ -24,7 +24,7 @@ import {
   type ExecFileException,
 } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { mkdtemp, writeFile, rm, mkdir, copyFile } from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -637,6 +637,23 @@ const MAX_WORKER_RSS_MB = clampPoolSize(process.env.LEANUI_WORKER_MAX_MB, 3072, 
  *  not free, and memory cannot grow much in ten requests. */
 const RSS_CHECK_EVERY = 10;
 
+// Mtime of the extractor binary, cached for a second — cheap enough to consult
+// on every request, fresh enough that a rebuild takes effect on the next one.
+let BIN_MTIME: { at: number; mtimeMs: number } = { at: 0, mtimeMs: 0 };
+function extractBinMtimeMs(): number {
+  const now = Date.now();
+  if (now - BIN_MTIME.at > 1000) {
+    let mtimeMs = BIN_MTIME.mtimeMs;
+    try {
+      mtimeMs = statSync(EXTRACT_BIN).mtimeMs;
+    } catch {
+      /* binary missing: keep the last known value; hasExtractBin gates spawn */
+    }
+    BIN_MTIME = { at: now, mtimeMs };
+  }
+  return BIN_MTIME.mtimeMs;
+}
+
 /** Resident size of a live pid in KB, or null when it can't be read. */
 function pidRssKb(pid: number): Promise<number | null> {
   return new Promise((resolve) => {
@@ -658,6 +675,8 @@ class ExtractWorker {
   /** The LEAN_PATH this worker's process was spawned with. A worker's search
    *  path is fixed for the life of the process, so a request needing a wider
    *  one (the first Mathlib request on a pool started for core) must respawn. */
+  /** When this worker was spawned — compared against the binary's mtime. */
+  private spawnedAtMs = 0;
   private spawnedPath: string | null = null;
 
   private ensure(leanPath: string): boolean {
@@ -673,6 +692,7 @@ class ExtractWorker {
     if (!hasExtractBin()) return false;
     try {
       this.spawnedPath = leanPath;
+      this.spawnedAtMs = Date.now();
       this.child = spawn(EXTRACT_BIN, ['--serve'], {
         // Same overlay as `extractEnv`, built synchronously: the caller already
         // resolved Mathlib (via `searchPath`) to produce `leanPath`, so
@@ -717,6 +737,15 @@ class ExtractWorker {
 
   /** One request (serial per worker). Null → caller should fall back. */
   async request(path: string, timeoutMs: number, leanPath: string = PREFIX_CACHE_ROOT): Promise<string | null> {
+    // A worker spawned before the CURRENT extractor binary is answering with
+    // the OLD extractor — its facts silently miss whatever the rebuild added.
+    // Recycle it up front; `ensure` below respawns on the new binary. (Checked
+    // per request via a cached mtime, refreshed at most once a second.)
+    if (this.child && this.spawnedAtMs < extractBinMtimeMs()) {
+      console.warn('[lean-bridge] recycling worker: extractor binary is newer than this worker');
+      this.child.kill();
+      this.child = null;
+    }
     if (this.busy || !this.ensure(leanPath)) return null;
     this.busy = true;
     try {

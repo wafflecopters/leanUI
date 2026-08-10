@@ -72,4 +72,5 @@ application style, display-math sizing.
 
 ## Paper-rendering, remaining
 - **Preset notation for the statement itself**: an `Add (Carrier R → Carrier R)` instance so `limitAdd` can be STATED as `Limit (f + g) x0 (L + M)` (goals then print `(f+g)(x)`), and a display form for `EpsDeltaWitness` (its ∀-meaning, or a compact `δ ⊨ (f, x₀, L, ε)` if too wide). Statement changes → the seeded proof must be re-verified by replay, so this wants its own pass.
+- **Choose-merge**: a `have h := …` immediately followed by `obtain ⟨a, b⟩ := h` is the mathematician's "Choose a and b with … since …" — fuse the two prose rows into one. Design note: keep the bound names clickable (rename targets the DESTRUCTURE node's names), which is why the quick version wasn't shipped.
 - **Merge value-goal lines**: "Goal 1: We must choose a value of type ℝ. / Take δ_F." into one row: "Take δ_F : ℝ." (needs the subgoalHeader to see its branch's solving exact).
