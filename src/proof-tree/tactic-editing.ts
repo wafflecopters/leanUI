@@ -6,7 +6,6 @@ import {
   applyInduction,
   applySimp,
   clearNode,
-  editDestructureName,
   editIntroName,
   findCase,
   findNode,
@@ -260,45 +259,82 @@ function replaceHaveNodeAtId(
   }
 }
 
-function rewriteHaveReferenceSubtree(
+/**
+ * Rewrite REFERENCES to a renamed binder throughout a subtree — the shared
+ * propagation for every binder rename (have name, intro token, case param,
+ * destructure name). Renaming only the binder leaves each downstream mention of
+ * the old name dangling ("Unknown identifier"), so this walks every field that
+ * can name a local hypothesis: `have`/`exact` exprs and `have`/`suffices` type
+ * annotations, `destructure`/`induction` scrutinees (an `obtain ⟨…⟩ := hF`
+ * references hF; `cases leTotal a b` references a and b), `apply`/`rewrite`
+ * targets, `conv` patterns, and `simp` lemma lists.
+ *
+ * The word-boundary regex replaces the name only as a whole token (`a` never
+ * rewrites inside `radd` or `a1`).
+ *
+ * Known limitation: if a DEEPER binder shadows the same name, references under
+ * the shadow are rewritten too — this walks by name, not by binding resolution.
+ * The round-trip surfaces any resulting error on the offending line.
+ */
+export function rewriteBinderReferencesInSubtree(
   node: ProofTreeState['root'],
   oldName: string,
   newName: string,
 ): ProofTreeState['root'] {
-  const replaceNameInExpr = (expr: string): string =>
+  const replaceRef = (expr: string): string =>
     expr.replace(new RegExp(`(?<=^|[\\s()])${escapeRegExp(oldName)}(?=$|[\\s()])`, 'g'), newName);
+  const walk = (n: ProofTreeState['root']): ProofTreeState['root'] =>
+    rewriteBinderReferencesInSubtree(n, oldName, newName);
 
   switch (node.tag) {
     case 'exact':
-      return { ...node, expr: replaceNameInExpr(node.expr) };
+      return { ...node, expr: replaceRef(node.expr) };
     case 'have':
       return {
         ...node,
-        expr: replaceNameInExpr(node.expr),
-        child: rewriteHaveReferenceSubtree(node.child, oldName, newName),
-        proofTree: node.proofTree ? rewriteHaveReferenceSubtree(node.proofTree, oldName, newName) : undefined,
+        expr: replaceRef(node.expr),
+        typeExpr: node.typeExpr !== undefined ? replaceRef(node.typeExpr) : undefined,
+        child: walk(node.child),
+        proofTree: node.proofTree ? walk(node.proofTree) : undefined,
       };
     case 'intros':
-    case 'destructure':
     case 'unfold':
     case 'fold':
+      return { ...node, child: walk(node.child) };
+    case 'destructure':
+      return { ...node, scrutinee: replaceRef(node.scrutinee), child: walk(node.child) };
     case 'rewrite':
-      return { ...node, child: rewriteHaveReferenceSubtree(node.child, oldName, newName) };
+      return {
+        ...node,
+        name: replaceRef(node.name),
+        convPattern: node.convPattern !== undefined ? replaceRef(node.convPattern) : undefined,
+        child: walk(node.child),
+        sideGoals: node.sideGoals ? node.sideGoals.map(walk) : undefined,
+      };
     case 'simp':
       return {
         ...node,
-        steps: node.steps.map(step => rewriteHaveReferenceSubtree(step, oldName, newName)),
-        child: rewriteHaveReferenceSubtree(node.child, oldName, newName),
+        lemmas: node.lemmas.map(replaceRef),
+        convPattern: node.convPattern !== undefined ? replaceRef(node.convPattern) : undefined,
+        steps: node.steps.map(walk),
+        child: walk(node.child),
       };
     case 'apply':
-      return { ...node, children: node.children.map(child => rewriteHaveReferenceSubtree(child, oldName, newName)) };
+      return { ...node, name: replaceRef(node.name), children: node.children.map(walk) };
     case 'induction':
-      return { ...node, cases: node.cases.map(c => ({ ...c, body: rewriteHaveReferenceSubtree(c.body, oldName, newName) })) };
+      // Case labels are not rewritten here: they are display text the goal
+      // round-trip refreshes (enrichInductionCases), not Lean source.
+      return {
+        ...node,
+        scrutinee: replaceRef(node.scrutinee),
+        cases: node.cases.map(c => ({ ...c, body: walk(c.body) })),
+      };
     case 'suffices':
       return {
         ...node,
-        child: rewriteHaveReferenceSubtree(node.child, oldName, newName),
-        byProof: node.byProof ? rewriteHaveReferenceSubtree(node.byProof, oldName, newName) : undefined,
+        typeExpr: replaceRef(node.typeExpr),
+        child: walk(node.child),
+        byProof: node.byProof ? walk(node.byProof) : undefined,
       };
     case 'hole':
       return node;
@@ -338,7 +374,7 @@ export function renameHaveBindingInProofTree(
   const newRoot = replaceHaveNodeAtId(state.root, haveNodeId, node => ({
     ...node,
     name: newName,
-    child: rewriteHaveReferenceSubtree(node.child, oldName, newName),
+    child: rewriteBinderReferencesInSubtree(node.child, oldName, newName),
   }));
   return newRoot ? { ...state, root: newRoot } : null;
 }
@@ -365,7 +401,7 @@ export function commitProofTreeBinderRename(
       return renameIntroTokenInProofTree(state, target.nodeId, target.nameIndex, newName);
     }
     case 'destructureName':
-      return editDestructureName(state, target.nodeId, target.nameIndex, newName);
+      return renameDestructureNameInProofTree(state, target.nodeId, target.nameIndex, newName);
 
     case 'caseParam': {
       const induction = findInductionAndCase(state.root, target.nodeId);
@@ -391,7 +427,43 @@ export function renameIntroTokenInProofTree(
   nameIndex: number,
   newName: string,
 ): ProofTreeState | null {
-  return editIntroName(state, nodeId, nameIndex, newName);
+  const renamed = editIntroName(state, nodeId, nameIndex, newName);
+  if (!renamed) return null;
+  const node = findNode(state.root, nodeId);
+  if (!node || node.tag !== 'intros') return null;
+  const oldName = node.names[nameIndex];
+  // Propagate to REFERENCES: everything below the intro is in the binder's scope.
+  const renamedNode = findNode(renamed.root, nodeId);
+  if (!renamedNode || renamedNode.tag !== 'intros') return renamed;
+  const withRefs = replaceNode(renamed.root, nodeId, {
+    ...renamedNode,
+    child: rewriteBinderReferencesInSubtree(renamedNode.child, oldName, newName),
+  });
+  return { root: withRefs, cursor: renamed.cursor };
+}
+
+/** Rename one of a destructure's bound names (`obtain ⟨fst, snd⟩ := h`) and
+ *  propagate to references in the child subtree. The node's OWN scrutinee is
+ *  evaluated before the names bind, so it is deliberately left alone. */
+export function renameDestructureNameInProofTree(
+  state: ProofTreeState,
+  nodeId: ProofNodeId,
+  nameIndex: number,
+  newName: string,
+): ProofTreeState | null {
+  const node = findNode(state.root, nodeId);
+  if (!node || node.tag !== 'destructure') return null;
+  if (nameIndex < 0 || nameIndex >= node.names.length) return null;
+  if (node.names[nameIndex] === newName) return null;
+  const oldName = node.names[nameIndex];
+  const newNames = [...node.names];
+  newNames[nameIndex] = newName;
+  const newNode = {
+    ...node,
+    names: newNames,
+    child: rewriteBinderReferencesInSubtree(node.child, oldName, newName),
+  };
+  return { root: replaceNode(state.root, nodeId, newNode), cursor: state.cursor };
 }
 
 export function renameCaseParamInProofTree(
@@ -408,13 +480,19 @@ export function renameCaseParamInProofTree(
   if (!target || paramIndex < 0 || paramIndex >= target.params.length) return null;
   const param = target.params[paramIndex];
   if (param.tag !== 'var') return null;
+  const oldName = param.name;
   const nextBranches = [...branches];
   nextBranches[caseIndex] = {
     ...target,
     params: target.params.map((p, index) => index === paramIndex ? { tag: 'var', name: newName } : p),
   };
   const rebuilt = rebuildInductionNodeFromCaseBranches(node, nextBranches);
-  return { root: replaceNode(state.root, node.id, rebuilt), cursor: state.cursor };
+  // Propagate to REFERENCES in this case's body — the param is in scope there
+  // and nowhere else (each sibling case binds its own names).
+  const cases = rebuilt.cases.map((c, index) => index === caseIndex
+    ? { ...c, body: rewriteBinderReferencesInSubtree(c.body, oldName, newName) }
+    : c);
+  return { root: replaceNode(state.root, node.id, { ...rebuilt, cases }), cursor: state.cursor };
 }
 
 export function addInductionCaseInProofTree(

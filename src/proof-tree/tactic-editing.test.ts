@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from 'vitest';
-import { createInitialState, mkCase, mkDestructure, mkExact, mkHave, mkHole, mkInduction, mkIntros, mkSimp, resetProofIds } from './proof-tree';
+import { createInitialState, mkApply, mkCase, mkDestructure, mkExact, mkHave, mkHole, mkInduction, mkIntros, mkRewrite, mkSimp, resetProofIds } from './proof-tree';
 import { buildHaveTacticCommands, proofTreeToTacticCommands } from './tactic-command-bridge';
 import { tacticCommandsToProofTree } from './tactic-to-tree';
 import {
@@ -14,6 +14,7 @@ import {
   renameCaseParamInProofTree,
   renameIntroTokenInProofTree,
   removeInductionCaseInProofTree,
+  rewriteBinderReferencesInSubtree,
   type ProofTreeManualTacticMode,
   toggleCaseCollapseInProofTree,
   toggleInductionCollapseInProofTree,
@@ -405,6 +406,168 @@ describe('shared structural editing helpers', () => {
     expect(collapsedSimp.cursor.nodeId).toBe(simpRoot.id);
   });
 
+});
+
+describe('binder rename propagates to references in scope', () => {
+  test('the reference walker covers every field that can name a hypothesis', () => {
+    // One tree exercising every reference-carrying field: destructure scrutinee,
+    // induction scrutinee, rewrite lemma + side goals, apply target, simp
+    // lemma list, have typeExpr and expr, exact expr.
+    const tree = mkDestructure('h1', ['p', 'q'],
+      mkInduction('leTotal h1 x', [
+        mkCase('?', mkRewrite('h1',
+          mkApply('h1', [
+            mkSimp(['h1', 'mulComm'], [], mkHave('h2', 'symm h1', mkHole(), 'x < h1')),
+          ]),
+          false, undefined, undefined, undefined, undefined, [mkExact('h1')])),
+      ], true));
+
+    const out = rewriteBinderReferencesInSubtree(tree, 'h1', 'hle');
+    expect(out.tag).toBe('destructure');
+    if (out.tag !== 'destructure') return;
+    expect(out.scrutinee).toBe('hle');
+    const ind = out.child;
+    expect(ind.tag).toBe('induction');
+    if (ind.tag !== 'induction') return;
+    expect(ind.scrutinee).toBe('leTotal hle x');
+    const rw = ind.cases[0].body;
+    expect(rw.tag).toBe('rewrite');
+    if (rw.tag !== 'rewrite') return;
+    expect(rw.name).toBe('hle');
+    expect(rw.sideGoals?.[0].tag).toBe('exact');
+    if (rw.sideGoals?.[0].tag === 'exact') expect(rw.sideGoals[0].expr).toBe('hle');
+    const app = rw.child;
+    expect(app.tag).toBe('apply');
+    if (app.tag !== 'apply') return;
+    expect(app.name).toBe('hle');
+    const simp = app.children[0];
+    expect(simp.tag).toBe('simp');
+    if (simp.tag !== 'simp') return;
+    expect(simp.lemmas).toEqual(['hle', 'mulComm']);
+    const have = simp.child;
+    expect(have.tag).toBe('have');
+    if (have.tag !== 'have') return;
+    expect(have.expr).toBe('symm hle');
+    expect(have.typeExpr).toBe('x < hle');
+  });
+
+  test('caseParam rename rewrites references in that case body only (cases leTotal repro)', () => {
+    // The user's repro: `cases leTotal deltaF deltaG` binds `a` in the left
+    // case; a later have references it. Renaming the case param must follow.
+    const leftBody = mkHave('h3', 'ltLeTrans |x - x0| deltaF deltaG h1 a', mkHole());
+    const rightBody = mkHave('h4', 'gtOfNot a h1', mkHole());
+    const left = mkCase('leTotal deltaF deltaG = inl a', leftBody, 'inl', ['a']);
+    const right = mkCase('leTotal deltaF deltaG = inr a', rightBody, 'inr', ['a']);
+    const root = mkInduction('leTotal deltaF deltaG', [left, right], true);
+    const state = { root, cursor: { nodeId: leftBody.id } };
+
+    const next = commitProofTreeBinderRename(state, {
+      tag: 'caseParam', nodeId: left.id, paramIndex: 0,
+    }, 'hle');
+    expect(next?.root.tag).toBe('induction');
+    if (!next || next.root.tag !== 'induction') return;
+    expect(next.root.cases[0].constructorParamNames).toEqual(['hle']);
+    const newLeftBody = next.root.cases[0].body;
+    expect(newLeftBody.tag).toBe('have');
+    if (newLeftBody.tag !== 'have') return;
+    expect(newLeftBody.expr).toBe('ltLeTrans |x - x0| deltaF deltaG h1 hle');
+    // The sibling case binds its OWN `a` — a rename must not leak into it.
+    expect(next.root.cases[1].constructorParamNames).toEqual(['a']);
+    const newRightBody = next.root.cases[1].body;
+    expect(newRightBody.tag).toBe('have');
+    if (newRightBody.tag !== 'have') return;
+    expect(newRightBody.expr).toBe('gtOfNot a h1');
+  });
+
+  test('introToken rename rewrites descendant exprs and scrutinees', () => {
+    const root = mkIntros(['ε', 'hpos'],
+      mkHave('h1', 'divPos ε hpos', mkExact('h1')));
+    const next = commitProofTreeBinderRename({ root, cursor: { nodeId: root.id } }, {
+      tag: 'introToken', nodeId: root.id, nameIndex: 1,
+    }, 'εpos');
+    expect(next?.root.tag).toBe('intros');
+    if (!next || next.root.tag !== 'intros') return;
+    expect(next.root.names).toEqual(['ε', 'εpos']);
+    const have = next.root.child;
+    expect(have.tag).toBe('have');
+    if (have.tag !== 'have') return;
+    expect(have.expr).toBe('divPos ε εpos');
+
+    // An intro'd name referenced by a cases/induction SCRUTINEE follows too.
+    const root2 = mkIntros(['deltaF'],
+      mkInduction('leTotal deltaF deltaG', [mkCase('?', mkHole())], true));
+    const next2 = commitProofTreeBinderRename({ root: root2, cursor: { nodeId: root2.id } }, {
+      tag: 'introToken', nodeId: root2.id, nameIndex: 0,
+    }, 'δF');
+    expect(next2?.root.tag).toBe('intros');
+    if (!next2 || next2.root.tag !== 'intros') return;
+    const ind = next2.root.child;
+    expect(ind.tag).toBe('induction');
+    if (ind.tag !== 'induction') return;
+    expect(ind.scrutinee).toBe('leTotal δF deltaG');
+  });
+
+  test('destructureName rename rewrites descendant exprs and a later destructure scrutinee', () => {
+    const inner = mkDestructure('hDeltaF', ['dPos', 'dBound'],
+      mkHave('h2', 'ltTrans deltaF dPos', mkHole()));
+    const root = mkDestructure('hF', ['deltaF', 'hDeltaF'], inner);
+    const state = { root, cursor: { nodeId: root.id } };
+
+    // Renaming the second bound name reaches the LATER destructure's scrutinee.
+    const next = commitProofTreeBinderRename(state, {
+      tag: 'destructureName', nodeId: root.id, nameIndex: 1,
+    }, 'hdf');
+    expect(next?.root.tag).toBe('destructure');
+    if (!next || next.root.tag !== 'destructure') return;
+    expect(next.root.names).toEqual(['deltaF', 'hdf']);
+    expect(next.root.scrutinee).toBe('hF');
+    const newInner = next.root.child;
+    expect(newInner.tag).toBe('destructure');
+    if (newInner.tag !== 'destructure') return;
+    expect(newInner.scrutinee).toBe('hdf');
+
+    // Renaming the first bound name reaches a descendant have expr.
+    const next2 = commitProofTreeBinderRename(state, {
+      tag: 'destructureName', nodeId: root.id, nameIndex: 0,
+    }, 'δF');
+    expect(next2?.root.tag).toBe('destructure');
+    if (!next2 || next2.root.tag !== 'destructure') return;
+    const inner2 = next2.root.child;
+    expect(inner2.tag).toBe('destructure');
+    if (inner2.tag !== 'destructure') return;
+    const have2 = inner2.child;
+    expect(have2.tag).toBe('have');
+    if (have2.tag !== 'have') return;
+    expect(have2.expr).toBe('ltTrans δF dPos');
+  });
+
+  test('destructureName rename leaves the node\'s OWN scrutinee alone', () => {
+    // `obtain ⟨a, b⟩ := a` shadows: the scrutinee `a` is the OUTER a, evaluated
+    // before the new names bind, so renaming the bound `a` must not touch it.
+    const root = mkDestructure('a', ['a', 'b'], mkExact('a'));
+    const next = commitProofTreeBinderRename({ root, cursor: { nodeId: root.id } }, {
+      tag: 'destructureName', nodeId: root.id, nameIndex: 0,
+    }, 'c');
+    expect(next?.root.tag).toBe('destructure');
+    if (!next || next.root.tag !== 'destructure') return;
+    expect(next.root.scrutinee).toBe('a');
+    expect(next.root.names).toEqual(['c', 'b']);
+    if (next.root.child.tag === 'exact') expect(next.root.child.expr).toBe('c');
+  });
+
+  test('reference rewriting respects word boundaries (a does not hit radd or a1)', () => {
+    const root = mkIntros(['a'], mkExact('radd a1 (a) a'));
+    const next = commitProofTreeBinderRename({ root, cursor: { nodeId: root.id } }, {
+      tag: 'introToken', nodeId: root.id, nameIndex: 0,
+    }, 'c');
+    expect(next?.root.tag).toBe('intros');
+    if (!next || next.root.tag !== 'intros') return;
+    expect(next.root.names).toEqual(['c']);
+    const child = next.root.child;
+    expect(child.tag).toBe('exact');
+    if (child.tag !== 'exact') return;
+    expect(child.expr).toBe('radd a1 (c) c');
+  });
 });
 
 describe('tray input normalization (latex → unicode)', () => {
