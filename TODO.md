@@ -110,3 +110,10 @@ R10. ✅ DONE — **Chips in prose**: "(mulDistribLeft) ×" delete buttons and "
 R11. Font consistency pass: one convention for lemma names vs hypothesis names vs variables (currently 3 systems); `epsPos`/`hlen` in math italic reads as products (texNameForProse for ALL name sites).
 R12. Misc punctuation: dangling colons at row ends; "if" hanging before displays; capitalize-after-display.
 Won't-fix (by design, note in status): suggestion tray/goal panel in the open case (it IS an editor); unevaluated `ε/2 + ε/2` and `(0+1)·0` (honest goals from Lean — a Compute pill exists for the user to take).
+
+## Mathematician feedback round 2 (2026-08-11)
+U1. ✅ Chain steps must CITE visibly — esp. "by the induction hypothesis" (R10 over-hid it); lemma docs as the reason, delete × stays hover-only.
+U2. ✅ Statement bodies: arrow chains read "A and B, then C" after the ∀ comma (match the RA binder-prose style) instead of raw → →.
+U3. ✅ "since …" stays inline with its Observe row (no forced wrap).
+U4. ✅ (wording+types; grouped-Obtain block deferred) Unify destructure wording: "Obtain ⟨a, b⟩ from src." for both Write and Choose rows; show the TYPES inline (drop the width cap — names-only doesn't read as math); grouped "Obtain:" block for consecutive rows when the cursor is outside (deferred: interaction change).
+U5. ✅ fx → f(x): apply the application rule to maximal atom RUNS between operators (|f x − L| currently renders |fx − L|).

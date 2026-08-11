@@ -209,6 +209,41 @@ function stripImplicitBinder(nodes: MathNode[]): MathNode[] | null {
  * Only fires on a leading `(` that is actually a binder (top-level `:` before
  * the matching `)` then `\to`).
  */
+/** A top-level arrow chain in a ∀ body reads as prose: `A → B → C` becomes
+ *  "A and B, then C" — the style the binder prose already uses. Heuristic:
+ *  in a THEOREM body after binders, arrows are implications; a rare
+ *  function-typed body would read oddly, which is the price of prose. */
+function arrowChainToProse(body: MathNode[]): MathNode[] {
+  const segs: MathNode[][] = [];
+  let cur: MathNode[] = [];
+  let depth = 0;
+  let inBar = false;
+  for (const n of body) {
+    if (n.tag === 'Symbol') {
+      const v = (n as SymbolNode).value;
+      if (v === '(' || v === '[' || v === '{' || v === '⟨') depth++;
+      else if (v === ')' || v === ']' || v === '}' || v === '⟩') depth--;
+      else if (v === '|') inBar = !inBar;
+      else if (v === '\\to' && depth === 0 && !inBar) {
+        segs.push(cur);
+        cur = [];
+        continue;
+      }
+    }
+    cur.push(n);
+  }
+  segs.push(cur);
+  if (segs.length < 2 || segs.some((sg) => sg.length === 0)) return body;
+  const out: MathNode[] = [];
+  const premises = segs.slice(0, -1);
+  premises.forEach((sg, i) => {
+    if (i > 0) out.push(mkText('and'));
+    out.push(...sg);
+  });
+  out.push(mkSymbol(','), mkText('then'), ...segs[segs.length - 1]);
+  return out;
+}
+
 function recognizeForallTelescope(nodes: MathNode[]): MathNode[] | null {
   if (nodes.length === 0 || !isOpSymbol(nodes[0], '\\forall')) return null;
   let i = 1;
@@ -238,7 +273,7 @@ function recognizeForallTelescope(nodes: MathNode[]): MathNode[] | null {
     i = close + 1;
   }
   if (groups.length === 0 || i >= nodes.length || !isOpSymbol(nodes[i], ',')) return null;
-  const body = restructure(nodes.slice(i + 1));
+  const body = arrowChainToProse(restructure(nodes.slice(i + 1)));
   const explicit = groups.filter((g) => !g.implicit);
   if (explicit.length === 0) return body;
   const out: MathNode[] = [mkSymbol('\\forall')];
@@ -391,17 +426,43 @@ function restructure(nodes: MathNode[]): MathNode[] {
     return restructure([...nodes.slice(0, i - 1), merged, ...nodes.slice(i + 1)]);
   }
 
-  // Function application: a run of value atoms with no infix operator between
-  // them is `head arg₁ arg₂ …` (juxtaposition = application in Lean). Render it
-  // the mathematical way, `head(arg₁, arg₂, …)` — so `f x` shows as `f(x)`.
-  if (nodes.length >= 2 && nodes.every(isAppAtom)) {
-    const [head, ...args] = nodes;
-    const inner: MathNode[] = [];
-    args.forEach((a, i) => {
-      if (i > 0) inner.push(mkSymbol(','));
-      inner.push(a);
-    });
-    return [head, mkSymbol('('), ...inner, mkSymbol(')')];
+  // Function application on maximal atom RUNS: juxtaposition = application
+  // even when the run sits between operators — `|f x - L|` must read
+  // `|f(x) − L|`, not the product-looking `|fx − L|`. (The old rule fired
+  // only when the ENTIRE list was atoms, so one operator anywhere killed it.)
+  {
+    let changed = false;
+    const out: MathNode[] = [];
+    let run: MathNode[] = [];
+    const flushRun = () => {
+      const headIsFn =
+        run.length >= 2 &&
+        run[0].tag === 'Symbol' &&
+        /^[A-Za-z_\\]/.test((run[0] as SymbolNode).value) &&
+        !/^\\/.test((run[0] as SymbolNode).value);
+      if (headIsFn) {
+        const [head, ...args] = run;
+        out.push(head, mkSymbol('('));
+        args.forEach((a, i) => {
+          if (i > 0) out.push(mkSymbol(','));
+          out.push(a);
+        });
+        out.push(mkSymbol(')'));
+        changed = true;
+      } else {
+        out.push(...run);
+      }
+      run = [];
+    };
+    for (const n of nodes) {
+      if (isAppAtom(n)) run.push(n);
+      else {
+        flushRun();
+        out.push(n);
+      }
+    }
+    flushRun();
+    if (changed) return out;
   }
 
   return nodes;

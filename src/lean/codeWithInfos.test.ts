@@ -460,3 +460,14 @@ describe('forall binder telescopes', () => {
     expect(mathTextToLatex('∀ {K : Nat}, K = K')).toBe('K = K');
   });
 });
+
+describe('mathematician round 2', () => {
+  test('application fires inside operator runs: |f x - L| reads |f(x) - L|', () => {
+    expect(mathTextToLatex('|f x - L| + |g x - M|')).toBe('|f(x) - L| + |g(x) - M|');
+  });
+
+  test('arrow chains after a telescope read "A and B, then C"', () => {
+    expect(mathTextToLatex('∀ (n : Nat), n ≤ n → P n → Q')).toContain('\\text{and}');
+    expect(mathTextToLatex('∀ (n : Nat), n ≤ n → P n → Q')).toContain('\\text{then}');
+  });
+});

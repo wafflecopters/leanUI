@@ -2698,8 +2698,8 @@ function HaveExprBlock({
 
   if (proofLatex) {
     return (
-      <div style={{ paddingLeft: '20px', opacity: 0.75 }}>
-        <span style={prose}>since{' '}</span>
+      <span style={{ opacity: 0.75 }}>
+        <span style={prose}>{' '}since{' '}</span>
         {docText ? (
           /* The reason reads as prose; the term is one hover away and the
              click still opens the builder — display changed, model untouched. */
@@ -2722,7 +2722,7 @@ function HaveExprBlock({
           </span>
         )}
         <span style={prose}>.</span>
-      </div>
+      </span>
     );
   }
 
@@ -3224,6 +3224,16 @@ function ExactProseItem({
   );
 }
 
+/** What a chain step cites, in the reason voice: the lemma's doc when it has
+ *  one; "the induction hypothesis" when the name is an IH (our own enrichment
+ *  names them `ih` / `*_ih`, so the pattern is a display convention, not a
+ *  guess about user intent); else the bare name. */
+function chainReason(lemmaName: string, doc: string | undefined): string {
+  if (/(^|_)ih\d*$/.test(lemmaName)) return 'by the induction hypothesis';
+  if (doc) return `by ${doc}`;
+  return `(${lemmaName})`;
+}
+
 function CalcChainStepRow({
   step,
   isStepCursor,
@@ -3255,10 +3265,13 @@ function CalcChainStepRow({
           <span style={{ color: '#8b949e', fontStyle: 'italic' }}>?</span>
         )}
       </span>
-      <span className="chain-step-tools" style={{ whiteSpace: 'nowrap', marginLeft: '12px' }}>
-        <span style={{ color: '#484f58', fontSize: '11px' }}>
-          (<InlineKaTeX latex={texNameForProse(step.lemmaName)} style={{ fontSize: '11px' }} />)
-        </span>
+      {/* The citation is VISIBLE — hover-hiding it buried "by the induction
+          hypothesis", the pivotal citation of any induction proof. Only the
+          delete button waits for hover. */}
+      <span style={{ color: '#6e7681', fontSize: '11px', whiteSpace: 'nowrap', marginLeft: '12px', fontStyle: 'italic' }}>
+        {chainReason(step.lemmaName, lemmaDocOf(step.lemmaName))}
+      </span>
+      <span className="chain-step-tools" style={{ whiteSpace: 'nowrap' }}>
         <button
           onClick={(e) => { e.stopPropagation(); onDelete(); }}
           style={{
@@ -3652,8 +3665,8 @@ function CaseHeaderProseItem({
           // the fact is the point of binding it. Data names (δ_F : ℝ) and
           // types too wide to inline keep name-only, with the type on hover.
           const t = kind.paramTypeLatex?.[i];
-          const inlineType =
-            kind.paramIsCondition?.[i] && t && visibleLatexLength(t) <= 40 ? t : undefined;
+          const inlineType = t || undefined;
+          const typeSep = kind.paramIsCondition?.[i] ? ' : ' : ' \u2208 ';
           return (
           <React.Fragment key={i}>
             {i > 0 && <InlineKaTeX latex=",\," style={{ fontSize: '12px' }} />}
@@ -3673,7 +3686,7 @@ function CaseHeaderProseItem({
             </HoverType>
             {inlineType && (
               <>
-                <span style={prose}>{' : '}</span>
+                <span style={prose}>{typeSep}</span>
                 <InlineKaTeX latex={inlineType} style={{ fontSize: '12px' }} />
               </>
             )}
@@ -3690,21 +3703,20 @@ function CaseHeaderProseItem({
       <div style={{ ...rowStyle, fontWeight: 600 }} {...rowHandlers}>
         {/* A sole case carries its own "By cases on x:" — the split has no
             header row of its own, so the destructuring reads as one line. */}
-        {kind.lead && kind.chooseSinceLatex !== undefined ? (
-          /* Fused have+destructure: "Choose ⟨δ_F, fProof⟩ since J." — the
-             scrutinee name never surfaces; it existed only to be unpacked. */
-          <span style={{ ...prose, fontWeight: 400 }}>Choose{' '}</span>
+        {kind.lead && kind.anonymous ? (
+          /* Both destructure forms read the same way: "Obtain ⟨…⟩ from src."
+             — src is the unpacked hypothesis, or (fused have+obtain) the
+             justification term itself. */
+          <span style={{ ...prose, fontWeight: 400 }}>Obtain{' '}</span>
         ) : kind.lead && (
           <>
             <span style={{ ...prose, fontWeight: 400 }}>
-              {kind.anonymous
-                ? 'Write'
-                : describeInductionHeader({ tag: 'inductionHeader', scrutinee: kind.lead.scrutinee, isCases: kind.lead.isCases }).lead}{' '}
+              {describeInductionHeader({ tag: 'inductionHeader', scrutinee: kind.lead.scrutinee, isCases: kind.lead.isCases }).lead}{' '}
             </span>
             {kind.lead.scrutineeLatex
               ? <InlineKaTeX latex={kind.lead.scrutineeLatex} style={{ fontSize: '13px' }} />
               : <InlineProseName name={kind.lead.scrutinee} />}
-            <span style={{ ...prose, fontWeight: 400 }}>{kind.anonymous ? ' as ' : ': '}</span>
+            <span style={{ ...prose, fontWeight: 400 }}>{': '}</span>
           </>
         )}
         {!kind.anonymous && (
@@ -3741,15 +3753,20 @@ function CaseHeaderProseItem({
         ) : (
           renderLabelWithClickableParams()
         )}
-        {kind.chooseSinceLatex !== undefined ? (
-          /* The justification, in the margin voice — a citation, not a claim. */
-          <span style={{ opacity: 0.75 }}>
-            <span style={prose}>{' '}since{' '}</span>
-            <InlineKaTeX latex={kind.chooseSinceLatex} style={{ fontSize: '13px' }} />
+        {kind.anonymous ? (
+          <span style={{ opacity: kind.chooseSinceLatex !== undefined ? 0.75 : 1 }}>
+            <span style={prose}>{' '}from{' '}</span>
+            {kind.chooseSinceLatex !== undefined ? (
+              <InlineKaTeX latex={kind.chooseSinceLatex} style={{ fontSize: '13px' }} />
+            ) : kind.lead?.scrutineeLatex ? (
+              <InlineKaTeX latex={kind.lead.scrutineeLatex} style={{ fontSize: '13px' }} />
+            ) : (
+              <InlineProseName name={kind.lead?.scrutinee ?? ''} />
+            )}
             <span style={prose}>.</span>
           </span>
         ) : (
-          <span style={prose}>{kind.anonymous ? '.' : kind.meaningLatex ? ':' : '):'}</span>
+          <span style={prose}>{kind.meaningLatex ? ':' : '):'}</span>
         )}
         {deleteBtn}
       </div>
