@@ -3285,7 +3285,7 @@ function ExactProseItem({
   // one line, and only when no doc gives a better reason.
   const typedWitness =
     kind.repeatedGoal === true &&
-    description.mode === 'solved' &&
+    description.mode !== 'error' &&
     !exactDoc &&
     !!kind.goalLatex &&
     visibleLatexLength(kind.goalLatex) + visibleLatexLength(description.displayLatex) <= 60;
@@ -3304,7 +3304,7 @@ function ExactProseItem({
   return (
     <ProseRow rowStyle={rowStyle} rowHandlers={rowHandlers} deleteBtn={deleteBtn}>
       {mustShowPrefix(kind.goalLatex, kind.isValueType)}
-      {description.mode === 'solved' ? (
+      {description.mode !== 'error' ? (
         exactDoc ? (
           <>
             <span style={prose}>{kind.isValueType ? 'Take' : 'This follows:'}{' '}</span>

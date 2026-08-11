@@ -2299,6 +2299,12 @@ def Independent {K : Field'} (W : VectorSpace K) (vs : List W.V) : Prop :=
 def Basis {K : Field'} (W : VectorSpace K) (vs : List W.V) : Prop :=
   Spans W vs ∧ Independent W vs
 
+-- Prose notation: goals READ AS SENTENCES — "vs spans W", "bs is a basis
+-- of W". Ordinary Lean notation, so display and input both work, defined
+-- exactly where the domain lives: in the preset.
+notation:50 vs:51 " spans " W:51 => Spans W vs
+notation:50 bs:51 " is\u00a0a\u00a0basis\u00a0of " W:51 => Basis W bs
+
 -- Some vector is in the span of the OTHERS. (Reducible so obtain unpacks it.)
 @[reducible] def Dependent {K : Field'} (W : VectorSpace K) (vs : List W.V) : Prop :=
   ∃ v pre post, vs = pre ++ v :: post ∧ InSpan W (pre ++ post) v
