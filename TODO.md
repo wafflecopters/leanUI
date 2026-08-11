@@ -106,7 +106,7 @@ R6. ✅ DONE (via R1 dagger filter) — **Let-line duplicates the split**: basis
 R7. ✅ DONE — **Induction-on-data case labels**: "Case (zero.nil):"/"Case (cons (a, rest)):" → conditions "vs = []" / "vs = a :: rest" (we know the constructor + scrutinee; render the equation). Also triangleSum "Inductive step (n = succ (n))" BINDS THE SAME LETTER — uniquify the case param against the scrutinee name (enrichment bug, real).
 R8. ✅ DONE — **⟨tuple⟩ exacts**: "By ⟨[], h, nilIndependent⟩." → "Take bs := [] …" phrasing for ∃-witness tuples (value + proofs).
 R9. ✅ DONE — **Proof./∎ framing**: open with "Proof." row, end with ∎ (qed item exists; ensure it appears when complete, and add the opener).
-R10. **Chips in prose**: "(mulDistribLeft) ×" delete buttons and "✓ solved" rows inside the document — keep the affordances but move to hover-reveal/margin styling.
+R10. ✅ DONE — **Chips in prose**: "(mulDistribLeft) ×" delete buttons and "✓ solved" rows inside the document — keep the affordances but move to hover-reveal/margin styling.
 R11. Font consistency pass: one convention for lemma names vs hypothesis names vs variables (currently 3 systems); `epsPos`/`hlen` in math italic reads as products (texNameForProse for ALL name sites).
 R12. Misc punctuation: dangling colons at row ends; "if" hanging before displays; capitalize-after-display.
 Won't-fix (by design, note in status): suggestion tray/goal panel in the open case (it IS an editor); unevaluated `ε/2 + ε/2` and `(0+1)·0` (honest goals from Lean — a Compute pill exists for the user to take).

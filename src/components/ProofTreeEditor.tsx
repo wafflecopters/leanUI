@@ -2341,7 +2341,14 @@ function ProofProseView({
       {/* KaTeX's default .katex-display margin is 1em top+bottom — page-height
           whitespace between every step. Paper density: a display equation sits
           close to the sentence that introduces it. */}
-      <style>{'.proof-prose .katex-display { margin: 0.25em 0; }'}</style>
+      <style>{`
+        .proof-prose .katex-display { margin: 0.25em 0; }
+        /* Editor affordances live in the margin voice: chain-step citation
+           tags and delete buttons appear when the pointer reaches for them,
+           so the DOCUMENT reads clean. */
+        .proof-prose .chain-step-tools { opacity: 0; transition: opacity 120ms; }
+        .proof-prose div:hover > .chain-step-tools { opacity: 1; }
+      `}</style>
       <div style={{ padding: '2px 4px' }}>
         <span style={{ fontStyle: 'italic', fontFamily: 'KaTeX_Main, Georgia, serif', color: '#c9d1d9' }}>Proof.</span>
       </div>
@@ -3248,18 +3255,20 @@ function CalcChainStepRow({
           <span style={{ color: '#8b949e', fontStyle: 'italic' }}>?</span>
         )}
       </span>
-      <span style={{ color: '#484f58', fontSize: '11px', whiteSpace: 'nowrap', marginLeft: '12px' }}>
-        (<InlineKaTeX latex={texNameForProse(step.lemmaName)} style={{ fontSize: '11px' }} />)
+      <span className="chain-step-tools" style={{ whiteSpace: 'nowrap', marginLeft: '12px' }}>
+        <span style={{ color: '#484f58', fontSize: '11px' }}>
+          (<InlineKaTeX latex={texNameForProse(step.lemmaName)} style={{ fontSize: '11px' }} />)
+        </span>
+        <button
+          onClick={(e) => { e.stopPropagation(); onDelete(); }}
+          style={{
+            background: 'none', border: 'none', color: '#f85149',
+            cursor: 'pointer', fontSize: '13px', padding: '0 2px',
+            opacity: 0.5, lineHeight: 1,
+          }}
+          title="Delete this step"
+        >&times;</button>
       </span>
-      <button
-        onClick={(e) => { e.stopPropagation(); onDelete(); }}
-        style={{
-          background: 'none', border: 'none', color: '#f85149',
-          cursor: 'pointer', fontSize: '13px', padding: '0 2px',
-          opacity: 0.5, lineHeight: 1,
-        }}
-        title="Delete this step"
-      >&times;</button>
     </div>
   );
 }
