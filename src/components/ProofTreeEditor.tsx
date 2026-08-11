@@ -3558,7 +3558,26 @@ function CaseHeaderProseItem({
   // Render the label with clickable param names.
   // For induction: "scrutinee = Constructor(param1, param2)"
   // For cases: "Constructor(param1, param2)" (no scrutinee prefix)
+  // A case label is an EQUATION when the scrutinee is a simple name:
+  // "Base case (n = zero):", "Case (vs = cons(a, rest)):" — what the branch
+  // actually asserts, not a bare constructor tag.
+  const simpleScrutinee =
+    kind.scrutinee && /^[A-Za-z_][A-Za-z0-9_']*$/.test(kind.scrutinee) ? kind.scrutinee : undefined;
+
   const renderLabelWithClickableParams = () => {
+    // Paramless constructor (zero, nil): the equation form, or the bare
+    // constructor when the scrutinee is complex. Falls back to labelLatex
+    // only when we know nothing better — labelLatex may be a dotted composed
+    // tag (`zero.nil`), which is plumbing.
+    if (!hasParams && kind.constructorName) {
+      const ctorTex = texNameForProse(kind.constructorName);
+      return (
+        <InlineKaTeX
+          latex={simpleScrutinee ? `${texNameForProse(simpleScrutinee)} = ${ctorTex}` : ctorTex}
+          style={{ fontSize: '12px' }}
+        />
+      );
+    }
     if (!hasParams || (!kind.constructorName && !kind.anonymous)) {
       // No params or missing data — render as before
       return <InlineKaTeX latex={kind.labelLatex} style={{ fontSize: '12px' }} />;
@@ -3570,11 +3589,9 @@ function CaseHeaderProseItem({
     // \u27e8a, b\u27e9, the notation the proof itself contains.
     const prefix = kind.anonymous
       ? '\\langle '
-      : kind.isCases
-        ? `${ctorTex}\\,(`
-        : kind.scrutinee
-          ? `${texNameForProse(kind.scrutinee)} = ${ctorTex}\\,(`
-          : `${ctorTex}\\,(`;
+      : simpleScrutinee
+        ? `${texNameForProse(simpleScrutinee)} = ${ctorTex}\\,(`
+        : `${ctorTex}\\,(`;
 
     return (
       <>

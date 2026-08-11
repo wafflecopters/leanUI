@@ -2392,7 +2392,7 @@ theorem basisExistsAux {K : Field'} {W : VectorSpace K} (n : Nat) : ∀ vs : Lis
     cases vs with
     | nil => exact ⟨[], h, nilIndependent⟩
     | cons a rest => exact (Nat.not_succ_le_zero rest.length hlen).elim
-  | succ n ih =>
+  | succ m ih =>
     intro vs hlen h
     cases independentOrDependent vs with
     | inl hind => exact ⟨vs, h, hind⟩
