@@ -391,7 +391,7 @@ describe('generateProofProse', () => {
     expect(items.map(i => i.isCursor)).toEqual([false, false, false, true, true]);
   });
 
-  test('multi-char variable names get mathit', () => {
+  test('multi-char variable names render upright, never as italic products', () => {
     const hole: ProofNode = { tag: 'hole', id: 2 };
     const intros: ProofNode = { tag: 'intros', id: 1, names: ['xs'], child: hole };
     const goalMap = mkGoalMap([
@@ -399,7 +399,7 @@ describe('generateProofProse', () => {
       [2, { hypotheses: [{ name: 'xs', type: 'List' }] }],
     ]);
     const items = generateProofProse(intros, 2, goalMap);
-    expect((items[0].kind as any).latex).toBe('\\mathit{xs} : List');
+    expect((items[0].kind as any).latex).toBe('\\textsf{xs} : List');
   });
 
   test('primed variable names render correctly', () => {

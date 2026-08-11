@@ -107,8 +107,8 @@ R7. ✅ DONE — **Induction-on-data case labels**: "Case (zero.nil):"/"Case (co
 R8. ✅ DONE — **⟨tuple⟩ exacts**: "By ⟨[], h, nilIndependent⟩." → "Take bs := [] …" phrasing for ∃-witness tuples (value + proofs).
 R9. ✅ DONE — **Proof./∎ framing**: open with "Proof." row, end with ∎ (qed item exists; ensure it appears when complete, and add the opener).
 R10. ✅ DONE — **Chips in prose**: "(mulDistribLeft) ×" delete buttons and "✓ solved" rows inside the document — keep the affordances but move to hover-reveal/margin styling.
-R11. Font consistency pass: one convention for lemma names vs hypothesis names vs variables (currently 3 systems); `epsPos`/`hlen` in math italic reads as products (texNameForProse for ALL name sites).
-R12. Misc punctuation: dangling colons at row ends; "if" hanging before displays; capitalize-after-display.
+R11. ✅ DONE — Font consistency pass: one convention for lemma names vs hypothesis names vs variables (currently 3 systems); `epsPos`/`hlen` in math italic reads as products (texNameForProse for ALL name sites).
+R12. ✅ DONE (provided-that; block colons kept deliberately) — Misc punctuation: dangling colons at row ends; "if" hanging before displays; capitalize-after-display.
 Won't-fix (by design, note in status): suggestion tray/goal panel in the open case (it IS an editor); unevaluated `ε/2 + ε/2` and `(0+1)·0` (honest goals from Lean — a Compute pill exists for the user to take).
 
 ## Mathematician feedback round 2 (2026-08-11)
@@ -117,3 +117,6 @@ U2. ✅ Statement bodies: arrow chains read "A and B, then C" after the ∀ comm
 U3. ✅ "since …" stays inline with its Observe row (no forced wrap).
 U4. ✅ FULLY DONE (wording+types+grouped-Obtain block) Unify destructure wording: "Obtain ⟨a, b⟩ from src." for both Write and Choose rows; show the TYPES inline (drop the width cap — names-only doesn't read as math); grouped "Obtain:" block for consecutive rows when the cursor is outside (deferred: interaction change).
 U5. ✅ fx → f(x): apply the application rule to maximal atom RUNS between operators (|f x − L| currently renders |fx − L|).
+
+- **Limit (f + g) statement — REVERTED, needs its own pass.** Findings from the attempt: (1) the preset's + is a DIRECT infix for radd, which monopolizes the token and blocks an Add-instance for function sums; (2) switching reals to Add/Sub/Div instances makes user-typed + instance-form while the library (incl. EpsDeltaWitness's definition) is stated over raw radd/rsub — goals become MIXED-form chimeras no rw pattern can match. The real fix is one consistent migration: instances + unexpanders AND every lemma statement + EpsDeltaWitness restated in notation, verified together. ~1 session of work.
+- **RA preset: two term forms (instance vs raw radd/rsub).** With arithmetic now going through Add/Sub/Div instances, user-typed + elaborates to instance form while library lemmas are STATED over raw radd/rsub — exact/apply tolerate the defeq, but rw patterns don't match across forms (hit once: subAddSub vs the (f+g) goal; contained via notation-stated subAddSub'). Systemic fix, own pass: restate the RA lemma library using the notation so everything is uniformly instance-form.

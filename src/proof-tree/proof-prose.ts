@@ -237,7 +237,10 @@ function buildIntroGroups(
 
 /** Render a variable name for LaTeX (italicize single chars, subscript digits, textify multi-char). */
 function texName(name: string): string {
-  return renderNameLatex(name, 'mathit');
+  // Upright for multi-char names — math italic renders `epsPos` as the
+  // product e·p·s·P·o·s. Same convention as the editor's texNameForProse,
+  // so a name looks identical in a Let-row and in a case pattern.
+  return renderNameLatex(name, 'textsf');
 }
 
 /** A synthetic induction inserted by nested-pattern desugaring —

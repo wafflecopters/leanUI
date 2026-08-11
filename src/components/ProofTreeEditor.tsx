@@ -3013,7 +3013,7 @@ function UnfoldProseItem({
       <span style={prose}>This holds by definition of{' '}</span>
       <InlineProseName name={kind.name} />
       {errorSuffix}
-      {renderGoalSection(kind.goalLatex, ', if')}
+      {renderGoalSection(kind.goalLatex, ', provided that')}
     </ProseRow>
   );
 }
@@ -3043,7 +3043,7 @@ function FoldProseItem({
       <span style={prose}>which matches the definition of{' '}</span>
       <InlineProseName name={kind.name} />
       {errorSuffix}
-      {renderGoalSection(kind.goalLatex, ', if')}
+      {renderGoalSection(kind.goalLatex, ', provided that')}
     </ProseRow>
   );
 }
@@ -3087,7 +3087,7 @@ function RewriteProseItem({
         </>
       )}
       {errorSuffix}
-      {renderGoalSection(kind.goalLatex, ', if')}
+      {renderGoalSection(kind.goalLatex, ', provided that')}
     </ProseRow>
   );
 }
@@ -3149,7 +3149,7 @@ function ApplyProseItem({
           </>
         )}
         {errorSuffix}
-        {renderGoalSection(applyDescription.subgoals[0], ', if')}
+        {renderGoalSection(applyDescription.subgoals[0], ', provided that')}
       </ProseRow>
     );
   }

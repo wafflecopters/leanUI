@@ -48,7 +48,7 @@ const TACTIC_FORMS: Array<{
     tactic: 'induction',
     label: 'Induct on…',
     description: 'Split the goal into one case per constructor',
-    param: { name: 'scrutinee', kind: 'identifier', placeholder: 'n', required: true },
+    param: { name: 'scrutinee', kind: 'expression', placeholder: 'n', required: true },
   },
   {
     tactic: 'cases',
