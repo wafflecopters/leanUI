@@ -2325,12 +2325,26 @@ function ProofProseView({
   // This step will render its goal interactively instead of as plain LaTeX.
   const lastGoalStepIdx = findLastInteractiveGoalStepIndex(items);
 
+  // Paper framing: open with "Proof." and close with ONE tombstone when
+  // nothing is open and nothing is broken. (The per-step qed items barely
+  // fire on the Lean path and a paper ends a proof exactly once.)
+  const proofComplete =
+    items.length > 0 &&
+    !items.some((i) =>
+      (i.kind.tag === 'hole' && !(i.kind as { solved?: boolean }).solved) ||
+      (i.kind as { error?: string }).error !== undefined,
+    ) &&
+    items[items.length - 1].kind.tag !== 'qed';
+
   return (
     <div className="proof-prose">
       {/* KaTeX's default .katex-display margin is 1em top+bottom — page-height
           whitespace between every step. Paper density: a display equation sits
           close to the sentence that introduces it. */}
       <style>{'.proof-prose .katex-display { margin: 0.25em 0; }'}</style>
+      <div style={{ padding: '2px 4px' }}>
+        <span style={{ fontStyle: 'italic', fontFamily: 'KaTeX_Main, Georgia, serif', color: '#c9d1d9' }}>Proof.</span>
+      </div>
       {items.map((item, idx) => {
         // Deletable items: anything except hole, qed, caseHeader
         // A sole case has no header row of its own, so it carries the header's
@@ -2391,6 +2405,11 @@ function ProofProseView({
           />
         );
       })}
+      {proofComplete && (
+        <div style={{ padding: '2px 4px', textAlign: 'right' }}>
+          <span style={{ color: '#3fb950', fontSize: '14px' }}>&#8718;</span>
+        </div>
+      )}
     </div>
   );
 }

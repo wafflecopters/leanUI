@@ -154,7 +154,12 @@ export function describeExactProse(kind: ExactKind): ExactProseDescription {
   if (kind.solved) {
     return {
       mode: 'solved',
-      lead: kind.isValueType ? 'Take' : 'The result follows from',
+      // An anonymous-constructor tuple ⟨w, …⟩ supplies a WITNESS with its
+      // proofs — a choice, not a derivation — so it reads "Take", like any
+      // other value.
+      lead: kind.isValueType || kind.exprLatex.trim().startsWith('⟨')
+        ? 'Take'
+        : 'The result follows from',
       displayLatex,
     };
   }

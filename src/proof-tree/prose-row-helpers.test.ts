@@ -146,3 +146,11 @@ describe('prose-row-helpers', () => {
     });
   });
 });
+  test('an anonymous-constructor exact reads as a choice: Take ⟨…⟩', () => {
+    const d = describeExactProse({
+      tag: 'exact', exprLatex: '⟨vs, h, hind⟩', solved: true,
+    } as never);
+    expect(d.mode).toBe('solved');
+    expect((d as { lead: string }).lead).toBe('Take');
+  });
+
