@@ -179,3 +179,33 @@ export function describeExactProse(kind: ExactKind): ExactProseDescription {
     displayLatex,
   };
 }
+
+/** Top-level components of an anonymous-constructor tuple `⟨a, b, c⟩`, or
+ *  null when the text isn't one. Splits on depth-0 commas only. */
+export function splitAnonTuple(expr: string): string[] | null {
+  const t = expr.trim();
+  if (!t.startsWith('⟨') || !t.endsWith('⟩')) return null;
+  const inner = t.slice(1, -1);
+  const parts: string[] = [];
+  let depth = 0;
+  let cur = '';
+  for (const ch of inner) {
+    if ('⟨([{'.includes(ch)) depth++;
+    else if ('⟩)]}'.includes(ch)) depth--;
+    if (ch === ',' && depth === 0) {
+      parts.push(cur.trim());
+      cur = '';
+      continue;
+    }
+    cur += ch;
+  }
+  parts.push(cur.trim());
+  return parts.length >= 2 && parts.every((p) => p.length > 0) ? parts : null;
+}
+
+/** The ∃-binder's name out of a rendered goal — `\exists {\operatorname{bs}}, …`
+ *  → `bs`. Display-only; null when the goal isn't a simple ∃. */
+export function existsBinderFromLatex(goalLatex: string): string | null {
+  const m = goalLatex.match(/\\exists\s*\{*(?:\\operatorname\{)?([A-Za-z_][A-Za-z0-9_']*)/);
+  return m ? m[1] : null;
+}

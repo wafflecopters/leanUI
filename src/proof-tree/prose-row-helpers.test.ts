@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import {
+import { splitAnonTuple, existsBinderFromLatex,
   describeApplyProse,
   describeExactProse,
   describeInductionHeader,
@@ -154,3 +154,15 @@ describe('prose-row-helpers', () => {
     expect((d as { lead: string }).lead).toBe('Take');
   });
 
+describe('exists-witness tuples', () => {
+  test('splitAnonTuple splits top-level commas only', () => {
+    expect(splitAnonTuple('⟨[], h, nilIndependent⟩')).toEqual(['[]', 'h', 'nilIndependent']);
+    expect(splitAnonTuple('⟨a, ⟨b, c⟩⟩')).toEqual(['a', '⟨b, c⟩']);
+    expect(splitAnonTuple('plainTerm')).toBeNull();
+  });
+
+  test('existsBinderFromLatex finds the binder, null otherwise', () => {
+    expect(existsBinderFromLatex('{\\exists {\\operatorname{bs}},{X}}')).toBe('bs');
+    expect(existsBinderFromLatex('0 < x')).toBeNull();
+  });
+});

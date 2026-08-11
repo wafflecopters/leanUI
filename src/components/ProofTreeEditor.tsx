@@ -34,7 +34,7 @@ import {
   proseItemShowsVisibleGoal,
   visibleLatexLength,
 } from '../proof-tree/prose-view-helpers';
-import {
+import { splitAnonTuple, existsBinderFromLatex,
   describeApplyProse,
   describeExactProse,
   describeInductionHeader,
@@ -3290,6 +3290,29 @@ function ExactProseItem({
     !!kind.goalLatex &&
     visibleLatexLength(kind.goalLatex) + visibleLatexLength(description.displayLatex) <= 60;
 
+  // A tuple against an ∃ reads best UNFLATTENED: the first component is the
+  // witness, the rest discharge the predicate — "Take bs := [] with h and
+  // nilIndependent." (⟨a, b, c⟩ means ⟨a, ⟨b, c⟩⟩; making the reader do that
+  // unflattening was a legitimate complaint.)
+  const tupleParts = splitAnonTuple(kind.exprLatex);
+  const existsBinder = kind.goalLatex ? existsBinderFromLatex(kind.goalLatex) : null;
+  if (typedWitness && tupleParts && existsBinder) {
+    const proofs = tupleParts.slice(1);
+    return (
+      <ProseRow rowStyle={rowStyle} rowHandlers={rowHandlers} deleteBtn={deleteBtn}>
+        <span style={prose}>Take{' '}</span>
+        <InlineKaTeX latex={`${texNameForProse(existsBinder)} := ${textToLatex(tupleParts[0])}`} style={{ fontSize: '13px' }} />
+        <span style={prose}>{' '}with{' '}</span>
+        {proofs.map((c, i) => (
+          <React.Fragment key={i}>
+            {i > 0 && <span style={prose}>{i === proofs.length - 1 ? ' and ' : ', '}</span>}
+            <InlineKaTeX latex={textToLatex(c)} style={{ fontSize: '13px' }} />
+          </React.Fragment>
+        ))}
+        <span style={prose}>.</span>
+      </ProseRow>
+    );
+  }
   if (typedWitness) {
     return (
       <ProseRow rowStyle={rowStyle} rowHandlers={rowHandlers} deleteBtn={deleteBtn}>
