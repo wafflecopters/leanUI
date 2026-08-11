@@ -2299,6 +2299,15 @@ def Independent {K : Field'} (W : VectorSpace K) (vs : List W.V) : Prop :=
 def Basis {K : Field'} (W : VectorSpace K) (vs : List W.V) : Prop :=
   Spans W vs ∧ Independent W vs
 
+-- Some vector is in the span of the OTHERS. (Reducible so obtain unpacks it.)
+@[reducible] def Dependent {K : Field'} (W : VectorSpace K) (vs : List W.V) : Prop :=
+  ∃ v pre post, vs = pre ++ v :: post ∧ InSpan W (pre ++ post) v
+
+/-- a nonempty list has positive length — the case is vacuous -/
+theorem consNotLenZero {K : Field'} {W : VectorSpace K} {C : Prop}
+    (a : W.V) (rest : List W.V) (hlen : (a :: rest).length ≤ 0) : C :=
+  (Nat.not_succ_le_zero rest.length hlen).elim
+
 -- Scaling zero gives zero: not an axiom, but forced by distributivity plus
 -- cancellation (s = s + s only for s = 0).
 theorem smulZero {K : Field'} {W : VectorSpace K} (c : K.F) : W.smul c W.zero = W.zero := by
@@ -2375,7 +2384,7 @@ theorem nilIndependent {K : Field'} {W : VectorSpace K} : Independent W [] := by
 -- reads as a clean case split.)
 /-- classically: independent, or some vector lies in the span of the others -/
 theorem independentOrDependent {K : Field'} {W : VectorSpace K} (vs : List W.V) :
-    Independent W vs ∨ (∃ v pre post, vs = pre ++ v :: post ∧ InSpan W (pre ++ post) v) := by
+    Independent W vs ∨ Dependent W vs := by
   cases Classical.em (Independent W vs) with
   | inl h => exact Or.inl h
   | inr h =>
@@ -2406,7 +2415,7 @@ theorem basisExistsAux {K : Field'} {W : VectorSpace K} (n : Nat) : ∀ vs : Lis
     intro vs hlen h
     cases vs with
     | nil => exact ⟨[], h, nilIndependent⟩
-    | cons a rest => exact (Nat.not_succ_le_zero rest.length hlen).elim
+    | cons a rest => exact consNotLenZero a rest hlen
   | succ m ih =>
     intro vs hlen h
     cases independentOrDependent vs with

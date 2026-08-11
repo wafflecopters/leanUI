@@ -3279,6 +3279,27 @@ function ExactProseItem({
   // For a VALUE exact the term IS the content (never swap it for a doc);
   // for a proof, the head lemma's doc is the reason a paper would give.
   const exactDoc = kind.isValueType ? undefined : lemmaDocOf(exprHeadName(kind.exprLatex));
+  // A one-liner closing a goal ALREADY on screen reads as a typed witness —
+  // "⟨[], h, nilIndependent⟩ : ∃bs, Basis(W, bs)." — not as the stilted
+  // "We must show the claim above. By ⟨…⟩." Only when short enough to stay
+  // one line, and only when no doc gives a better reason.
+  const typedWitness =
+    kind.repeatedGoal === true &&
+    description.mode === 'solved' &&
+    !exactDoc &&
+    !!kind.goalLatex &&
+    visibleLatexLength(kind.goalLatex) + visibleLatexLength(description.displayLatex) <= 60;
+
+  if (typedWitness) {
+    return (
+      <ProseRow rowStyle={rowStyle} rowHandlers={rowHandlers} deleteBtn={deleteBtn}>
+        <InlineKaTeX latex={description.displayLatex} style={{ fontSize: '13px' }} />
+        <span style={prose}>{' : '}</span>
+        <InlineKaTeX latex={kind.goalLatex!} style={{ fontSize: '13px' }} />
+        <span style={prose}>.</span>
+      </ProseRow>
+    );
+  }
 
   return (
     <ProseRow rowStyle={rowStyle} rowHandlers={rowHandlers} deleteBtn={deleteBtn}>
