@@ -488,6 +488,7 @@ function LeanProofEditor({
           caseBranchCount(allDeclarations, session.hypothesesWithTypes(), scrutinee)
         }
         lemmaDoc={(name) => allDeclarations.find((d) => d.name === name)?.doc}
+        declSignature={`${state.decl.kind} ${state.decl.name} : ${state.decl.typeText}`}
         rewriteSideGoalCount={(name) => rewriteSideGoalCount(allDeclarations, name)}
         hypSuggestionsOverride={hypTraySuggestions}
         onHypothesisSelect={(name) => session.selectHypothesis(name)}

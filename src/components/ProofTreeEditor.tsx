@@ -125,6 +125,8 @@ export interface ProofTreeEditorProps {
   caseBranchCount?: (scrutinee: string) => number | null;
   /** Doc comment of a file lemma, for reason-style citations. */
   lemmaDoc?: (name: string) => string | undefined;
+  /** The declaration's raw Lean signature — shown above the Tactics tree. */
+  declSignature?: string;
   rewriteSideGoalCount?: (name: string) => number;
   /** Lean backend: replaces the kernel-computed hypothesis action tray
    *  (Exact/Apply/Destructure/Use …) shown under a clicked CONTEXT hypothesis. */
@@ -208,7 +210,7 @@ type TacticMode = null | ProofTreeManualTacticMode;
 /** Stable empty list, so memo deps don't churn. */
 const EMPTY_SUGGESTIONS: readonly TacticSuggestion[] = [];
 
-export function ProofTreeEditor({ history, onHistoryChange, registry, goalMapOverride, typedContextOverride, interactiveGoalOverride, onGoalPathSelect, goalExtraSlot, applySubgoalCount, caseBranchCount, lemmaDoc, rewriteSideGoalCount, hypSuggestionsOverride, onHypothesisSelect, onApplySuggestionOverride, termBuilderProvider }: ProofTreeEditorProps) {
+export function ProofTreeEditor({ history, onHistoryChange, registry, goalMapOverride, typedContextOverride, interactiveGoalOverride, onGoalPathSelect, goalExtraSlot, applySubgoalCount, caseBranchCount, lemmaDoc, declSignature, rewriteSideGoalCount, hypSuggestionsOverride, onHypothesisSelect, onApplySuggestionOverride, termBuilderProvider }: ProofTreeEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const state = history.current;
 
@@ -450,6 +452,19 @@ export function ProofTreeEditor({ history, onHistoryChange, registry, goalMapOve
 
           <div style={{ padding: '8px 0', overflowY: 'auto', flex: 1 }}>
             {activeTab === 'tactics' ? (
+              <>
+              {declSignature && (
+                /* The Tactics tab is the CODE view — it opens with the code-
+                   shaped signature, exactly as the source file states it. */
+                <div style={{
+                  padding: '4px 12px 8px', marginBottom: '4px',
+                  borderBottom: '1px solid #21262d',
+                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                  fontSize: '12px', color: '#8b949e', whiteSpace: 'pre-wrap',
+                }}>
+                  {declSignature}
+                </div>
+              )}
               <ProofNodeView
                 node={state.root}
                 depth={0}
@@ -463,6 +478,7 @@ export function ProofTreeEditor({ history, onHistoryChange, registry, goalMapOve
                 registry={registry}
                 goalMap={goalMap}
               />
+              </>
             ) : (
               <ProofProseView
                 items={proseItems}
@@ -1432,6 +1448,8 @@ const LeanCounters = createContext<{
   caseBranchCount?: (scrutinee: string) => number | null;
   /** Doc comment of a file lemma, for reason-style citations. */
   lemmaDoc?: (name: string) => string | undefined;
+  /** The declaration's raw Lean signature — shown above the Tactics tree. */
+  declSignature?: string;
   rewriteSideGoalCount?: (name: string) => number;
 }>({});
 
@@ -2304,6 +2322,8 @@ interface ProseViewProps {
   caseBranchCount?: (scrutinee: string) => number | null;
   /** Doc comment of a file lemma, for reason-style citations. */
   lemmaDoc?: (name: string) => string | undefined;
+  /** The declaration's raw Lean signature — shown above the Tactics tree. */
+  declSignature?: string;
   rewriteSideGoalCount?: (name: string) => number;
   termBuilderProvider?: TermBuilderProvider;
 }
@@ -2538,6 +2558,8 @@ interface ProseItemViewProps {
   caseBranchCount?: (scrutinee: string) => number | null;
   /** Doc comment of a file lemma, for reason-style citations. */
   lemmaDoc?: (name: string) => string | undefined;
+  /** The declaration's raw Lean signature — shown above the Tactics tree. */
+  declSignature?: string;
   rewriteSideGoalCount?: (name: string) => number;
   termBuilderProvider?: TermBuilderProvider;
 }
@@ -4325,6 +4347,8 @@ interface HoleProseViewProps {
   caseBranchCount?: (scrutinee: string) => number | null;
   /** Doc comment of a file lemma, for reason-style citations. */
   lemmaDoc?: (name: string) => string | undefined;
+  /** The declaration's raw Lean signature — shown above the Tactics tree. */
+  declSignature?: string;
   rewriteSideGoalCount?: (name: string) => number;
   termBuilderProvider?: TermBuilderProvider;
 }

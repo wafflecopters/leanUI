@@ -279,6 +279,31 @@ function arrowChainToProse(body: MathNode[]): MathNode[] {
   return out;
 }
 
+/** All Symbol values in a node list, recursing through containers. */
+function collectSymbolValues(nodes: readonly MathNode[]): string[] {
+  const out: string[] = [];
+  for (const n of nodes) {
+    if (n.tag === 'Symbol') out.push((n as SymbolNode).value);
+    const kids = (n as { children?: readonly MathNode[] }).children;
+    if (kids) out.push(...collectSymbolValues(kids));
+  }
+  return out;
+}
+
+/** Does any Symbol (recursively, through Groups/containers) match a name? */
+function nodesMentionSymbol(nodes: readonly MathNode[], names: ReadonlySet<string>): boolean {
+  for (const n of nodes) {
+    if (n.tag === 'Symbol' && names.has((n as SymbolNode).value)) return true;
+    const kids = (n as { children?: readonly MathNode[] }).children;
+    if (kids && nodesMentionSymbol(kids, names)) return true;
+    for (const key of ['num', 'den', 'base', 'sup', 'sub', 'body', 'below', 'above'] as const) {
+      const part = (n as unknown as Record<string, { children?: readonly MathNode[] } | undefined>)[key];
+      if (part?.children && nodesMentionSymbol(part.children, names)) return true;
+    }
+  }
+  return false;
+}
+
 function recognizeForallTelescope(nodes: MathNode[]): MathNode[] | null {
   if (nodes.length === 0 || !isOpSymbol(nodes[0], '\\forall')) return null;
   let i = 1;
@@ -309,7 +334,27 @@ function recognizeForallTelescope(nodes: MathNode[]): MathNode[] | null {
   }
   if (groups.length === 0 || i >= nodes.length || !isOpSymbol(nodes[i], ',')) return null;
   const body = arrowChainToProse(restructure(nodes.slice(i + 1)));
-  const explicit = groups.filter((g) => !g.implicit);
+  // An implicit binder is elided ONLY when its name never surfaces in the
+  // displayed remainder. "∀ n ∈ ℕ … List(W) …" with no binder for W shows a
+  // FREE variable — a paper introduces W before using it. The check runs on
+  // the DISPLAYED tree, which is exactly the right criterion: RA's {R : Real}
+  // stays hidden because its goals show ℝ (the unexpander consumed R), while
+  // a W that survives into List(W) keeps its binder. Right-to-left, so a kept
+  // binder's own type can pull in earlier ones (VectorSpace(K) keeps K).
+  const kept: boolean[] = groups.map((g) => !g.implicit);
+  for (let gi = groups.length - 1; gi >= 0; gi--) {
+    if (kept[gi]) continue;
+    // Tagged-path binder vars arrive wrapped in subexpr Groups — collect
+    // Symbol names recursively, not just at the top level.
+    const names = new Set(collectSymbolValues(groups[gi].vars));
+    if (names.size === 0) continue;
+    const visible: MathNode[] = [
+      ...groups.filter((_, gj) => gj > gi && kept[gj]).flatMap((g) => [...g.vars, ...g.type]),
+      ...body,
+    ];
+    if (nodesMentionSymbol(visible, names)) kept[gi] = true;
+  }
+  const explicit = groups.filter((_, gi) => kept[gi]);
   if (explicit.length === 0) return body;
   const out: MathNode[] = [mkSymbol('\\forall')];
   explicit.forEach((g, gi) => {

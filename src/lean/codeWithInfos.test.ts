@@ -456,8 +456,14 @@ describe('forall binder telescopes', () => {
     );
   });
 
-  test('an all-implicit telescope drops the ∀ entirely', () => {
-    expect(mathTextToLatex('∀ {K : Nat}, K = K')).toBe('K = K');
+  test('an implicit whose name SURFACES keeps its binder — no free variables', () => {
+    // Eliding K here left "K = K" with K unbound — the reader's "where did
+    // W come from?". Elision now requires the name to be invisible.
+    expect(mathTextToLatex('∀ {K : Nat}, K = K')).toContain('\\forall K');
+    // Truly invisible implicits still hide.
+    expect(mathTextToLatex('∀ {K : Nat} (n : Nat), n = n')).toBe(
+      '\\forall n \\in \\operatorname{Nat},n = n',
+    );
   });
 });
 
