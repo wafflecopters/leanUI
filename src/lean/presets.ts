@@ -2244,6 +2244,9 @@ structure Field' where
   distrib : ∀ a b c, mul a (add b c) = add (mul a b) (mul a c)
   zero_ne_one : zero ≠ one
 
+-- Display: a VECTOR SPACE stands for its own carrier (the mathematician's
+-- abuse of notation — "vs ∈ List(W)", not "List(W.V)"), and a list's length
+-- is |vs|. Display-only unexpanders; the source spellings still work.
 structure VectorSpace (K : Field') where
   V : Type
   zero : V
@@ -2258,6 +2261,18 @@ structure VectorSpace (K : Field') where
   smul_assoc : ∀ a b v, smul (K.mul a b) v = smul a (smul b v)
   smul_add : ∀ a u v, smul a (add u v) = add (smul a u) (smul a v)
   add_smul : ∀ a b v, smul (K.add a b) v = add (smul a v) (smul b v)
+
+@[app_unexpander VectorSpace.V] def unexpVSCarrier : Lean.PrettyPrinter.Unexpander
+  | \`($_ $W) => pure W
+  | _ => throw ()
+
+-- |vs| for list length. The atomic/noWs macro form (same trick as the
+-- real-analysis |a| for rabs) keeps the bars away from an inductive's own
+-- alternative bars; the unexpander gives the display direction.
+macro:max atomic("|" noWs) l:term noWs "|" : term => \`(List.length $l)
+@[app_unexpander List.length] def unexpListLength : Lean.PrettyPrinter.Unexpander
+  | \`($_ $l) => \`(|$l|)
+  | _ => throw ()
 
 -- K and W are bound EXPLICITLY on every declaration (no section variable):
 -- a section-included implicit that the statement never names shows up in the

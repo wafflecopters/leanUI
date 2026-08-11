@@ -2325,6 +2325,27 @@ function ProofProseView({
   // This step will render its goal interactively instead of as plain LaTeX.
   const lastGoalStepIdx = findLastInteractiveGoalStepIndex(items);
 
+  // Consecutive Obtain rows (≥2, same depth, cursor not inside any of them)
+  // group under a single "Obtain:" header — four unpackings are one act.
+  // Rows keep their full components (rename, hover types, delete); only the
+  // repeated lead word goes.
+  const isObtainRow = (i: number): boolean => {
+    const k = items[i]?.kind as { anonymous?: boolean; lead?: unknown } | undefined;
+    return !!k?.anonymous && k?.lead !== undefined;
+  };
+  const obtainRunStart = new Set<number>();
+  const obtainRunMember = new Set<number>();
+  for (let i = 0; i < items.length; i++) {
+    if (!isObtainRow(i) || obtainRunMember.has(i)) continue;
+    let j = i;
+    while (isObtainRow(j) && items[j].depth === items[i].depth) j++;
+    const run = items.slice(i, j);
+    if (run.length >= 2 && !run.some((r) => r.isCursor)) {
+      obtainRunStart.add(i);
+      for (let k = i; k < j; k++) obtainRunMember.add(k);
+    }
+  }
+
   // Paper framing: open with "Proof." and close with ONE tombstone when
   // nothing is open and nothing is broken. (The per-step qed items barely
   // fire on the Lean path and a paper ends a proof exactly once.)
@@ -2373,8 +2394,53 @@ function ProofProseView({
         const nextHoleNodeId = findNextHoleNodeId(items, idx);
 
         return (
+          <React.Fragment key={`${item.nodeId}-${idx}`}>
+          {obtainRunStart.has(idx) && (
+            <div style={{ paddingLeft: `${item.depth * 20 + 4}px`, paddingTop: '2px' }}>
+              <span style={{ fontFamily: 'KaTeX_Main, Georgia, serif', color: '#c9d1d9' }}>Obtain:</span>
+            </div>
+          )}
+          {obtainRunMember.has(idx) ? (
+            <div style={{ paddingLeft: '20px' }}>
+              <ProseItemView
+                item={item}
+                prevItem={idx > 0 ? items[idx - 1] : undefined}
+                nextItem={idx < items.length - 1 ? items[idx + 1] : undefined}
+                isLastGoalStep={idx === lastGoalStepIdx}
+                nextHoleNodeId={nextHoleNodeId}
+                onClick={() => onClickNode(item.nodeId)}
+                onDelete={handleDelete}
+                state={state}
+                tacticMode={tacticMode}
+                onTacticMode={onTacticMode}
+                onPushChange={onPushChange}
+                onClickNode={onClickNode}
+                typedContext={typedContext}
+                registry={registry}
+                interactiveGoal={interactiveGoal}
+                suggestions={suggestions}
+                selectedPath={selectedPath}
+                onSelectPath={onSelectPath}
+                editingNames={editingNames}
+                onEditingNames={onEditingNames}
+                editingSuggestionId={editingSuggestionId}
+                onEditingSuggestionId={onEditingSuggestionId}
+                onApplySuggestion={onApplySuggestion}
+                onStartEditingSuggestion={onStartEditingSuggestion}
+                selectedBinder={selectedBinder}
+                onSelectBinder={onSelectBinder}
+                termBuilder={termBuilder}
+                onSetTermBuilder={onSetTermBuilder}
+                holeExtraSlot={holeExtraSlot}
+                applySubgoalCount={applySubgoalCount}
+                caseBranchCount={caseBranchCount}
+                rewriteSideGoalCount={rewriteSideGoalCount}
+                termBuilderProvider={termBuilderProvider}
+                compactLead
+              />
+            </div>
+          ) : (
           <ProseItemView
-            key={`${item.nodeId}-${idx}`}
             item={item}
             prevItem={idx > 0 ? items[idx - 1] : undefined}
             nextItem={idx < items.length - 1 ? items[idx + 1] : undefined}
@@ -2410,6 +2476,8 @@ function ProofProseView({
             rewriteSideGoalCount={rewriteSideGoalCount}
             termBuilderProvider={termBuilderProvider}
           />
+          )}
+          </React.Fragment>
         );
       })}
       {proofComplete && (
@@ -2426,6 +2494,8 @@ function ProofProseView({
 // ============================================================================
 
 interface ProseItemViewProps {
+  /** Row sits inside a grouped "Obtain:" block — skip its lead word. */
+  compactLead?: boolean;
   item: ProseItem;
   prevItem?: ProseItem;
   nextItem?: ProseItem;
@@ -3568,7 +3638,7 @@ function IntroProseItem({
 
 function CaseHeaderProseItem({
   item, kind, rowStyle, rowHandlers, prose, deleteBtn,
-  state, onPushChange,
+  state, onPushChange, compactLead,
 }: {
   item: ProseItem;
   kind: Extract<ProseItemKind, { tag: 'caseHeader' }>;
@@ -3578,6 +3648,8 @@ function CaseHeaderProseItem({
   deleteBtn?: React.ReactNode;
   state: ProofTreeState;
   onPushChange: (s: ProofTreeState) => void;
+  /** Inside a grouped "Obtain:" block: skip the per-row lead word. */
+  compactLead?: boolean;
 }) {
   const [selectedParamIndex, setSelectedParamIndex] = useState<number | null>(null);
   const caseContainerRef = useRef<HTMLDivElement>(null);
@@ -3666,7 +3738,7 @@ function CaseHeaderProseItem({
           // types too wide to inline keep name-only, with the type on hover.
           const t = kind.paramTypeLatex?.[i];
           const inlineType = t || undefined;
-          const typeSep = kind.paramIsCondition?.[i] ? ' : ' : ' \u2208 ';
+          const typeSep = kind.paramIsCondition?.[i] === false ? ' \u2208 ' : ' : ';
           return (
           <React.Fragment key={i}>
             {i > 0 && <InlineKaTeX latex=",\," style={{ fontSize: '12px' }} />}
@@ -3706,8 +3778,9 @@ function CaseHeaderProseItem({
         {kind.lead && kind.anonymous ? (
           /* Both destructure forms read the same way: "Obtain ⟨…⟩ from src."
              — src is the unpacked hypothesis, or (fused have+obtain) the
-             justification term itself. */
-          <span style={{ ...prose, fontWeight: 400 }}>Obtain{' '}</span>
+             justification term itself. Inside a grouped block the word is
+             said once, by the block header. */
+          compactLead ? null : <span style={{ ...prose, fontWeight: 400 }}>Obtain{' '}</span>
         ) : kind.lead && (
           <>
             <span style={{ ...prose, fontWeight: 400 }}>
@@ -3820,7 +3893,7 @@ function ProseItemView({
   editingNames, onEditingNames, editingSuggestionId, onEditingSuggestionId,
   onApplySuggestion, onStartEditingSuggestion,
   selectedBinder, onSelectBinder,
-  termBuilder, onSetTermBuilder, holeExtraSlot, applySubgoalCount, caseBranchCount, rewriteSideGoalCount, termBuilderProvider,
+  termBuilder, onSetTermBuilder, holeExtraSlot, applySubgoalCount, caseBranchCount, rewriteSideGoalCount, termBuilderProvider, compactLead,
 }: ProseItemViewProps) {
   const [hovered, setHovered] = useState(false);
   const { kind } = item;
@@ -4059,6 +4132,7 @@ function ProseItemView({
           deleteBtn={deleteBtn}
           state={state}
           onPushChange={onPushChange}
+          compactLead={compactLead}
         />
       );
 

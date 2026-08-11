@@ -115,5 +115,5 @@ Won't-fix (by design, note in status): suggestion tray/goal panel in the open ca
 U1. ✅ Chain steps must CITE visibly — esp. "by the induction hypothesis" (R10 over-hid it); lemma docs as the reason, delete × stays hover-only.
 U2. ✅ Statement bodies: arrow chains read "A and B, then C" after the ∀ comma (match the RA binder-prose style) instead of raw → →.
 U3. ✅ "since …" stays inline with its Observe row (no forced wrap).
-U4. ✅ (wording+types; grouped-Obtain block deferred) Unify destructure wording: "Obtain ⟨a, b⟩ from src." for both Write and Choose rows; show the TYPES inline (drop the width cap — names-only doesn't read as math); grouped "Obtain:" block for consecutive rows when the cursor is outside (deferred: interaction change).
+U4. ✅ FULLY DONE (wording+types+grouped-Obtain block) Unify destructure wording: "Obtain ⟨a, b⟩ from src." for both Write and Choose rows; show the TYPES inline (drop the width cap — names-only doesn't read as math); grouped "Obtain:" block for consecutive rows when the cursor is outside (deferred: interaction change).
 U5. ✅ fx → f(x): apply the application rule to maximal atom RUNS between operators (|f x − L| currently renders |fx − L|).

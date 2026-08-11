@@ -214,6 +214,13 @@ function stripImplicitBinder(nodes: MathNode[]): MathNode[] | null {
  *  in a THEOREM body after binders, arrows are implications; a rare
  *  function-typed body would read oddly, which is the price of prose. */
 function arrowChainToProse(body: MathNode[]): MathNode[] {
+  // The tagged path wraps the body in a click-target Group; transform its
+  // children and keep the id. (Verified the hard way: the plain-text path
+  // worked while the real header kept its arrows.)
+  if (body.length === 1 && body[0].tag === 'Group') {
+    const g = body[0] as GroupNode;
+    return [mkGroup(g.htmlId, arrowChainToProse([...g.children]))];
+  }
   const segs: MathNode[][] = [];
   let cur: MathNode[] = [];
   let depth = 0;
@@ -233,6 +240,34 @@ function arrowChainToProse(body: MathNode[]): MathNode[] {
     cur.push(n);
   }
   segs.push(cur);
+  // The tagged tree right-nests `A → (B → C)` in Groups: keep flattening the
+  // LAST segment while it is a lone Group hiding more top-level arrows.
+  while (segs.length >= 1) {
+    const last = segs[segs.length - 1];
+    if (last.length !== 1 || last[0].tag !== 'Group') break;
+    const kids = (last[0] as GroupNode).children;
+    let d = 0; let bar = false; let hasArrow = false;
+    for (const k of kids) {
+      if (k.tag !== 'Symbol') continue;
+      const v = (k as SymbolNode).value;
+      if (v === '(' || v === '[' || v === '{' || v === '⟨') d++;
+      else if (v === ')' || v === ']' || v === '}' || v === '⟩') d--;
+      else if (v === '|') bar = !bar;
+      else if (v === '\\to' && d === 0 && !bar) { hasArrow = true; break; }
+    }
+    if (!hasArrow) break;
+    const inner = arrowChainToProse([...kids]);
+    // The recursive call returned "B and C, then D" style nodes — splice as
+    // its own segments by re-splitting on the markers we just placed? No:
+    // simpler and correct — replace the segment with the Group's children
+    // and RE-RUN the whole split.
+    return arrowChainToProse([
+      ...segs.slice(0, -1).flatMap((sg, i) => (i > 0 ? [mkSymbol('\\to'), ...sg] : sg)),
+      ...(segs.length > 1 ? [mkSymbol('\\to')] : []),
+      ...kids,
+    ]);
+    void inner;
+  }
   if (segs.length < 2 || segs.some((sg) => sg.length === 0)) return body;
   const out: MathNode[] = [];
   const premises = segs.slice(0, -1);
