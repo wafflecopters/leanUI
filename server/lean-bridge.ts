@@ -368,6 +368,9 @@ export interface LeanGoal {
 export interface LeanDeclaration {
   name: string;
   kind: 'def' | 'theorem' | 'inductive' | 'axiom' | 'opaque';
+  /** The /-- doc comment --/, when the author wrote one — the REASON a
+   *  citation shows in prose, with the term demoted to hover detail. */
+  doc?: string;
   prettyType: string;
   /** Tagged pretty-print of the type, for the WYSIWYG math editor. */
   typeTagged?: TaggedText;
@@ -496,6 +499,7 @@ export function parseAnalyzeJson(
         return {
           name: String(d.name ?? ''),
           kind: DECL_KINDS.has(d.kind) ? d.kind : 'def',
+          ...(typeof d.doc === 'string' && d.doc.length > 0 ? { doc: d.doc } : {}),
           prettyType: String(d.prettyType ?? ''),
           ...(typeTagged ? { typeTagged } : {}),
           ...(typeof d.prettyValue === 'string' ? { prettyValue: d.prettyValue } : {}),

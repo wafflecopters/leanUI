@@ -178,3 +178,21 @@ describe('basisExists reads like mathematics', () => {
     expectNoDaggers(items);
   });
 });
+
+describe('citations have reasons to cite', () => {
+  test('the justification lemmas of all three proofs carry doc comments', async () => {
+    for (const [preset, names] of [
+      ['Real Analysis (chain rule)', ['divTwoPos', 'ltLeTrans', 'absTriangle', 'convertEps', 'addLtBoth', 'leTotal']],
+      ['Nat Math (from scratch)', ['summationSplit', 'mulDistribLeft']],
+      ['Vector Spaces (basis)', ['spanDrop', 'lengthDrop', 'independentOrDependent', 'nilIndependent']],
+    ] as const) {
+      const p = LEAN_PRESETS.find((x) => x.name === preset)!;
+      const base = await analyzeLeanSource(p.code, { timeoutMs: 10 * MIN });
+      for (const n of names) {
+        const d = base.declarations.find((x) => x.name === n);
+        expect(d, `${preset}: ${n}`).toBeDefined();
+        expect((d as { doc?: string }).doc, `${preset}: ${n} needs a /-- reason -/`).toBeTruthy();
+      }
+    }
+  }, 30 * MIN);
+});

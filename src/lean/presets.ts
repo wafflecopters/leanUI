@@ -168,6 +168,7 @@ def mulSuccRight : (n m : MyNat) → (mul n (.succ m)) = (plus n (mul n m))
   | .succ n, m =>
       congSucc (eqTrans (congPlusRight m (mulSuccRight n m)) (plusLeftComm m n (mul n m)))
 
+/-- commutativity of multiplication -/
 def mulComm : (n m : MyNat) → (mul n m) = (mul m n)
   | .zero,   m => eqSym (mulZeroRight m)
   | .succ n, m => eqTrans (congPlusRight m (mulComm n m)) (eqSym (mulSuccRight m n))
@@ -182,6 +183,7 @@ def mulAssoc : (n m p : MyNat) → (mul (mul n m) p) = (mul n (mul m p))
   | .succ n, m, p =>
       eqTrans (mulDistribRight m (mul n m) p) (congPlusRight (mul m p) (mulAssoc n m p))
 
+/-- distributivity -/
 def mulDistribLeft : (n m p : MyNat) → (mul n (plus m p)) = (plus (mul n m) (mul n p))
   | .zero,   _, _ => rfl
   | .succ n, m, p =>
@@ -301,6 +303,7 @@ def sumStartCountSplit (s k : MyNat) (f : MyNat → MyNat) :
     (sumStartCount s (.succ k) f) = (plus (sumStartCount s k f) (f (plus s k))) := rfl
 
 -- Summation splitting: sum from i to (n+1) = (sum from i to n) + f(n+1).
+/-- splitting off the last summand -/
 def summationSplit (i n : MyNat) (l : Leq i n) (f : MyNat → MyNat) :
     (sum i (.succ n) f) = (plus (sum i n f) (f (.succ n))) :=
   eqTrans
@@ -841,9 +844,11 @@ def minElim {R : Real} (a b : Carrier R) (C : Carrier R → Sort w)
     (fun h => left h) (fun h => right h)
     ((fieldOf R).leTotal a b)
 
+/-- the minimum is at most its left argument -/
 def minLeLeft {R : Real} (a b : Carrier R) : rle (rmin a b) a :=
   minElim a b (fun z => rle z a) (fun _ => (fieldOf R).leRefl a) (fun h => h)
 
+/-- the minimum is at most its right argument -/
 def minLeRight {R : Real} (a b : Carrier R) : rle (rmin a b) b :=
   minElim a b (fun z => rle z b) (fun h => h) (fun _ => (fieldOf R).leRefl b)
 
@@ -851,6 +856,7 @@ def ltMin {R : Real} (c a b : Carrier R) (ha : rlt c a) (hb : rlt c b) :
     rlt c (rmin a b) :=
   minElim a b (fun z => rlt c z) (fun _ => ha) (fun _ => hb)
 
+/-- the minimum of positives is positive -/
 def minPos {R : Real} (a b : Carrier R) (ha : rlt (rzero R) a) (hb : rlt (rzero R) b) :
     rlt (rzero R) (rmin a b) :=
   ltMin (rzero R) a b ha hb
@@ -927,6 +933,7 @@ def leTrans {R : Real} (a b c : Carrier R) (hab : rle a b) (hbc : rle b c) : rle
 def leAntisym {R : Real} (a b : Carrier R) (hab : rle a b) (hba : rle b a) : a = b :=
   (fieldOf R).leAntisym a b hab hba
 
+/-- totality of ≤ -/
 def leTotal {R : Real} (a b : Carrier R) : Either (rle a b) (rle b a) :=
   (fieldOf R).leTotal a b
 
@@ -987,6 +994,7 @@ def leLtTransNe {R : Real} (a b c : Carrier R) (hab : rle a b) (hbc : rle b c)
     (nebc : b = c → MyVoid) (eq : a = c) : MyVoid :=
   nebc ((fieldOf R).leAntisym b c hbc (replace (fun z => rle z b) eq hab))
 
+/-- transitivity, chaining ≤ into < -/
 def leLtTrans {R : Real} (a b c : Carrier R) (hab : rle a b) (hbc : rlt b c) : rlt a c :=
   Pair.mk (leLtTransLe a b c hab (Pair.fst hbc)) (leLtTransNe a b c hab (Pair.fst hbc) (Pair.snd hbc))
 
@@ -999,6 +1007,7 @@ def ltLeTransNe {R : Real} (a b c : Carrier R) (hab : rle a b) (neab : a = b →
     ((fieldOf R).leTrans b c a hbc
       (replace (fun z => rle z a) eq ((fieldOf R).leRefl a))))
 
+/-- transitivity, chaining < into ≤ -/
 def ltLeTrans {R : Real} (a b c : Carrier R) (hab : rlt a b) (hbc : rle b c) : rlt a c :=
   Pair.mk (ltLeTransLe a b c (Pair.fst hab) hbc) (ltLeTransNe a b c (Pair.fst hab) (Pair.snd hab) hbc)
 
@@ -1055,6 +1064,7 @@ def addLtBothNe {R : Real} (a b c d : Carrier R) (leab : rle a b) (neab : a = b 
         (replace (fun z => rle (radd b d) z) (eqSym eq)
           ((fieldOf R).leRefl (radd b d))))))
 
+/-- adding the two estimates -/
 def addLtBoth {R : Real} (a b c d : Carrier R) (hab : rlt a b) (hcd : rlt c d) :
     rlt (radd a c) (radd b d) :=
   Pair.mk (addLeBoth a b c d (Pair.fst hab) (Pair.fst hcd))
@@ -1292,6 +1302,7 @@ def addAddSwap {R : Real} (a b c d : Carrier R) :
         (eqTrans (eqCong (fun z => radd a z) ((fieldOf R).addAssoc c b d))
           (eqSym ((fieldOf R).addAssoc a c (radd b d))))))
 
+/-- regrouping the difference of sums -/
 def subAddSub {R : Real} (a b c d : Carrier R) :
     (rsub (radd a b) (radd c d)) = (radd (rsub a c) (rsub b d)) :=
   eqTrans (eqCong (fun z => radd (radd a b) z) (negAdd c d))
@@ -1504,6 +1515,7 @@ def leAbsNeg {R : Real} (a : Carrier R) : rle (rneg a) (rabs a) :=
     (fun h => (fieldOf R).leTrans (rneg a) (rzero R) a (negNonpos a h) h)
     (fun _ => (fieldOf R).leRefl (rneg a))
 
+/-- the triangle inequality -/
 def absTriangle {R : Real} (a b : Carrier R) :
     rle (rabs (radd a b)) (radd (rabs a) (rabs b)) :=
   absElim (radd a b) (fun x => rle x (radd (rabs a) (rabs b)))
@@ -1568,6 +1580,7 @@ def coreEstimate {R : Real} (f g : Carrier R → Carrier R) (x0 L M he x : Carri
 def halfEqDiv {R : Real} (e : Carrier R) : (rmul (rhalf R) e) = (rdiv e (rtwo R)) :=
   (fieldOf R).mulComm (rhalf R) e
 
+/-- halving preserves positivity -/
 def divTwoPos {R : Real} (e : Carrier R) (hlt : rlt (rzero R) e) :
     rlt (rzero R) (rdiv e (rtwo R)) :=
   replace (fun z => rlt (rzero R) z) (halfEqDiv e) (halfMulEpsPos e hlt)
@@ -1576,6 +1589,7 @@ def divTwoPos {R : Real} (e : Carrier R) (hlt : rlt (rzero R) e) :
 -- proofs mostly need the divTwoPos special case above, but the general form
 -- belongs in the toolkit (statement faithful; body sorried like the other
 -- ports of TT tactic proofs — the sorry surfaces as a warning, not an error).
+/-- a quotient of positives is positive -/
 def divPos {R : Real} (a b : Carrier R) (ha : rlt (rzero R) a) (hb : rlt (rzero R) b) :
     rlt (rzero R) (rdiv a b) :=
   mulPos a (rinv b) ha (invPosStrict b hb)
@@ -1584,6 +1598,7 @@ def divTwoAddEq {R : Real} (e : Carrier R) :
     (radd (rdiv e (rtwo R)) (rdiv e (rtwo R))) = e :=
   replace (fun z => (radd z z) = e) (halfEqDiv e) (halfMulEps e)
 
+/-- the two half-estimates add up to ε -/
 def convertEps {R : Real} (epsilon v : Carrier R)
     (hlt : rlt v (radd (rdiv epsilon (rtwo R)) (rdiv epsilon (rtwo R)))) : rlt v epsilon :=
   replace (fun z => rlt v z) (divTwoAddEq epsilon) hlt
@@ -2298,6 +2313,7 @@ theorem spanSmul {K : Field'} {W : VectorSpace K} (ws : List W.V) (c : K.F) {a :
 -- Anything in the span of vs is in the span of ws, provided every GENERATOR
 -- of vs is: induct on the derivation, rebuilding each step with the two
 -- closure lemmas.
+/-- spans grow with their generators -/
 theorem spanMono {K : Field'} {W : VectorSpace K} (vs ws : List W.V)
     (hgen : ∀ v, v ∈ vs → InSpan W ws v) {u : W.V}
     (hu : InSpan W vs u) : InSpan W ws u := by
@@ -2306,6 +2322,7 @@ theorem spanMono {K : Field'} {W : VectorSpace K} (vs ws : List W.V)
   | step c v hv hu ih => exact spanAdd ws (spanSmul ws c (hgen v hv)) ih
 
 -- Every generator is in the span: c := one, rest := zero.
+/-- every generator lies in the span -/
 theorem generatorInSpan {K : Field'} {W : VectorSpace K} (vs : List W.V) (v : W.V) (hv : v ∈ vs) :
     InSpan W vs v := by
   have h := InSpan.step K.one v hv InSpan.zero
@@ -2316,6 +2333,7 @@ theorem generatorInSpan {K : Field'} {W : VectorSpace K} (vs : List W.V) (v : W.
 -- of basis extraction. Every generator of vs is in the span of pre ++ post
 -- (v by hv, the others by membership), so spanMono carries every derivation
 -- across.
+/-- removing a vector the rest already spans keeps the span -/
 theorem spanDrop {K : Field'} {W : VectorSpace K} (vs pre post : List W.V) (v : W.V)
     (hvs : vs = pre ++ v :: post)
     (hv : InSpan W (pre ++ post) v)
@@ -2332,6 +2350,7 @@ theorem spanDrop {K : Field'} {W : VectorSpace K} (vs pre post : List W.V) (v : 
   · exact hs u
 
 -- The empty list is trivially independent.
+/-- the empty list is vacuously independent -/
 theorem nilIndependent {K : Field'} {W : VectorSpace K} : Independent W [] := by
   intro v pre post h
   cases pre <;> simp_all
@@ -2339,6 +2358,7 @@ theorem nilIndependent {K : Field'} {W : VectorSpace K} : Independent W [] := by
 -- Classically, a list is independent or some vector lies in the span of the
 -- others. (The negation-pushing lives HERE, once, so the main proof below
 -- reads as a clean case split.)
+/-- classically: independent, or some vector lies in the span of the others -/
 theorem independentOrDependent {K : Field'} {W : VectorSpace K} (vs : List W.V) :
     Independent W vs ∨ (∃ v pre post, vs = pre ++ v :: post ∧ InSpan W (pre ++ post) v) := by
   cases Classical.em (Independent W vs) with
@@ -2356,6 +2376,7 @@ theorem independentOrDependent {K : Field'} {W : VectorSpace K} (vs : List W.V) 
 -- Dropping one vector strictly shrinks the list — the bound for the
 -- recursion. (Library lemma: tactic machinery like simp-at/omega lives here,
 -- so the MAIN proof below stays within the editor's renderable subset.)
+/-- dropping a vector shortens the list -/
 theorem lengthDrop {K : Field'} {W : VectorSpace K} (v : W.V) (pre post : List W.V) {n : Nat} (vs : List W.V)
     (hvs : vs = pre ++ v :: post) (hlen : vs.length ≤ n + 1) :
     (pre ++ post).length ≤ n := by

@@ -123,6 +123,8 @@ export interface ProofTreeEditorProps {
   /** Branches a split on this scrutinee opens — one per constructor of its
    *  type. `null` when nothing in scope knows. */
   caseBranchCount?: (scrutinee: string) => number | null;
+  /** Doc comment of a file lemma, for reason-style citations. */
+  lemmaDoc?: (name: string) => string | undefined;
   rewriteSideGoalCount?: (name: string) => number;
   /** Lean backend: replaces the kernel-computed hypothesis action tray
    *  (Exact/Apply/Destructure/Use …) shown under a clicked CONTEXT hypothesis. */
@@ -206,7 +208,7 @@ type TacticMode = null | ProofTreeManualTacticMode;
 /** Stable empty list, so memo deps don't churn. */
 const EMPTY_SUGGESTIONS: readonly TacticSuggestion[] = [];
 
-export function ProofTreeEditor({ history, onHistoryChange, registry, goalMapOverride, typedContextOverride, interactiveGoalOverride, onGoalPathSelect, goalExtraSlot, applySubgoalCount, caseBranchCount, rewriteSideGoalCount, hypSuggestionsOverride, onHypothesisSelect, onApplySuggestionOverride, termBuilderProvider }: ProofTreeEditorProps) {
+export function ProofTreeEditor({ history, onHistoryChange, registry, goalMapOverride, typedContextOverride, interactiveGoalOverride, onGoalPathSelect, goalExtraSlot, applySubgoalCount, caseBranchCount, lemmaDoc, rewriteSideGoalCount, hypSuggestionsOverride, onHypothesisSelect, onApplySuggestionOverride, termBuilderProvider }: ProofTreeEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const state = history.current;
 
@@ -400,8 +402,8 @@ export function ProofTreeEditor({ history, onHistoryChange, registry, goalMapOve
   }, [state, moveCursor]);
 
   const leanCounters = useMemo(
-    () => ({ applySubgoalCount, caseBranchCount, rewriteSideGoalCount }),
-    [applySubgoalCount, caseBranchCount, rewriteSideGoalCount],
+    () => ({ applySubgoalCount, caseBranchCount, rewriteSideGoalCount, lemmaDoc }),
+    [applySubgoalCount, caseBranchCount, rewriteSideGoalCount, lemmaDoc],
   );
   const hypTrayValue = useMemo(
     () => ({ suggestions: hypSuggestions, onSelect: onHypothesisSelect, onApply: handleApplySuggestion }),
@@ -1428,8 +1430,17 @@ const LeanCounters = createContext<{
   /** Branches a split on this scrutinee opens — one per constructor of its
    *  type. `null` when nothing in scope knows. */
   caseBranchCount?: (scrutinee: string) => number | null;
+  /** Doc comment of a file lemma, for reason-style citations. */
+  lemmaDoc?: (name: string) => string | undefined;
   rewriteSideGoalCount?: (name: string) => number;
 }>({});
+
+/** Head identifier of an expression: `divTwoPos ε epsPos` → `divTwoPos`.
+ *  Dotted projections (`limF.eps_delta`) return the dotted name, which has no
+ *  file declaration — so they keep their term form, correctly. */
+function exprHeadName(expr: string): string | undefined {
+  return expr.trim().replace(/^\(+/, '').match(/^[A-Za-z_][A-Za-z0-9_'.]*/)?.[0];
+}
 
 interface NodeViewProps {
   node: ProofNode;
@@ -2291,6 +2302,8 @@ interface ProseViewProps {
   /** Branches a split on this scrutinee opens — one per constructor of its
    *  type. `null` when nothing in scope knows. */
   caseBranchCount?: (scrutinee: string) => number | null;
+  /** Doc comment of a file lemma, for reason-style citations. */
+  lemmaDoc?: (name: string) => string | undefined;
   rewriteSideGoalCount?: (name: string) => number;
   termBuilderProvider?: TermBuilderProvider;
 }
@@ -2427,6 +2440,8 @@ interface ProseItemViewProps {
   /** Branches a split on this scrutinee opens — one per constructor of its
    *  type. `null` when nothing in scope knows. */
   caseBranchCount?: (scrutinee: string) => number | null;
+  /** Doc comment of a file lemma, for reason-style citations. */
+  lemmaDoc?: (name: string) => string | undefined;
   rewriteSideGoalCount?: (name: string) => number;
   termBuilderProvider?: TermBuilderProvider;
 }
@@ -2624,6 +2639,7 @@ function HaveExprBlock({
   onStartEditing,
   onOpenBuilder,
 }: {
+
   editingExpr: boolean;
   exprEditor: React.ReactNode;
   isHole: boolean;
@@ -2633,6 +2649,7 @@ function HaveExprBlock({
   onStartEditing: (e: React.MouseEvent) => void;
   onOpenBuilder: (e: React.MouseEvent) => void;
 }) {
+  const docText = lemmaDocOf(exprHeadName(expr));
   if (isHole) {
     return editingExpr ? (
       <div style={{ paddingLeft: '20px' }}>{exprEditor}</div>
@@ -2657,13 +2674,27 @@ function HaveExprBlock({
     return (
       <div style={{ paddingLeft: '20px', opacity: 0.75 }}>
         <span style={prose}>since{' '}</span>
-        <span
-          onClick={onOpenBuilder}
-          style={{ cursor: 'pointer', borderBottom: '1px dashed rgba(88, 166, 255, 0.4)' }}
-          title="Click to edit expression"
-        >
-          <InlineKaTeX latex={proofLatex} style={{ fontSize: '13px' }} />
-        </span>
+        {docText ? (
+          /* The reason reads as prose; the term is one hover away and the
+             click still opens the builder — display changed, model untouched. */
+          <HoverType typeLatex={proofLatex}>
+            <span
+              onClick={onOpenBuilder}
+              style={{ cursor: 'pointer', borderBottom: '1px dashed rgba(88, 166, 255, 0.4)' }}
+              title="Click to edit expression"
+            >
+              <span style={prose}>{docText}</span>
+            </span>
+          </HoverType>
+        ) : (
+          <span
+            onClick={onOpenBuilder}
+            style={{ cursor: 'pointer', borderBottom: '1px dashed rgba(88, 166, 255, 0.4)' }}
+            title="Click to edit expression"
+          >
+            <InlineKaTeX latex={proofLatex} style={{ fontSize: '13px' }} />
+          </span>
+        )}
         <span style={prose}>.</span>
       </div>
     );
@@ -2813,12 +2844,30 @@ function ApplyLeadFragment({
     return <span style={prose}>This holds {constructorPhrase}</span>;
   }
 
+  // The lemma's /-- doc --/ is the REASON; the identifier demotes to a small
+  // citation tag. Undocumented lemmas keep the name — an honest fallback.
+  const doc = lemmaDocOf(theoremName);
+  if (doc) {
+    return (
+      <>
+        <span style={prose}>This holds by {doc}</span>
+        <span style={{ color: '#484f58', fontSize: '10px', marginLeft: '5px' }}>[{theoremName}]</span>
+      </>
+    );
+  }
   return (
     <>
       <span style={prose}>This holds by{' '}</span>
       <InlineProseName name={theoremName ?? ''} />
     </>
   );
+}
+
+/** Doc for a lemma name via the counters context (hook-shaped helper). */
+function lemmaDocOf(name: string | undefined): string | undefined {
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const counters = useContext(LeanCounters);
+  return name ? counters.lemmaDoc?.(name) : undefined;
 }
 
 function UnfoldProseItem({
@@ -3109,16 +3158,29 @@ function ExactProseItem({
   mustShowPrefix: GoalPrefixRenderer;
 }) {
   const description = describeExactProse(kind);
+  // For a VALUE exact the term IS the content (never swap it for a doc);
+  // for a proof, the head lemma's doc is the reason a paper would give.
+  const exactDoc = kind.isValueType ? undefined : lemmaDocOf(exprHeadName(kind.exprLatex));
 
   return (
     <ProseRow rowStyle={rowStyle} rowHandlers={rowHandlers} deleteBtn={deleteBtn}>
       {mustShowPrefix(kind.goalLatex, kind.isValueType)}
       {description.mode === 'solved' ? (
+        exactDoc ? (
+          <>
+            <span style={prose}>{kind.isValueType ? 'Take' : 'This follows:'}{' '}</span>
+            <HoverType typeLatex={description.displayLatex}>
+              <span style={{ ...prose, borderBottom: '1px dashed rgba(139, 148, 158, 0.4)' }}>{exactDoc}</span>
+            </HoverType>
+            <span style={prose}>.</span>
+          </>
+        ) : (
         <>
           <span style={prose}>{description.lead}{' '}</span>
           <InlineKaTeX latex={description.displayLatex} style={{ fontSize: '13px' }} />
           <span style={prose}>.</span>
         </>
+        )
       ) : description.mode === 'error' ? (
         <>
           <span style={{ color: '#f85149' }}>By{' '}</span>
@@ -4102,6 +4164,8 @@ interface HoleProseViewProps {
   /** Branches a split on this scrutinee opens — one per constructor of its
    *  type. `null` when nothing in scope knows. */
   caseBranchCount?: (scrutinee: string) => number | null;
+  /** Doc comment of a file lemma, for reason-style citations. */
+  lemmaDoc?: (name: string) => string | undefined;
   rewriteSideGoalCount?: (name: string) => number;
   termBuilderProvider?: TermBuilderProvider;
 }

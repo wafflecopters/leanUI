@@ -93,6 +93,8 @@ export type TaggedText =
 /** A top-level declaration the user wrote. */
 export interface LeanDeclaration {
   name: string;
+  /** The /-- doc comment --/, when the author wrote one. */
+  doc?: string;
   kind: 'def' | 'theorem' | 'inductive' | 'axiom' | 'opaque';
   prettyType: string;
   /** Tagged pretty-print of the type, for the WYSIWYG math editor. */

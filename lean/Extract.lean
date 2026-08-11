@@ -409,8 +409,13 @@ unsafe def analyzeFile (cache : EnvCache) (path : String) : IO Json := do
             unless bodyRed.hasAnyFVar (· == a.fvarId!) do
               goalsLeft := goalsLeft + 1
           pure (ch, isInd, ctorCount, heads, goalsLeft)
+      -- The declaration's /-- doc comment --/: the REASON a paper gives where
+      -- a justification cites this lemma ("the triangle inequality"), with the
+      -- term itself demoted to hover detail.
+      let doc ← findDocString? (← getEnv) declName
       let mut fields : List (String × Json) :=
         [("name", Json.str declName.toString),
+         ("doc", match doc with | some d => Json.str d.trimAscii.toString | none => Json.null),
          ("kind", Json.str kindStr),
          ("prettyType", Json.str prettyType),
          ("typeTagged", typeTagged),
