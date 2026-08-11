@@ -10,6 +10,7 @@
 import { ProofNode, ProofNodeId, CaseNode, ExactNode } from './proof-tree';
 import { NodeGoalInfo, TypedHypothesis } from './goal-types';
 import { renderNameLatex } from './name-latex';
+import { splitAnonTuple } from './prose-row-helpers';
 
 /** Walk a byProof subtree to extract the proof expression string.
  *  Typically this is a single `exact` node, possibly under intros. */
@@ -106,7 +107,19 @@ export type ProseItemKind =
         isCases?: boolean;
       };
     }
-  | { tag: 'exact'; exprLatex: string; solved: boolean; goalLatex?: string; error?: string; proofExprLatex?: string; isValueType?: boolean; repeatedGoal?: boolean }
+  | {
+      tag: 'exact';
+      exprLatex: string;
+      solved: boolean;
+      goalLatex?: string;
+      error?: string;
+      proofExprLatex?: string;
+      isValueType?: boolean;
+      repeatedGoal?: boolean;
+      /** For ⟨tuple⟩ exacts: each component's INSTANTIATED type when the
+       *  component is a hypothesis in scope — what a hover shows. */
+      componentTypes?: readonly (string | null)[];
+    }
   | { tag: 'hole'; goalLatex?: string; isValueType?: boolean; solved?: boolean; repeatedGoal?: boolean }
   | { tag: 'simp'; lemmas: readonly string[]; stepCount: number; preGoalLatex?: string; goalLatex?: string; error?: string }
   | { tag: 'have'; name: string; expr: string; typeLatex?: string; proofExprLatex?: string; preGoalLatex?: string; goalLatex?: string; error?: string; hasProofTree?: boolean }
@@ -336,7 +349,17 @@ export function generateProofProse(
         // Error from the TT validator (validation) OR the Lean round-trip
         // (tacticError) — so a failing `exact` shows red in the structured editor.
         const error = (info?.validation?.status === 'error' ? info.validation.message : undefined) ?? info?.tacticError;
-        emit(node.id, depth, { tag: 'exact', exprLatex: node.expr, solved, goalLatex: info?.goalLatex, error, proofExprLatex: info?.proofExprLatex, isValueType: info?.isValueType });
+        // Tuple components that are hypotheses in scope carry their
+        // instantiated types, so the witness row can show "h : [] spans W"
+        // on hover — Lean's answer, not a lookup of the general statement.
+        const parts = splitAnonTuple(node.expr);
+        const hypTypes = new Map((info?.hypotheses ?? []).map((h) => [h.name, h.type]));
+        const componentTypes = parts?.map((c) => hypTypes.get(c.trim()) ?? null);
+        emit(node.id, depth, {
+          tag: 'exact', exprLatex: node.expr, solved, goalLatex: info?.goalLatex, error,
+          proofExprLatex: info?.proofExprLatex, isValueType: info?.isValueType,
+          ...(componentTypes?.some((t) => t !== null) ? { componentTypes } : {}),
+        });
         if (solved) {
           emit(node.id, depth, { tag: 'qed' });
         }

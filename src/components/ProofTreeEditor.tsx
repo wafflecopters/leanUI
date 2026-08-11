@@ -3303,12 +3303,23 @@ function ExactProseItem({
         <span style={prose}>Take{' '}</span>
         <InlineKaTeX latex={`${texNameForProse(existsBinder)} := ${textToLatex(tupleParts[0])}`} style={{ fontSize: '13px' }} />
         <span style={prose}>{' '}with{' '}</span>
-        {proofs.map((c, i) => (
+        {proofs.map((c, i) => {
+          const t = kind.componentTypes?.[i + 1] ?? undefined;
+          return (
           <React.Fragment key={i}>
             {i > 0 && <span style={prose}>{i === proofs.length - 1 ? ' and ' : ', '}</span>}
-            <InlineKaTeX latex={textToLatex(c)} style={{ fontSize: '13px' }} />
+            {t ? (
+              <HoverType typeLatex={t}>
+                <span style={{ borderBottom: '1px dotted rgba(139, 148, 158, 0.4)' }}>
+                  <InlineKaTeX latex={textToLatex(c)} style={{ fontSize: '13px' }} />
+                </span>
+              </HoverType>
+            ) : (
+              <InlineKaTeX latex={textToLatex(c)} style={{ fontSize: '13px' }} />
+            )}
           </React.Fragment>
-        ))}
+          );
+        })}
         <span style={prose}>.</span>
       </ProseRow>
     );
