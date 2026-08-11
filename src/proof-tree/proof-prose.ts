@@ -111,7 +111,15 @@ export type ProseItemKind =
   | { tag: 'simp'; lemmas: readonly string[]; stepCount: number; preGoalLatex?: string; goalLatex?: string; error?: string }
   | { tag: 'have'; name: string; expr: string; typeLatex?: string; proofExprLatex?: string; preGoalLatex?: string; goalLatex?: string; error?: string; hasProofTree?: boolean }
   | { tag: 'suffices'; name: string; goalLatex?: string; byExprLatex?: string }
-  | { tag: 'subgoalHeader'; label: string; goalLatex?: string; isValueType?: boolean }
+  | {
+      tag: 'subgoalHeader';
+      label: string;
+      goalLatex?: string;
+      isValueType?: boolean;
+      /** The ONLY remaining obligation after value branches folded away —
+       *  reads "It remains to show …", with no "Goal N:" tag. */
+      remaining?: boolean;
+    }
   | { tag: 'calcChain'; preGoalLatex?: string; steps: readonly CalcChainStep[] }
   | { tag: 'qed' };
 
@@ -303,8 +311,8 @@ export function generateProofProse(
   const initialNames = new Set((goalMap.get(root.id)?.hypotheses ?? []).map((h) => h.name));
 
   /** Walk a proof branch with a labeled header, indented content. */
-  function walkBranch(parentId: ProofNodeId, label: string, goalLatex: string | undefined, body: ProofNode, depth: number, isValueType?: boolean): void {
-    emit(parentId, depth, { tag: 'subgoalHeader', label, goalLatex, isValueType });
+  function walkBranch(parentId: ProofNodeId, label: string, goalLatex: string | undefined, body: ProofNode, depth: number, isValueType?: boolean, remaining?: boolean): void {
+    emit(parentId, depth, { tag: 'subgoalHeader', label, goalLatex, isValueType, ...(remaining ? { remaining: true } : {}) });
     walk(body, depth + 1);
   }
 
@@ -485,11 +493,42 @@ export function generateProofProse(
           emit(node.id, depth, { tag: 'qed' });
         }
         if (node.children.length > 1) {
-          // Multiple subgoals: use labeled branches with indentation
+          // A VALUE branch already answered by a one-line exact is a CHOICE,
+          // not a subgoal: it folds to "Take ⟨v⟩." with no Goal-N scaffolding
+          // ("Goal 1: We must choose a value of type ℝ. By δ_F." was the
+          // reviewer's #5). The remaining branches renumber; when only one is
+          // left it reads "It remains to show …".
+          const folded: boolean[] = node.children.map((child) => {
+            const ci = goalMap.get(child.id);
+            return ci?.isValueType === true && child.tag === 'exact';
+          });
+          const kept = folded.filter((f) => !f).length;
+          let shown = 0;
           for (let i = 0; i < node.children.length; i++) {
             const child = node.children[i];
             const childInfo = goalMap.get(child.id);
-            walkBranch(node.id, `Goal ${i + 1}`, childInfo?.goalLatex, child, depth, childInfo?.isValueType);
+            if (folded[i]) {
+              // The choice itself, one line, no goal restatement.
+              const c = child as ExactNode;
+              emit(child.id, depth + 1, {
+                tag: 'exact',
+                exprLatex: c.expr,
+                solved: true,
+                isValueType: true,
+                proofExprLatex: childInfo?.proofExprLatex,
+              });
+              continue;
+            }
+            shown++;
+            walkBranch(
+              node.id,
+              kept === 1 ? '' : `Goal ${shown}`,
+              childInfo?.goalLatex,
+              child,
+              depth,
+              childInfo?.isValueType,
+              kept === 1,
+            );
           }
         } else {
           // Single subgoal: stay at same depth to avoid progressive indentation

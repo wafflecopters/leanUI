@@ -754,3 +754,39 @@ describe('choose-merge (have + obtain of its name)', () => {
     expect(items[0].kind.tag).toBe('have');
   });
 });
+
+describe('value branches fold to Take rows (suffices voice)', () => {
+  test('a solved value exact branch loses its Goal-N scaffolding; the rest reads "remains"', () => {
+    const valueExact: ProofNode = { tag: 'exact', id: 10, expr: 'deltaF' };
+    const restHole: ProofNode = { tag: 'hole', id: 11 };
+    const apply: ProofNode = {
+      tag: 'apply', id: 1, name: 'constructor', children: [valueExact, restHole], isConstructor: true,
+    } as never;
+    const goalMap = new Map<number, any>([
+      [10, { goalLatex: 'ℝ', hypotheses: [], isValueType: true }],
+      [11, { goalLatex: 'W(δ_F)', hypotheses: [] }],
+    ]);
+    const items = generateProofProse(apply, 11, goalMap as any);
+    const tags = items.map((i) => i.kind.tag);
+    // apply header, the Take row (exact), the sole remaining header, hole.
+    expect(tags).toEqual(['apply', 'exact', 'subgoalHeader', 'hole']);
+    expect((items[1].kind as any).isValueType).toBe(true);
+    expect((items[1].kind as any).solved).toBe(true);
+    expect((items[2].kind as any).remaining).toBe(true);
+    expect((items[2].kind as any).label).toBe('');
+  });
+
+  test('two REAL subgoals keep their Goal-N labels', () => {
+    const h1: ProofNode = { tag: 'hole', id: 10 };
+    const h2: ProofNode = { tag: 'hole', id: 11 };
+    const apply: ProofNode = { tag: 'apply', id: 1, name: 'divPos', children: [h1, h2] } as never;
+    const goalMap = new Map<number, any>([
+      [10, { goalLatex: '0 < ε', hypotheses: [] }],
+      [11, { goalLatex: '0 < 2', hypotheses: [] }],
+    ]);
+    const items = generateProofProse(apply, 10, goalMap as any);
+    const headers = items.filter((i) => i.kind.tag === 'subgoalHeader');
+    expect(headers.map((h) => (h.kind as any).label)).toEqual(['Goal 1', 'Goal 2']);
+    expect(headers.every((h) => !(h.kind as any).remaining)).toBe(true);
+  });
+});

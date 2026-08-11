@@ -3071,7 +3071,7 @@ function ApplyProseItem({
         </>
       )}
       {errorSuffix}
-      <span style={prose}>, after showing {applyDescription.subgoals.length} subgoals:</span>
+      <span style={prose}>{applyDescription.subgoals.length > 2 ? `, after showing ${applyDescription.subgoals.length} subgoals:` : ':'}</span>
     </ProseRow>
   );
 }
@@ -3359,6 +3359,29 @@ function SubgoalHeaderProseItem({
   expand?: boolean;
 }) {
   const goalLead = buildProseGoalLead(kind.goalLatex, kind.isValueType, undefined, expand);
+  if (kind.remaining) {
+    return (
+      <div style={{ ...rowStyle, paddingTop: '4px' }} {...rowHandlers}>
+        {goalLead ? (
+          <>
+            <span style={prose}>It remains to show{goalLead.inline ? ' ' : ''}</span>
+            {goalLead.inline ? (
+              <>
+                <InlineKaTeX latex={goalLead.goalLatex} style={{ fontSize: '13px' }} />
+                <span style={prose}>.</span>
+              </>
+            ) : (
+              <span style={eqBlockStyle}>
+                <InlineKaTeX latex={goalLead.goalLatex} displayMode />
+              </span>
+            )}
+          </>
+        ) : (
+          <span style={prose}>It remains to verify the choice.</span>
+        )}
+      </div>
+    );
+  }
   return (
     <div style={{ ...rowStyle, fontWeight: 600, paddingTop: '6px' }} {...rowHandlers}>
       <span style={{ color: '#79c0ff' }}>{kind.label}</span>
