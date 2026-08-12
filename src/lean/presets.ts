@@ -2486,6 +2486,360 @@ theorem shiftLt (a b c : ℝ) (h : a < b) : a + c < b + c := by
   sorry
 `;
 
+const GROUP_THEORY = `-- Group Theory (from scratch): finite groups as element lists, subgroups,
+-- cosets, and Lagrange's theorem — the order of a subgroup divides the order
+-- of the group. NO Mathlib; the counting arguments live in library lemmas so
+-- the MAIN proofs stay in the renderable subset.
+
+-- ============ groups ============
+
+structure MyGroup where
+  carrier : Type
+  mul : carrier → carrier → carrier
+  one : carrier
+  inv : carrier → carrier
+  mulAssoc : ∀ a b c, mul (mul a b) c = mul a (mul b c)
+  oneMul : ∀ a, mul one a = a
+  invMul : ∀ a, mul (inv a) a = one
+  deq : DecidableEq carrier
+
+instance (G : MyGroup) : DecidableEq G.carrier := G.deq
+
+namespace MyGroup
+
+variable {G : MyGroup}
+
+-- Derived one-sided identities/inverses (the usual exercises).
+theorem mulInv (a : G.carrier) : G.mul a (G.inv a) = G.one := by
+  have hx : G.mul (G.mul a (G.inv a)) (G.mul a (G.inv a)) = G.mul a (G.inv a) := by
+    rw [G.mulAssoc, ← G.mulAssoc (G.inv a), G.invMul, G.oneMul]
+  have h := congrArg (G.mul (G.inv (G.mul a (G.inv a)))) hx
+  rw [← G.mulAssoc, G.invMul, G.oneMul] at h
+  exact h
+
+theorem mulOne (a : G.carrier) : G.mul a G.one = a := by
+  rw [← G.invMul a, ← G.mulAssoc, mulInv, G.oneMul]
+
+theorem mulLeftCancel {a b c : G.carrier} (h : G.mul a b = G.mul a c) : b = c := by
+  have h2 := congrArg (G.mul (G.inv a)) h
+  rw [← G.mulAssoc, ← G.mulAssoc, G.invMul, G.oneMul, G.oneMul] at h2
+  exact h2
+
+theorem invInv (a : G.carrier) : G.inv (G.inv a) = a := by
+  apply mulLeftCancel (a := G.inv a)
+  rw [mulInv, G.invMul]
+
+theorem invMulRev (a b : G.carrier) :
+    G.inv (G.mul a b) = G.mul (G.inv b) (G.inv a) := by
+  apply mulLeftCancel (a := G.mul a b)
+  rw [mulInv, G.mulAssoc, ← G.mulAssoc b, mulInv, G.oneMul, mulInv]
+
+end MyGroup
+
+-- Prose notation: group elements read as mathematics — a * b, a⁻¹, 1 — while
+-- Nat's own * stays untouched (instances are per-carrier, not global syntax).
+instance {G : MyGroup} : Mul G.carrier := ⟨G.mul⟩
+instance {G : MyGroup} : OfNat G.carrier 1 := ⟨G.one⟩
+@[reducible] def ginv {G : MyGroup} (a : G.carrier) : G.carrier := G.inv a
+postfix:max "⁻¹" => ginv
+
+@[app_unexpander MyGroup.mul] def unexpGroupMul : Lean.PrettyPrinter.Unexpander
+  | \`($_ $_G $a $b) => \`($a * $b)
+  | _ => throw ()
+@[app_unexpander MyGroup.inv] def unexpGroupInv : Lean.PrettyPrinter.Unexpander
+  | \`($_ $_G $a) => \`($a⁻¹)
+  | _ => throw ()
+@[app_unexpander MyGroup.one] def unexpGroupOne : Lean.PrettyPrinter.Unexpander
+  | \`($_ $_G) => \`(1)
+  | _ => throw ()
+
+-- ============ list library (what Finset would give us) ============
+
+-- Counting distinct elements: a list with no duplicates. (Core Lean has
+-- List.Nodup but few lemmas about it without Mathlib — we prove what we use.)
+
+/-- injectivity keeping an absent element absent -/
+theorem notMemMap {α β : Type} {f : α → β}
+    (inj : ∀ x y, f x = f y → x = y) {a : α} {l : List α}
+    (h : a ∉ l) : f a ∉ l.map f := by
+  intro hmem
+  rw [List.mem_map] at hmem
+  obtain ⟨b, hb, hfb⟩ := hmem
+  have hba := inj b a hfb
+  rw [hba] at hb
+  exact h hb
+
+/-- an injective map preserving distinctness -/
+theorem nodupMap {α β : Type} {f : α → β}
+    (inj : ∀ x y, f x = f y → x = y) :
+    ∀ {l : List α}, l.Nodup → (l.map f).Nodup := by
+  intro l
+  induction l with
+  | nil => intro _; exact List.nodup_nil
+  | cons a t ih =>
+    intro h
+    rw [List.nodup_cons] at h
+    rw [List.map_cons, List.nodup_cons]
+    exact ⟨notMemMap inj h.1, ih h.2⟩
+
+-- Two nodup lists with the same members have the same length: the bijection
+-- a paper would not even bother to mention. Proved by induction with erase.
+/-- two distinct-element lists with the same members having the same length -/
+theorem lengthEqOfSameMem {α : Type} [DecidableEq α] :
+    ∀ (l1 l2 : List α), l1.Nodup → l2.Nodup → (∀ x, x ∈ l1 ↔ x ∈ l2) →
+      l1.length = l2.length := by
+  intro l1
+  induction l1 with
+  | nil =>
+    intro l2 _ _ hiff
+    cases l2 with
+    | nil => rfl
+    | cons b t =>
+      exact absurd ((hiff b).2 (List.mem_cons_self)) (List.not_mem_nil)
+  | cons a t ih =>
+    intro l2 h1 h2 hiff
+    rw [List.nodup_cons] at h1
+    have ha2 : a ∈ l2 := (hiff a).1 (List.mem_cons_self)
+    have herase : (l2.erase a).length = l2.length - 1 := List.length_erase_of_mem ha2
+    have hlen2 : l2.length = (l2.erase a).length + 1 := by
+      rw [herase]
+      have hpos : 0 < l2.length := List.length_pos_of_mem ha2
+      omega
+    rw [List.length_cons, hlen2]
+    have ht : t.length = (l2.erase a).length := by
+      apply ih (l2.erase a) h1.2 (h2.erase a)
+      intro x
+      constructor
+      · intro hx
+        have hxl2 : x ∈ l2 := (hiff x).1 (List.mem_cons_of_mem a hx)
+        have hxa : x ≠ a := fun he => h1.1 (he ▸ hx)
+        exact (List.mem_erase_of_ne hxa).2 hxl2
+      · intro hx
+        have hxl2 : x ∈ l2 := List.mem_of_mem_erase hx
+        have hxa : x ≠ a := (List.Nodup.mem_erase_iff h2).1 hx |>.1
+        have := (hiff x).2 hxl2
+        cases this with
+        | head => exact absurd rfl hxa
+        | tail _ hxt => exact hxt
+    omega
+
+/-- filtering preserving distinctness -/
+theorem nodupFilter {α : Type} (p : α → Bool) :
+    ∀ {l : List α}, l.Nodup → (l.filter p).Nodup := by
+  intro l
+  induction l with
+  | nil => intro _; exact List.nodup_nil
+  | cons a t ih =>
+    intro h
+    rw [List.nodup_cons] at h
+    cases hpa : p a with
+    | false => rw [List.filter_cons_of_neg (by simp [hpa])]; exact ih h.2
+    | true =>
+      rw [List.filter_cons_of_pos hpa, List.nodup_cons]
+      exact ⟨fun hm => h.1 (List.mem_filter.1 hm).1, ih h.2⟩
+
+/-- a filter and its complement splitting the count -/
+theorem lengthFilterSplit {α : Type} (p : α → Bool) :
+    ∀ (l : List α), (l.filter p).length + (l.filter (fun a => !p a)).length = l.length := by
+  intro l
+  induction l with
+  | nil => rfl
+  | cons a t ih =>
+    cases hpa : p a with
+    | true =>
+      rw [List.filter_cons_of_pos hpa, List.filter_cons_of_neg (by simp [hpa])]
+      simp only [List.length_cons]
+      omega
+    | false =>
+      rw [List.filter_cons_of_neg (by simp [hpa]), List.filter_cons_of_pos (by simp [hpa])]
+      simp only [List.length_cons]
+      omega
+
+/-- strong induction on the length of a list -/
+theorem lengthStrongInduction {α : Type u} {P : List α → Prop}
+    (step : ∀ vs : List α, (∀ ws : List α, ws.length < vs.length → P ws) → P vs) :
+    ∀ vs : List α, P vs := by
+  have aux : ∀ n (vs : List α), vs.length ≤ n → P vs := by
+    intro n
+    induction n with
+    | zero =>
+      intro vs hle
+      exact step vs (fun ws hw => absurd (Nat.lt_of_lt_of_le hw hle) (Nat.not_lt_zero _))
+    | succ n ih =>
+      intro vs hle
+      exact step vs (fun ws hw => ih ws (Nat.le_of_lt_succ (Nat.lt_of_lt_of_le hw hle)))
+  intro vs
+  exact aux vs.length vs (Nat.le_refl _)
+
+-- ============ finite groups, subgroups, cosets ============
+
+structure FiniteGroup extends MyGroup where
+  elems : List carrier
+  elemsNodup : elems.Nodup
+  elemsComplete : ∀ x, x ∈ elems
+
+instance (G : FiniteGroup) : DecidableEq G.carrier := G.deq
+
+/-- the order of a finite group: how many elements it has -/
+def FiniteGroup.order (G : FiniteGroup) : Nat := G.elems.length
+
+structure Subgroup (G : FiniteGroup) where
+  members : List G.carrier
+  membersNodup : members.Nodup
+  oneMem : G.one ∈ members
+  mulMem : ∀ a, a ∈ members → ∀ b, b ∈ members → G.mul a b ∈ members
+  invMem : ∀ a, a ∈ members → G.inv a ∈ members
+
+/-- the order of a subgroup -/
+def Subgroup.order {G : FiniteGroup} (H : Subgroup G) : Nat := H.members.length
+
+/-- the left coset gH: every element of H translated by g -/
+def coset {G : FiniteGroup} (g : G.carrier) (H : Subgroup G) : List G.carrier :=
+  H.members.map (G.mul g)
+
+/-- translation is injective, so a coset has exactly the subgroup's order -/
+theorem cosetOrder {G : FiniteGroup} (g : G.carrier) (H : Subgroup G) :
+    (coset g H).length = H.order := List.length_map ..
+
+theorem cosetNodup {G : FiniteGroup} (g : G.carrier) (H : Subgroup G) :
+    (coset g H).Nodup :=
+  nodupMap (fun _ _ h => MyGroup.mulLeftCancel h) H.membersNodup
+
+/-- x lies in gH exactly when g⁻¹x lies in H -/
+theorem memCoset {G : FiniteGroup} {g x : G.carrier} {H : Subgroup G} :
+    x ∈ coset g H ↔ G.mul (G.inv g) x ∈ H.members := by
+  constructor
+  · intro hx
+    rw [coset, List.mem_map] at hx
+    obtain ⟨h, hh, hgh⟩ := hx
+    rw [← hgh, ← G.mulAssoc, G.invMul, G.oneMul]
+    exact hh
+  · intro hx
+    rw [coset, List.mem_map]
+    refine ⟨G.mul (G.inv g) x, hx, ?_⟩
+    rw [← G.mulAssoc, MyGroup.mulInv, G.oneMul]
+
+-- ============ the counting argument ============
+
+-- A set of elements is SATURATED for H when it contains whole cosets: if it
+-- holds x, it holds everything in xH. The group itself is saturated, and
+-- removing one coset keeps the rest saturated — that is the whole of
+-- Lagrange's theorem.
+def Saturated {G : FiniteGroup} (H : Subgroup G) (r : List G.carrier) : Prop :=
+  ∀ x, x ∈ r → ∀ y, G.mul (G.inv x) y ∈ H.members → y ∈ r
+
+/-- the part of r lying in the coset gH -/
+def cosetPart {G : FiniteGroup} (H : Subgroup G) (g : G.carrier) (r : List G.carrier) : List G.carrier :=
+  r.filter (fun x => decide (G.mul (G.inv g) x ∈ H.members))
+
+/-- what is left of r after removing the coset gH -/
+def rest {G : FiniteGroup} (H : Subgroup G) (g : G.carrier) (r : List G.carrier) : List G.carrier :=
+  r.filter (fun x => !decide (G.mul (G.inv g) x ∈ H.members))
+
+/-- removing a coset splits the count -/
+theorem cosetSplit {G : FiniteGroup} (H : Subgroup G) (g : G.carrier) (r : List G.carrier) :
+    r.length = (cosetPart H g r).length + (rest H g r).length :=
+  (lengthFilterSplit _ r).symm
+
+/-- in a saturated set, the part lying in gH is ALL of gH — order H many -/
+theorem cosetPartOrder {G : FiniteGroup} (H : Subgroup G) {g : G.carrier} {r : List G.carrier}
+    (hnd : r.Nodup) (hg : g ∈ r) (hsat : Saturated H r) :
+    (cosetPart H g r).length = H.order := by
+  rw [← cosetOrder g H]
+  apply lengthEqOfSameMem _ _ (nodupFilter _ hnd) (cosetNodup g H)
+  intro x
+  rw [memCoset]
+  rw [List.mem_filter]
+  constructor
+  · intro ⟨_, hx⟩
+    exact of_decide_eq_true hx
+  · intro hx
+    exact ⟨hsat g hg x hx, decide_eq_true hx⟩
+
+/-- distinctness surviving the removal -/
+theorem restNodup {G : FiniteGroup} (H : Subgroup G) (g : G.carrier) {r : List G.carrier}
+    (hnd : r.Nodup) : (rest H g r).Nodup := nodupFilter _ hnd
+
+/-- membership in the rest, unfolded -/
+theorem memRest {G : FiniteGroup} {H : Subgroup G} {g x : G.carrier} {r : List G.carrier} :
+    x ∈ rest H g r ↔ x ∈ r ∧ ¬ G.mul (G.inv g) x ∈ H.members := by
+  unfold rest
+  rw [List.mem_filter]
+  constructor
+  · intro ⟨hr, hx⟩
+    refine ⟨hr, ?_⟩
+    intro hmem
+    simp [decide_eq_true hmem] at hx
+  · intro ⟨hr, hx⟩
+    refine ⟨hr, ?_⟩
+    simp [decide_eq_false hx]
+
+/-- removing a whole coset keeps the remainder saturated: two elements of one
+    coset see the same cosets -/
+theorem restSaturated {G : FiniteGroup} (H : Subgroup G) (g : G.carrier) {r : List G.carrier}
+    (hsat : Saturated H r) : Saturated H (rest H g r) := by
+  intro x hx y hy
+  rw [memRest] at hx
+  rw [memRest]
+  refine ⟨hsat x hx.1 y hy, ?_⟩
+  intro hgy
+  apply hx.2
+  -- g⁻¹x = (g⁻¹y)(y⁻¹x), both factors in H
+  have hyx : G.mul (G.inv y) x ∈ H.members := by
+    have := H.invMem _ hy
+    rw [MyGroup.invMulRev, MyGroup.invInv] at this
+    exact this
+  have hprod := H.mulMem _ hgy _ hyx
+  rw [G.mulAssoc, ← G.mulAssoc y (G.inv y) x, MyGroup.mulInv, G.oneMul] at hprod
+  exact hprod
+
+/-- the coset we removed was not empty (g itself is in it), so the rest is
+    strictly smaller -/
+theorem restShorter {G : FiniteGroup} (H : Subgroup G) {g : G.carrier} {r : List G.carrier}
+    (hg : g ∈ r) : (rest H g r).length < r.length := by
+  have hsplit := cosetSplit H g r
+  have hgpart : g ∈ cosetPart H g r := by
+    rw [cosetPart, List.mem_filter]
+    refine ⟨hg, decide_eq_true ?_⟩
+    rw [G.invMul]
+    exact H.oneMem
+  have hpos : 0 < (cosetPart H g r).length := List.length_pos_of_mem hgpart
+  omega
+
+/-- a list is empty or has a member -/
+theorem emptyOrMem {α : Type} : ∀ l : List α, l = [] ∨ ∃ x, x ∈ l := by
+  intro l
+  cases l with
+  | nil => exact Or.inl rfl
+  | cons a t => exact Or.inr ⟨a, List.mem_cons_self⟩
+
+-- ============ Lagrange ============
+
+/-- counting a saturated set: always a multiple of the order of H -/
+theorem lagrangeAux {G : FiniteGroup} (H : Subgroup G) :
+    ∀ r : List G.carrier, r.Nodup → Saturated H r → ∃ k, r.length = k * H.order := by
+  apply lengthStrongInduction
+  intro r ih hnd hsat
+  cases emptyOrMem r with
+  | inl hempty =>
+    exact ⟨0, by rw [hempty, Nat.zero_mul]; rfl⟩
+  | inr hmem =>
+    obtain ⟨g, hg⟩ := hmem
+    obtain ⟨k, hk⟩ := ih (rest H g r) (restShorter H hg) (restNodup H g hnd) (restSaturated H g hsat)
+    have hsplit : r.length = (cosetPart H g r).length + (rest H g r).length := cosetSplit H g r
+    have hpart : (cosetPart H g r).length = H.order := cosetPartOrder H hnd hg hsat
+    exact ⟨k + 1, by rw [hsplit, hpart, hk, Nat.succ_mul, Nat.add_comm]⟩
+
+/-- the whole group being saturated: it contains everything -/
+theorem fullSaturated {G : FiniteGroup} (H : Subgroup G) : Saturated H G.elems :=
+  fun _ _ y _ => G.elemsComplete y
+
+/-- LAGRANGE: the order of a subgroup divides the order of the group -/
+theorem lagrange {G : FiniteGroup} (H : Subgroup G) : H.order ∣ G.order := by
+  obtain ⟨k, hk⟩ := lagrangeAux H G.elems G.elemsNodup (fullSaturated H)
+  exact ⟨k, by show G.elems.length = H.order * k; rw [hk, Nat.mul_comm]⟩
+`;
+
 export const LEAN_PRESETS: LeanPreset[] = [
   { name: 'Basics', code: BASICS },
   { name: 'Induction', code: INDUCTION },
@@ -2496,6 +2850,7 @@ export const LEAN_PRESETS: LeanPreset[] = [
   { name: 'Peano (record)', code: PEANO },
   { name: 'Real Analysis (chain rule)', code: REAL_ANALYSIS },
   { name: 'Vector Spaces (basis)', code: VECTOR_SPACE },
+  { name: 'Group Theory (Lagrange)', code: GROUP_THEORY },
   { name: 'Mathlib (∑, ring)', code: MATHLIB, mathlib: true },
 ];
 

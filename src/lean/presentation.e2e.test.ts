@@ -186,12 +186,45 @@ describe('basisExists reads like mathematics', () => {
   });
 });
 
+describe('lagrange reads like mathematics', () => {
+  let items: ProseItem[];
+  beforeAll(async () => {
+    items = await proseFor('Group Theory (Lagrange)', 'lagrangeAux');
+  }, 10 * MIN);
+
+  test('the spine is strong induction on length — same house style as basisExists', () => {
+    const spine = items.find((i) => i.kind.tag === 'apply' && (i.kind as { name?: string }).name === 'lengthStrongInduction');
+    expect(spine).toBeDefined();
+  });
+
+  test('the empty-or-inhabited split reads by meaning', () => {
+    const header = items.find((i) => (i.kind as { caseMeanings?: string[] }).caseMeanings);
+    expect(header).toBeDefined();
+  });
+
+  test('group notation shows: no raw MyGroup.mul/inv/one in the prose', () => {
+    for (const i of items) {
+      expect(latexOf(i)).not.toContain('MyGroup');
+    }
+  });
+
+  test('no daggered names anywhere the reader looks', () => {
+    expectNoDaggers(items);
+  });
+
+  test('the divisibility corollary also round-trips clean', async () => {
+    const r = await sessionProse('Group Theory (Lagrange)', 'lagrange');
+    expect(r.errors).toEqual([]);
+  }, 10 * MIN);
+});
+
 describe('citations have reasons to cite', () => {
   test('the justification lemmas of all three proofs carry doc comments', async () => {
     for (const [preset, names] of [
       ['Real Analysis (chain rule)', ['divTwoPos', 'ltLeTrans', 'absTriangle', 'convertEps', 'addLtBoth', 'leTotal']],
       ['Nat Math (from scratch)', ['summationSplit', 'mulDistribLeft']],
       ['Vector Spaces (basis)', ['spanDrop', 'lengthDropLt', 'lengthStrongInduction', 'independentOrDependent', 'nilIndependent']],
+      ['Group Theory (Lagrange)', ['cosetSplit', 'cosetPartOrder', 'restShorter', 'restSaturated', 'lengthStrongInduction', 'emptyOrMem', 'fullSaturated']],
     ] as const) {
       const p = LEAN_PRESETS.find((x) => x.name === preset)!;
       const base = await analyzeLeanSource(p.code, { timeoutMs: 10 * MIN });
