@@ -280,3 +280,47 @@ describe('leanTacticsToTree', () => {
     }
   });
 });
+
+describe('wrapped tactics are ONE tactic', () => {
+  test('a have whose term is on the next line keeps its proof', () => {
+    // Lean's own style breaks a long `have h : T :=` before the term. Treating
+    // the term as its own tactic line dropped the proof AND swallowed every
+    // later tactic into the resulting hole: quotMulDescends read as unproved
+    // in the editor while Lean considered it fine.
+    const tree = leanTacticsToTree([
+      'unfold CosetEq',
+      'have hprod : G.mul a b ∈ N.members :=',
+      '  N.mulMem _ hconj _ hcd',
+      'rw [quotRegroup]',
+      'exact hprod',
+    ].join('\n'));
+    const printed = proofTreeToSource(tree);
+    expect(printed).toContain('N.mulMem _ hconj _ hcd');
+    expect(printed).not.toContain('sorry');
+    expect(printed).toContain('exact hprod');
+  });
+
+  test('an unbalanced bracket also continues the line', () => {
+    const tree = leanTacticsToTree([
+      'exact foo (bar',
+      '  baz)',
+      'exact done',
+    ].join('\n'));
+    const printed = proofTreeToSource(tree);
+    expect(printed).toContain('foo (bar baz)');
+    expect(printed).not.toContain('sorry');
+  });
+
+  test('`have … := by` is NOT a continuation — its body stays an indented block', () => {
+    const tree = leanTacticsToTree([
+      'have h : A = B := by',
+      '  rfl',
+      'exact h',
+    ].join('\n'));
+    const printed = proofTreeToSource(tree);
+    expect(printed).toContain(':= by');
+    expect(printed).toContain('rfl');
+    expect(printed).toContain('exact h');
+  });
+});
+

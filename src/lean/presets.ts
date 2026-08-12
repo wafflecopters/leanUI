@@ -3541,13 +3541,17 @@ def vandProd {R : Real} : (n : Nat) → (x : Fin n → Carrier R) → Carrier R
       (vandProd n (fun i => x i.succ))
 
 /-- VANDERMONDE: det V = ∏_{i<j} (x_j − x_i) -/
-def vandermondeIdentity {R : Real} : (n : Nat) → (x : Fin n → Carrier R) →
-    (det n (vandermonde x)) = (vandProd n x)
-  | .zero, _ => rfl
-  | .succ n, x =>
-    eqTrans (vandermondeRecursion x)
-      (eqCong (fun z => rmul (finProd n (fun i => rsub (x i.succ) (x fin0))) z)
-        (vandermondeIdentity n (fun i => x i.succ)))
+theorem vandermondeIdentity {R : Real} : ∀ (n : Nat) (x : Fin n → Carrier R),
+    (det n (vandermonde x)) = (vandProd n x) := by
+  intro n
+  induction n with
+  | zero =>
+    intro x
+    rfl
+  | succ n ih =>
+    intro x
+    rw [vandermondeRecursion x, ih (fun i => x i.succ)]
+    rfl
 
 #check @vandermondeIdentity
 

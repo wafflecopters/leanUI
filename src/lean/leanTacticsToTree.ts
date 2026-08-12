@@ -33,13 +33,44 @@ interface Line {
   text: string;
 }
 
+/**
+ * Is this text an UNFINISHED tactic — one whose term continues on the next
+ * line? Two signals, both unambiguous in Lean's tactic syntax: a trailing
+ * `:=` (the term it binds has not been written yet), and unbalanced opening
+ * brackets. Note `have h : T := by` is FINISHED by this rule — it ends with
+ * `by` and its body is a genuine indented block, which must stay separate.
+ */
+function continuesOnNextLine(text: string): boolean {
+  if (/:=\s*$/.test(text)) return true;
+  let depth = 0;
+  let inStr = false;
+  for (const ch of text) {
+    if (ch === '"') inStr = !inStr;
+    if (inStr) continue;
+    if ('([{⟨'.includes(ch)) depth++;
+    else if (')]}⟩'.includes(ch)) depth--;
+  }
+  return depth > 0;
+}
+
 function lex(block: string): Line[] {
   const out: Line[] = [];
   for (const raw of block.split('\n')) {
     const trimmedEnd = raw.replace(/\s+$/, '');
     if (trimmedEnd.trim() === '') continue; // skip blank lines
     const indent = trimmedEnd.length - trimmedEnd.trimStart().length;
-    out.push({ indent, text: trimmedEnd.trim() });
+    const text = trimmedEnd.trim();
+    // A wrapped tactic is ONE tactic. Lean's own source style breaks a long
+    // `have h : T :=` before its term, and treating the term as its own line
+    // silently dropped it — the have became a hole and every later tactic was
+    // swallowed into the resulting `sorry` (quotMulDescends read as unproved
+    // while Lean considered it fine).
+    const prev = out[out.length - 1];
+    if (prev && continuesOnNextLine(prev.text)) {
+      prev.text = `${prev.text} ${text}`;
+      continue;
+    }
+    out.push({ indent, text });
   }
   return out;
 }
