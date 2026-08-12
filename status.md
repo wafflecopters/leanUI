@@ -35,7 +35,22 @@ The proof editor is a **headless controller with a thin UI on top**, not a React
 - Layers, each independently testable: `candidates` (what's worth trying) → `discover` (what Lean's own search finds) → `validate` (what actually works, + previews) → `actions` (what's possible) → `session` (state + dispatch). `useProofSession` is the entire React surface.
 - **Tests:** `npm test` is the fast gate (~1s since M5 removed the TT compiler suites; excludes `*.e2e.test.ts`); `npm run test:e2e` runs the real-Lean suites — **file-serial** (`fileParallelism: false` under `E2E=1`), because each e2e file's fork spawns its own Lean worker pool and a Mathlib-loaded pool is multiple GB. Mathlib e2e runs are expensive by nature: expect one ~5–7GB resident Lean process while they run — always launch them through `scripts/guarded-run.sh -l 14 --`, which kills the process tree if it passes the limit.
 
-## Current Focus (loop: adversarial-review fixes + six new showcase proofs)
+## Current Focus (all six requested proofs are DONE; polish + editability next)
+- **All six proofs land, none sorried.** (a) Lagrange, (b) quotient groups,
+  (c) Fubini, (d) rearrangement (finite), (e) Jacobian, (f) Vandermonde's
+  determinant identity. Four new presets: Group Theory (Lagrange),
+  Multivariable (Jacobian), Determinants (Vandermonde), plus Fubini and
+  rearrangement inside Nat Math. Battery at 27.
+- **Next**: editability sweep for the new presets — the Group/Jacobian MAIN
+  theorems round-trip clean, but the determinant development is library-style
+  (funext/by_cases/unfold, outside the renderable subset). Decide which
+  Vandermonde theorem is the user-facing editable one and reshape it, the way
+  basisExistsAux and jacobianEntries were reshaped.
+- **Next**: wire `src/lean/matrixDisplay.ts` into the prose renderer so a
+  matrix-valued goal DISPLAYS as its grid (the model and its Vandermonde
+  acceptance tests exist; nothing consumes it yet).
+
+## Previous Focus (loop: adversarial-review fixes + six new showcase proofs)
 - Working the three-proof adversarial review (2026-08-12): remaining items are the
   induction-principle schema display (suppress the step-premise wall in basisExists),
   IH-as-Let-condition folding, InSpan prose notation (v ∈ span(vs)), Either-row
@@ -66,6 +81,23 @@ The proof editor is a **headless controller with a thin UI on top**, not a React
 - Known loose ends: `induction` still takes an identifier (its scrutinee should accept a term like `cases` now does); hover-types exist for case params only (the general version needs `Extract.lean` to emit a type per subexpression, which the new per-goal/per-hypothesis fact plumbing makes straightforward); the value-goal detector still infers from sibling metavariable mentions rather than asking Lean.
 
 ## Recent Progress
+- **Vandermonde's identity proved, and the matrix display model behind it
+  (2026-08-12).** det V = ∏_{i<j}(x_j − x_i) from scratch: the determinant by
+  first-row Laplace expansion, then the full column toolkit (additivity,
+  homogeneity, equal-adjacent-columns-vanish via an alternating-sum
+  cancellation, column-operation invariance), then the reduction itself —
+  `vandStep k` is the matrix partway through the column operations, so the
+  fold is expressible; the cleared first row collapses the expansion, the
+  surviving minor is the smaller Vandermonde with rows scaled, and the
+  recursion iterates. No sorryAx. Separately, `src/lean/matrixDisplay.ts`:
+  a grid DERIVED from an indexed family, where \vdots is an assertion about
+  the family and not a cell — the three steps of the classical proof are its
+  acceptance tests, including the shrink that moves the corner from x_1^{n-1}
+  to x_2^{n-2} without anyone editing a cell.
+- **Jacobian, Fubini, and rearrangement (2026-08-12).** The best linear
+  approximation's entries ARE the partials (Fréchet ≤ ε‖h‖ definition, ε/2 and
+  divide by |t|); the two orders of a finite double sum agree; a finite sum is
+  invariant under permutation. All proved, all round-tripping.
 - **Lagrange's theorem, from scratch, in the editor (2026-08-12).** New 'Group
   Theory (Lagrange)' preset: finite groups as element lists, subgroups, cosets,
   and the saturation counting argument — remove one coset (it counts exactly
