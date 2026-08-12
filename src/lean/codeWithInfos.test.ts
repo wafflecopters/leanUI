@@ -527,4 +527,37 @@ describe('mathematician round 2', () => {
     expect(mathTextToLatex('∀ (n : Nat), n ≤ n → P n → Q')).toContain('\\text{and}');
     expect(mathTextToLatex('∀ (n : Nat), n ≤ n → P n → Q')).toContain('\\text{then}');
   });
+
+  test('one grammar per formula: BARE-binder quantifier bodies get the same prose', () => {
+    // Lean prints simple binders without parens (∀ x, …) — the telescope rule
+    // can't see those, and the ε-δ bundle mixed three connective styles in one
+    // display: prose "then" outside, raw ∧ and → → inside. All one register now.
+    const latex = mathTextToLatex('∃ δ, 0 < δ ∧ ∀ x, 0 < |x - x0| → |x - x0| < δ → |f x - L| < ε');
+    expect(latex).not.toContain('\\to');
+    expect(latex).not.toContain('\\wedge');
+    expect(latex).toContain('\\text{and}');
+    expect(latex).toContain('\\text{then}');
+  });
+
+  test('a fully symbolic conjunction keeps its ∧ — prose only joins prose', () => {
+    expect(mathTextToLatex('0 < δ ∧ δ < ε')).toContain('\\wedge');
+    expect(mathTextToLatex('∃ δ, 0 < δ ∧ δ < ε')).toContain('\\wedge');
+  });
+
+  test('bare-quantifier prose fires on the tagged path too (click-target Groups kept)', () => {
+    const tagged: TaggedJson = {
+      t: 'append',
+      kids: [
+        { t: 'text', s: '∀ x, ' },
+        { t: 'tag', pos: '/0', child: { t: 'text', s: 'P x' } },
+        { t: 'text', s: ' → ' },
+        { t: 'tag', pos: '/1', child: { t: 'text', s: 'Q x' } },
+      ],
+    };
+    const latex = renderStaticLatex(codeWithInfosToMathRow(tagged));
+    expect(latex).not.toContain('\\to');
+    expect(latex).toContain('\\text{then}');
+    // Subterm targeting survives the prose transform.
+    expect(latex).toContain('\\htmlId');
+  });
 });

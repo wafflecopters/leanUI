@@ -304,6 +304,64 @@ function nodesMentionSymbol(nodes: readonly MathNode[], names: ReadonlySet<strin
   return false;
 }
 
+/** Any prose connective ("and"/"then" Text) anywhere in the tree — the sign
+ *  that a display already reads as prose, so symbolic ∧ at the same level is
+ *  a register clash. */
+function containsProseText(nodes: readonly MathNode[]): boolean {
+  for (const n of nodes) {
+    if (n.tag === 'Text') return true;
+    const kids = (n as { children?: readonly MathNode[] }).children;
+    if (kids && containsProseText(kids)) return true;
+  }
+  return false;
+}
+
+/** Top-level `∧` becomes the word "and" — only called once a display is
+ *  already part-prose (see containsProseText). */
+function conjunctionToProse(nodes: MathNode[]): MathNode[] {
+  let depth = 0;
+  let inBar = false;
+  return nodes.map((n) => {
+    if (n.tag !== 'Symbol') return n;
+    const v = (n as SymbolNode).value;
+    if ('([{⟨'.includes(v)) depth++;
+    else if (')]}⟩'.includes(v)) depth--;
+    else if (v === '|') inBar = !inBar;
+    else if (v === '\\wedge' && depth === 0 && !inBar) return mkText('and');
+    return n;
+  });
+}
+
+/** `∀ x, body` / `∃ δ ∈ ℝ, body` — binders Lean prints WITHOUT parens, which
+ *  recognizeForallTelescope cannot match. The binder segment is kept as-is;
+ *  the body gets the same prose treatment a telescope body gets (arrow chains
+ *  → "A and B, then C"), and once any prose is present, top-level ∧ joins in
+ *  as "and". Returns null when there is no top-level comma (not a binder). */
+function recognizeBareQuantifier(nodes: MathNode[]): MathNode[] | null {
+  if (nodes.length < 3) return null;
+  if (!isOpSymbol(nodes[0], '\\forall') && !isOpSymbol(nodes[0], '\\exists')) return null;
+  let depth = 0;
+  let inBar = false;
+  let comma = -1;
+  for (let i = 1; i < nodes.length; i++) {
+    const n = nodes[i];
+    if (n.tag !== 'Symbol') continue;
+    const v = (n as SymbolNode).value;
+    if ('([{⟨'.includes(v)) depth++;
+    else if (')]}⟩'.includes(v)) depth--;
+    else if (v === '|') inBar = !inBar;
+    else if (v === ',' && depth === 0 && !inBar) { comma = i; break; }
+  }
+  if (comma === -1 || comma === nodes.length - 1) return null;
+  // Binder vars in parens would have matched the telescope rule; seeing a
+  // paren here means this is NOT a quantifier head (e.g. `∀`-free content).
+  const binder = nodes.slice(1, comma);
+  if (binder.some((n) => isOpSymbol(n, '(') || isOpSymbol(n, '{'))) return null;
+  const body = arrowChainToProse(restructure(nodes.slice(comma + 1)));
+  const prosed = containsProseText(body) ? conjunctionToProse(body) : body;
+  return [nodes[0], ...restructure(binder), mkSymbol(','), ...prosed];
+}
+
 function recognizeForallTelescope(nodes: MathNode[]): MathNode[] | null {
   if (nodes.length === 0 || !isOpSymbol(nodes[0], '\\forall')) return null;
   let i = 1;
@@ -454,6 +512,14 @@ function restructure(nodes: MathNode[]): MathNode[] {
   // explicit remains the ∀ disappears entirely.
   const telescope = recognizeForallTelescope(nodes);
   if (telescope) return telescope;
+
+  // A BARE quantifier (no binder parens — `∀ x, …`, `∃ δ ∈ ℝ, …`) is what
+  // Lean prints for simple binders, so the telescope rule above never sees
+  // it. Its body still deserves the same prose connectives: one grammar per
+  // formula — the ε-δ bundle once mixed "∀ε ∈ ℝ, 0<ε, then …" with a raw
+  // `… ∧ ∀x, A → B → C` inside the SAME display.
+  const bare = recognizeBareQuantifier(nodes);
+  if (bare) return bare;
 
   // Fraction / superscript / subscript: these bind TIGHTER than everything
   // around them, so they take only the ADJACENT operands (an atom or a
