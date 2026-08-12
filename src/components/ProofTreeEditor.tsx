@@ -3278,7 +3278,14 @@ function ExactProseItem({
   const description = describeExactProse(kind);
   // For a VALUE exact the term IS the content (never swap it for a doc);
   // for a proof, the head lemma's doc is the reason a paper would give.
-  const exactDoc = kind.isValueType ? undefined : lemmaDocOf(exprHeadName(kind.exprLatex));
+  const exactHead = exprHeadName(kind.exprLatex);
+  const exactDoc = kind.isValueType
+    ? undefined
+    : /(^|_)ih\d*$/.test(exactHead ?? '')
+      // Applying the IH is THE move of an induction proof — say so. (Our own
+      // enrichment names induction hypotheses ih/*_ih.)
+      ? 'the induction hypothesis'
+      : lemmaDocOf(exactHead);
   // A one-liner closing a goal ALREADY on screen reads as a typed witness —
   // "⟨[], h, nilIndependent⟩ : ∃bs, Basis(W, bs)." — not as the stilted
   // "We must show the claim above. By ⟨…⟩." Only when short enough to stay
