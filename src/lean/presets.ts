@@ -620,7 +620,9 @@ def plusAssoc (N : PeanoNat) (a b c : N.carrier) :
 // (AbelianGroup to Ring to Field to OrderedField to CompleteOrderedField), the
 // reals, limits, and derivatives, culminating in the sum/scalar/chain rules.
 // Core Lean, no Mathlib. Faithful statements; hard tactic-mode proofs are sorry.
-const REAL_ANALYSIS = `-- Real Analysis: algebraic hierarchy, ordered fields, limits, and derivatives
+// The tower every analysis preset shares: Peano → integers → rationals →
+// the axiomatized complete ordered field, notation, abs/min, limits.
+const RA_TOWER = `-- Real Analysis: algebraic hierarchy, ordered fields, limits, and derivatives
 -- Proves (f+g)' = f' + g', (c*f)' = c*f', and the chain rule (g.f)'=g'(f(x0))*f'(x0)
 -- Translated from the leanUI TT/TTK "real-analysis" preset to core Lean 4 (no Mathlib).
 
@@ -1702,7 +1704,9 @@ def convertEps {R : Real} (epsilon v : Carrier R)
     (hlt : rlt v (radd (rdiv epsilon (rtwo R)) (rdiv epsilon (rtwo R)))) : rlt v epsilon :=
   replace (fun z => rlt v z) (divTwoAddEq epsilon) hlt
 
--- THE demo exercise: limitAdd, deliberately unfinished.
+`;
+
+const REAL_ANALYSIS = RA_TOWER + `-- THE demo exercise: limitAdd, deliberately unfinished.
 --
 -- Seeded with the proof as built IN the editor (2026-08): the ε split, a δ from
 -- each hypothesis, both witnesses destructured, and — after comparing δF and
@@ -2570,6 +2574,276 @@ theorem shiftLt (a b c : ℝ) (h : a < b) : a + c < b + c := by
   sorry
 `;
 
+const MULTIVAR = RA_TOWER + `
+------------------------------------------------------------
+-- Multivariable: R^m, matrices, and the total derivative
+------------------------------------------------------------
+
+-- R^m as functions from Fin m; a matrix as its rows.
+@[reducible] def Vec (R : Real) (m : Nat) : Type := Fin m → Carrier R
+@[reducible] def Mat (R : Real) (n m : Nat) : Type := Fin n → Fin m → Carrier R
+
+def vadd {R : Real} {m : Nat} (u v : Vec R m) : Vec R m := fun i => radd (u i) (v i)
+def vsub {R : Real} {m : Nat} (u v : Vec R m) : Vec R m := fun i => rsub (u i) (v i)
+def smulV {R : Real} {m : Nat} (t : Carrier R) (v : Vec R m) : Vec R m := fun i => rmul t (v i)
+
+-- The j-th standard basis vector.
+def basis {R : Real} {m : Nat} (j : Fin m) : Vec R m :=
+  fun i => if i = j then rone R else rzero R
+
+-- Finite sums over Fin k, peeling the LAST index.
+def finSum {R : Real} : (k : Nat) → (Fin k → Carrier R) → Carrier R
+  | .zero, _ => rzero R
+  | .succ k, f => radd (finSum k (fun i => f i.castSucc)) (f (Fin.last k))
+
+def finSumCongr {R : Real} : (k : Nat) → {f g : Fin k → Carrier R} →
+    ((i : Fin k) → (f i) = (g i)) → (finSum k f) = (finSum k g)
+  | .zero, _, _, _ => rfl
+  | .succ k, f, g, h =>
+    eqTrans (eqCong (fun z => radd z (f (Fin.last k))) (finSumCongr k (fun i => h i.castSucc)))
+      (eqCong (fun z => radd (finSum k (fun i => g i.castSucc)) z) (h (Fin.last k)))
+
+def finSumZero {R : Real} : (k : Nat) → (finSum (R := R) k (fun _ => rzero R)) = (rzero R)
+  | .zero => rfl
+  | .succ k =>
+    eqTrans (eqCong (fun z => radd z (rzero R)) (finSumZero k)) ((fieldOf R).addZeroRight (rzero R))
+
+-- A sum with a single nonzero entry is that entry.
+def finSumSingle {R : Real} : (k : Nat) → (j : Fin k) → (c : Carrier R) →
+    (finSum k (fun i => if i = j then c else rzero R)) = c
+  | .succ k, j, c => by
+    induction j using Fin.lastCases with
+    | last =>
+      show (radd (finSum k fun i => if i.castSucc = Fin.last k then c else rzero R)
+        (if (Fin.last k) = (Fin.last k) then c else rzero R)) = c
+      rw [if_pos rfl]
+      have he : ∀ i : Fin k, (if i.castSucc = Fin.last k then c else rzero R) = rzero R := by
+        intro i
+        rw [if_neg (Fin.ne_of_lt (Fin.castSucc_lt_last i))]
+      rw [finSumCongr k he, finSumZero k]
+      exact addZeroLeft c
+    | cast j' =>
+      show (radd (finSum k fun i => if i.castSucc = j'.castSucc then c else rzero R)
+        (if (Fin.last k) = j'.castSucc then c else rzero R)) = c
+      rw [if_neg (Ne.symm (Fin.ne_of_lt (Fin.castSucc_lt_last j')))]
+      have he : ∀ i : Fin k, (if i.castSucc = j'.castSucc then c else rzero R)
+          = (if i = j' then c else rzero R) := by
+        intro i
+        by_cases hij : i = j'
+        · rw [if_pos hij, if_pos (by rw [hij])]
+        · rw [if_neg hij, if_neg (fun he => hij (Fin.castSucc_inj.1 he))]
+      rw [finSumCongr k he, finSumSingle k j' c]
+      exact (fieldOf R).addZeroRight c
+
+-- The (sum) norm on R^m.
+def vnorm {R : Real} {m : Nat} (v : Vec R m) : Carrier R :=
+  finSum m (fun i => rabs (v i))
+
+def mulVec {R : Real} {n m : Nat} (A : Mat R n m) (v : Vec R m) : Vec R n :=
+  fun i => finSum m (fun j => rmul (A i j) (v j))
+
+-- Matrix times a scaled basis vector picks out one column, scaled:
+-- (A · (t e_j))_i = t * A_ij.
+def mulVecBasis {R : Real} {n m : Nat} (A : Mat R n m) (t : Carrier R)
+    (j : Fin m) (i : Fin n) :
+    ((mulVec A (smulV t (basis j))) i) = (rmul t (A i j)) := by
+  show (finSum m fun l => rmul (A i l) (rmul t (basis j l))) = rmul t (A i j)
+  have he : ∀ l : Fin m, (rmul (A i l) (rmul t (basis j l)))
+      = (if l = j then rmul t (A i j) else rzero R) := by
+    intro l
+    by_cases hlj : l = j
+    · rw [if_pos hlj, hlj]
+      have hb : (basis (R := R) j j) = rone R := by
+        show (if j = j then rone R else rzero R) = rone R
+        rw [if_pos rfl]
+      rw [hb]
+      exact eqTrans (eqCong (fun z => rmul (A i j) z) ((fieldOf R).mulOneRight t))
+        ((fieldOf R).mulComm (A i j) t)
+    · rw [if_neg hlj]
+      have hb : (basis (R := R) j l) = rzero R := by
+        show (if l = j then rone R else rzero R) = rzero R
+        rw [if_neg hlj]
+      rw [hb]
+      exact eqTrans (eqCong (fun z => rmul (A i l) z) (mulZeroRight t)) (mulZeroRight (A i l))
+  rw [finSumCongr m he, finSumSingle m j (rmul t (A i j))]
+
+-- The norm of a scaled basis vector is |t|.
+def vnormBasis {R : Real} {m : Nat} (t : Carrier R) (j : Fin m) :
+    (vnorm (smulV t (basis j))) = (rabs t) := by
+  show (finSum m fun i => rabs (rmul t (basis j i))) = rabs t
+  have he : ∀ i : Fin m, (rabs (rmul t (basis j i))) = (if i = j then rabs t else rzero R) := by
+    intro i
+    by_cases hij : i = j
+    · rw [if_pos hij, hij]
+      have hb : (basis (R := R) j j) = rone R := by
+        show (if j = j then rone R else rzero R) = rone R
+        rw [if_pos rfl]
+      rw [hb]
+      exact eqCong (fun z => rabs z) ((fieldOf R).mulOneRight t)
+    · rw [if_neg hij]
+      have hb : (basis (R := R) j i) = rzero R := by
+        show (if i = j then rone R else rzero R) = rzero R
+        rw [if_neg hij]
+      rw [hb, mulZeroRight t, absZero]
+  rw [finSumCongr m he, finSumSingle m j (rabs t)]
+
+-- A sum of nonnegative terms is nonnegative.
+def finSumNonneg {R : Real} : (k : Nat) → (f : Fin k → Carrier R) →
+    ((l : Fin k) → rle (rzero R) (f l)) → rle (rzero R) (finSum k f)
+  | .zero, _, _ => (fieldOf R).leRefl (rzero R)
+  | .succ k, f, h =>
+    replace (fun z => rle z (radd (finSum k fun l => f l.castSucc) (f (Fin.last k))))
+      (addZeroLeft (rzero R))
+      (addLeBoth (rzero R) (finSum k fun l => f l.castSucc) (rzero R) (f (Fin.last k))
+        (finSumNonneg k _ (fun l => h l.castSucc)) (h (Fin.last k)))
+
+-- Any single nonnegative term is at most the whole sum.
+def termLeSum {R : Real} : (k : Nat) → (f : Fin k → Carrier R) →
+    ((l : Fin k) → rle (rzero R) (f l)) → (j : Fin k) → rle (f j) (finSum k f)
+  | .succ k, f, h, j => by
+    induction j using Fin.lastCases with
+    | last =>
+      show rle (f (Fin.last k)) (radd (finSum k fun l => f l.castSucc) (f (Fin.last k)))
+      exact replace (fun z => rle z (radd (finSum k fun l => f l.castSucc) (f (Fin.last k))))
+        (addZeroLeft (f (Fin.last k)))
+        (addLeRight (rzero R) (finSum k fun l => f l.castSucc) (f (Fin.last k))
+          (finSumNonneg k _ (fun l => h l.castSucc)))
+    | cast j' =>
+      show rle (f j'.castSucc) (radd (finSum k fun l => f l.castSucc) (f (Fin.last k)))
+      exact (fieldOf R).leTrans (f j'.castSucc) (finSum k fun l => f l.castSucc)
+        (radd (finSum k fun l => f l.castSucc) (f (Fin.last k)))
+        (termLeSum k _ (fun l => h l.castSucc) j')
+        (replace (fun z => rle z (radd (finSum k fun l => f l.castSucc) (f (Fin.last k))))
+          ((fieldOf R).addZeroRight (finSum k fun l => f l.castSucc))
+          ((fieldOf R).addLeLeft (rzero R) (f (Fin.last k)) (finSum k fun l => f l.castSucc)
+            (h (Fin.last k))))
+
+-- Every component is bounded by the norm.
+def componentLeNorm {R : Real} {m : Nat} (v : Vec R m) (i : Fin m) :
+    rle (rabs (v i)) (vnorm v) :=
+  termLeSum m (fun l => rabs (v l)) (fun l => absNonneg (v l)) i
+
+-- THE definition: A is the derivative of f at x when the linear approximation
+-- error vanishes faster than the displacement — for every ε > 0 there is a
+-- δ > 0 with ‖f(x+h) − f(x) − A·h‖ ≤ ε‖h‖ whenever 0 < ‖h‖ < δ.
+@[reducible] def HasDerivAt {R : Real} {m n : Nat}
+    (f : Vec R m → Vec R n) (x : Vec R m) (A : Mat R n m) : Type :=
+  (epsilon : Carrier R) → rlt (rzero R) epsilon →
+    DPair (Carrier R) (fun delta => Pair (rlt (rzero R) delta)
+      ((h : Vec R m) → rlt (rzero R) (vnorm h) → rlt (vnorm h) delta →
+        rle (vnorm (vsub (f (vadd x h)) (vadd (f x) (mulVec A h)))) (rmul epsilon (vnorm h))))
+
+-- ============ the order/division helpers for the estimate ============
+
+-- 0 ≤ x − y exactly captures y ≤ x, in the direction we need.
+def subNonnegOfLe {R : Real} (b c : Carrier R) (h : rle b c) : rle (rzero R) (rsub c b) :=
+  replace (fun z => rle z (rsub c b)) (addNegRight b)
+    (addLeRight b c (rneg b) h)
+
+def leOfSubNonneg {R : Real} (x y : Carrier R) (h : rle (rzero R) (rsub x y)) : rle y x :=
+  replace (fun z => rle z x) (addZeroLeft y)
+    (replace (fun z => rle (radd (rzero R) y) z)
+      (eqTrans ((fieldOf R).addAssoc x (rneg y) y)
+        (eqTrans (eqCong (fun z => radd x z) (negLeft y)) ((fieldOf R).addZeroRight x)))
+      (addLeRight (rzero R) (rsub x y) y h))
+
+-- Multiplying an inequality by a nonnegative factor on the right.
+def mulLeMonoRight {R : Real} (a b c : Carrier R) (hab : rle a b) (hc : rle (rzero R) c) :
+    rle (rmul a c) (rmul b c) := by
+  apply leOfSubNonneg
+  have hd : (rsub (rmul b c) (rmul a c)) = (rmul (rsub b a) c) :=
+    eqSym (eqTrans ((fieldOf R).distribRight b (rneg a) c)
+      (eqCong (fun z => radd (rmul b c) z) (mulNegLeft a c)))
+  rw [hd]
+  exact (fieldOf R).mulNonneg (rsub b a) c (subNonnegOfLe a b hab) hc
+
+-- Subtraction distributes over a common denominator (no side condition:
+-- division IS multiplication by the inverse).
+def divSubLeft {R : Real} (u w t : Carrier R) :
+    (rsub (rdiv u t) (rdiv w t)) = (rdiv (rsub u w) t) :=
+  eqSym (eqTrans ((fieldOf R).distribRight u (rneg w) (rinv t))
+    (eqCong (fun z => radd (rdiv u t) z) (mulNegLeft w (rinv t))))
+
+-- (t·c)/t = c for t ≠ 0.
+def mulDivCancelLeft {R : Real} (t c : Carrier R) (tne : t = (rzero R) → MyVoid) :
+    (rdiv (rmul t c) t) = c :=
+  eqTrans (eqCong (fun z => rmul z (rinv t)) ((fieldOf R).mulComm t c))
+    (eqTrans ((fieldOf R).mulAssoc c t (rinv t))
+      (eqTrans (eqCong (fun z => rmul c z) ((fieldOf R).mulInvRight t tne))
+        ((fieldOf R).mulOneRight c)))
+
+-- |t| of a nonzero t is nonzero, and t − 0 = t.
+def subZero {R : Real} (t : Carrier R) : (rsub t (rzero R)) = t :=
+  eqTrans (eqCong (fun z => radd t z) (negZero R)) ((fieldOf R).addZeroRight t)
+
+def neZeroOfAbsPos {R : Real} (t : Carrier R) (h : rlt (rzero R) (rabs t)) :
+    t = (rzero R) → MyVoid :=
+  fun he => Pair.snd h (eqSym (eqTrans (eqCong (fun z => rabs z) he) (absZero R)))
+
+-- |t|·|1/t| = 1 for t ≠ 0.
+def absMulAbsInv {R : Real} (t : Carrier R) (tne : t = (rzero R) → MyVoid) :
+    (rmul (rabs t) (rabs (rinv t))) = (rone R) :=
+  eqTrans (eqSym (absMul t (rinv t)))
+    (eqTrans (eqCong (fun z => rabs z) ((fieldOf R).mulInvRight t tne))
+      (absOfNonneg (rone R) (zeroLeOne R)))
+
+-- Half of a positive is strictly below it.
+def halfLtSelf {R : Real} (e : Carrier R) (he : rlt (rzero R) e) :
+    rlt (rdiv e (rtwo R)) e :=
+  replace (fun z => rlt z e) ((fieldOf R).addZeroRight (rdiv e (rtwo R)))
+    (replace (fun z => rlt (radd (rdiv e (rtwo R)) (rzero R)) z) (divTwoAddEq e)
+      (addLtLeft (rzero R) (rdiv e (rtwo R)) (rdiv e (rtwo R)) (divTwoPos e he)))
+
+
+-- a − (b+c) = (a − b) − c.
+def subSubOfSubAdd {R : Real} (a b c : Carrier R) :
+    (rsub a (radd b c)) = (rsub (rsub a b) c) :=
+  eqTrans (eqCong (fun z => radd a z) (negAdd b c))
+    (eqSym ((fieldOf R).addAssoc a (rneg b) (rneg c)))
+
+-- ============ THE JACOBIAN THEOREM ============
+
+-- JACOBIAN: the best linear approximation, when it exists, has the partial
+-- derivatives as entries. Fix a row i and a column j; the difference quotient
+-- of component i along direction e_j converges to A_ij. The proof: feed ε/2
+-- to differentiability, keep its δ. For 0 < |t| < δ the displacement h = t·e_j
+-- has norm |t|, so the approximation error is at most (ε/2)|t|; its i-th
+-- component says |f(x+te_j)_i − f(x)_i − t·A_ij| ≤ (ε/2)|t|, and dividing by
+-- |t| bounds the quotient's distance from A_ij by ε/2 < ε.
+def jacobianEntries {R : Real} {m n : Nat}
+    (f : Vec R m → Vec R n) (x : Vec R m) (A : Mat R n m)
+    (hA : HasDerivAt f x A) (i : Fin n) (j : Fin m) :
+    Limit (fun t => rdiv (rsub ((f (vadd x (smulV t (basis j)))) i) ((f x) i)) t)
+      (rzero R) (A i j) := by
+  constructor
+  intro epsilon epsPos
+  have hde := hA (rdiv epsilon (rtwo R)) (divTwoPos epsilon epsPos)
+  obtain ⟨delta, dProof⟩ := hde
+  obtain ⟨dPos, dBound⟩ := dProof
+  constructor
+  case snd =>
+    constructor
+    case fst =>
+      exact dPos
+    case snd =>
+      intro t htPos htLt
+      have tne : t = (rzero R) → MyVoid := neZeroOfAbsPos t (replace (fun z => rlt (rzero R) (rabs z)) (subZero t) htPos)
+      have hnPos : rlt (rzero R) (vnorm (smulV t (basis j))) := replace (fun z => rlt (rzero R) z) (eqSym (vnormBasis t j)) (replace (fun z => rlt (rzero R) (rabs z)) (subZero t) htPos)
+      have hnLt : rlt (vnorm (smulV t (basis j))) delta := replace (fun z => rlt z delta) (eqSym (vnormBasis t j)) (replace (fun z => rlt (rabs z) delta) (subZero t) htLt)
+      have hbound := dBound (smulV t (basis j)) hnPos hnLt
+      have hcomp : rle (rabs ((vsub (f (vadd x (smulV t (basis j)))) (vadd (f x) (mulVec A (smulV t (basis j))))) i)) (rmul (rdiv epsilon (rtwo R)) (rabs t)) := leLtTransLe (rabs ((vsub (f (vadd x (smulV t (basis j)))) (vadd (f x) (mulVec A (smulV t (basis j))))) i)) (vnorm (vsub (f (vadd x (smulV t (basis j)))) (vadd (f x) (mulVec A (smulV t (basis j)))))) (rmul (rdiv epsilon (rtwo R)) (rabs t)) (componentLeNorm (vsub (f (vadd x (smulV t (basis j)))) (vadd (f x) (mulVec A (smulV t (basis j))))) i) (replace (fun z => rle (vnorm (vsub (f (vadd x (smulV t (basis j)))) (vadd (f x) (mulVec A (smulV t (basis j)))))) (rmul (rdiv epsilon (rtwo R)) z)) (vnormBasis t j) hbound)
+      have hshape : ((vsub (f (vadd x (smulV t (basis j)))) (vadd (f x) (mulVec A (smulV t (basis j))))) i) = (rsub (rsub ((f (vadd x (smulV t (basis j)))) i) ((f x) i)) (rmul t (A i j))) := eqTrans (eqCong (fun z => rsub ((f (vadd x (smulV t (basis j)))) i) (radd ((f x) i) z)) (mulVecBasis A t j i)) (subSubOfSubAdd ((f (vadd x (smulV t (basis j)))) i) ((f x) i) (rmul t (A i j)))
+      have hnum : rle (rabs (rsub (rsub ((f (vadd x (smulV t (basis j)))) i) ((f x) i)) (rmul t (A i j)))) (rmul (rdiv epsilon (rtwo R)) (rabs t)) := replace (fun z => rle (rabs z) (rmul (rdiv epsilon (rtwo R)) (rabs t))) hshape hcomp
+      have hsplit : (rsub (rdiv (rsub ((f (vadd x (smulV t (basis j)))) i) ((f x) i)) t) (A i j)) = (rdiv (rsub (rsub ((f (vadd x (smulV t (basis j)))) i) ((f x) i)) (rmul t (A i j))) t) := eqTrans (eqCong (fun z => rsub (rdiv (rsub ((f (vadd x (smulV t (basis j)))) i) ((f x) i)) t) z) (eqSym (mulDivCancelLeft t (A i j) tne))) (divSubLeft (rsub ((f (vadd x (smulV t (basis j)))) i) ((f x) i)) (rmul t (A i j)) t)
+      have habs : (rabs (rsub (rdiv (rsub ((f (vadd x (smulV t (basis j)))) i) ((f x) i)) t) (A i j))) = (rmul (rabs (rsub (rsub ((f (vadd x (smulV t (basis j)))) i) ((f x) i)) (rmul t (A i j)))) (rabs (rinv t))) := eqTrans (eqCong (fun z => rabs z) hsplit) (absMul (rsub (rsub ((f (vadd x (smulV t (basis j)))) i) ((f x) i)) (rmul t (A i j))) (rinv t))
+      rw [habs]
+      have hchain : rle (rmul (rabs (rsub (rsub ((f (vadd x (smulV t (basis j)))) i) ((f x) i)) (rmul t (A i j)))) (rabs (rinv t))) (rmul (rmul (rdiv epsilon (rtwo R)) (rabs t)) (rabs (rinv t))) := mulLeMonoRight (rabs (rsub (rsub ((f (vadd x (smulV t (basis j)))) i) ((f x) i)) (rmul t (A i j)))) (rmul (rdiv epsilon (rtwo R)) (rabs t)) (rabs (rinv t)) hnum (absNonneg (rinv t))
+      have he : (rmul (rmul (rdiv epsilon (rtwo R)) (rabs t)) (rabs (rinv t))) = (rdiv epsilon (rtwo R)) := eqTrans ((fieldOf R).mulAssoc (rdiv epsilon (rtwo R)) (rabs t) (rabs (rinv t))) (eqTrans (eqCong (fun z => rmul (rdiv epsilon (rtwo R)) z) (absMulAbsInv t tne)) ((fieldOf R).mulOneRight (rdiv epsilon (rtwo R))))
+      exact leLtTrans (rmul (rabs (rsub (rsub ((f (vadd x (smulV t (basis j)))) i) ((f x) i)) (rmul t (A i j)))) (rabs (rinv t))) (rdiv epsilon (rtwo R)) epsilon (leLtTransLe (rmul (rabs (rsub (rsub ((f (vadd x (smulV t (basis j)))) i) ((f x) i)) (rmul t (A i j)))) (rabs (rinv t))) (rmul (rmul (rdiv epsilon (rtwo R)) (rabs t)) (rabs (rinv t))) (rdiv epsilon (rtwo R)) hchain (replace (fun z => rle z (rdiv epsilon (rtwo R))) (eqSym he) ((fieldOf R).leRefl (rdiv epsilon (rtwo R))))) (halfLtSelf epsilon epsPos)
+
+#check @jacobianEntries
+`;
+
 const GROUP_THEORY = `-- Group Theory (from scratch): finite groups as element lists, subgroups,
 -- cosets, and Lagrange's theorem — the order of a subgroup divides the order
 -- of the group. NO Mathlib; the counting arguments live in library lemmas so
@@ -3041,6 +3315,7 @@ export const LEAN_PRESETS: LeanPreset[] = [
   { name: 'Real Analysis (chain rule)', code: REAL_ANALYSIS },
   { name: 'Vector Spaces (basis)', code: VECTOR_SPACE },
   { name: 'Group Theory (Lagrange)', code: GROUP_THEORY },
+  { name: 'Multivariable (Jacobian)', code: MULTIVAR },
   { name: 'Mathlib (∑, ring)', code: MATHLIB, mathlib: true },
 ];
 

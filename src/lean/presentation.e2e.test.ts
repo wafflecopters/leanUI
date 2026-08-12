@@ -260,6 +260,17 @@ describe('the quotient group reads like mathematics', () => {
   }, 10 * MIN);
 });
 
+describe('the Jacobian reads like mathematics', () => {
+  test('jacobianEntries round-trips clean and shows the limit notation', async () => {
+    const r = await sessionProse('Multivariable (Jacobian)', 'jacobianEntries');
+    expect(r.errors).toEqual([]);
+    const all = r.items.map(latexOf).join(' ');
+    expect(all).toContain('\\lim');
+    // The Fin/finSum scaffolding stays behind the definitions.
+    expect(all).not.toContain('castSucc');
+  }, 10 * MIN);
+});
+
 describe('citations have reasons to cite', () => {
   test('the justification lemmas of all three proofs carry doc comments', async () => {
     for (const [preset, names] of [
