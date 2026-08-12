@@ -3196,14 +3196,36 @@ function SimpProseItem({
   mustShowPrefix: GoalPrefixRenderer;
   renderGoalSection: GoalSectionRenderer;
 }) {
+  // Six camelCase identifiers as the content of the algebra step was the
+  // review's "the proof's climax is its least readable line". Lemmas WITH
+  // docs cite as prose ("by commutativity of multiplication and
+  // distributivity"); the numeral-bridge plumbing demotes to a count. The
+  // full name list stays one hover away.
+  const counters = useContext(LeanCounters);
+  const docs = kind.lemmas
+    .map((l) => counters.lemmaDoc?.(l))
+    .filter((d): d is string => !!d);
+  const plumbing = kind.lemmas.length - docs.length;
+  const namesLatex = kind.lemmas.map((l) => texNameForProse(l)).join(',\\;');
   return (
     <ProseRow rowStyle={rowStyle} rowHandlers={rowHandlers} deleteBtn={deleteBtn}>
       {mustShowPrefix(kind.preGoalLatex)}
-      {/* `simp` (no lemmas) vs `simp [a, b]`; step count only when the engine
-          actually tracked steps (the Lean backend doesn't, so it's omitted). */}
-      <span style={prose}>{kind.lemmas.length > 0 ? 'Simplifying using ' : 'Simplifying'}</span>
-      {kind.lemmas.length > 0 && (
-        <InlineLatexSequence values={kind.lemmas.map((lemma) => texNameForProse(lemma))} prose={prose} />
+      {docs.length > 0 ? (
+        <HoverType typeLatex={namesLatex}>
+          <span style={{ ...prose, borderBottom: '1px dashed rgba(139, 148, 158, 0.4)' }}>
+            {'Simplifying by '}
+            {docs.map((d, i) => (i === 0 ? d : i === docs.length - 1 ? ` and ${d}` : `, ${d}`)).join('')}
+            {plumbing > 0 ? ` (with ${plumbing} rewrite identit${plumbing === 1 ? 'y' : 'ies'})` : ''}
+          </span>
+        </HoverType>
+      ) : kind.lemmas.length > 0 ? (
+        <HoverType typeLatex={namesLatex}>
+          <span style={{ ...prose, borderBottom: '1px dashed rgba(139, 148, 158, 0.4)' }}>
+            Simplifying ({kind.lemmas.length} rewrite identit{kind.lemmas.length === 1 ? 'y' : 'ies'})
+          </span>
+        </HoverType>
+      ) : (
+        <span style={prose}>Simplifying</span>
       )}
       {kind.stepCount > 0 && (
         <span style={prose}>{' '}({kind.stepCount} step{kind.stepCount !== 1 ? 's' : ''})</span>
@@ -4361,12 +4383,13 @@ function ProseItemView({
 
     case 'hole': {
       // A hole Lean already considers closed (e.g. the continuation after a
-      // goal-closing `simp`) is DONE — show a ✓, never a stray `?`, whether or
-      // not the cursor is on it.
+      // goal-closing `simp`) is DONE — mark it the way the document marks
+      // every other closed goal: the ∎ box. ("✓ solved" chips inside the
+      // prose read as UI, not mathematics — the reviewer's point.)
       if ((item.kind as { solved?: boolean }).solved) {
         return (
           <div style={rowStyle} {...rowHandlers}>
-            <span style={{ color: '#3fb950', fontSize: '13px' }}>✓ solved</span>
+            <span style={{ color: '#3fb950', fontSize: '14px' }}>&#8718;</span>
           </div>
         );
       }
