@@ -1068,7 +1068,8 @@ def addLeBoth {R : Real} (a b c d : Carrier R) (hab : rle a b) (hcd : rle c d) :
     (addLeRight a b c hab) ((fieldOf R).addLeLeft c d b hcd)
 
 -- TACTIC-MODE in source (erw).
-def negZero (R : Real) : (rneg (rzero R)) = (rzero R) := sorry
+def negZero (R : Real) : (rneg (rzero R)) = (rzero R) :=
+  eqTrans (eqSym (addZeroLeft (rneg (rzero R)))) ((fieldOf R).negRight (rzero R))
 
 def leNegNonneg {R : Real} (a : Carrier R) (h : rle a (rzero R)) : rle (rzero R) (rneg a) :=
   replace (fun z => rle z (rneg a)) ((fieldOf R).negRight a)
@@ -1557,8 +1558,9 @@ def mulNegRight {R : Real} (c b : Carrier R) : (rmul c (rneg b)) = (rneg (rmul c
       (eqTrans (eqCong (fun z => rmul c z) ((fieldOf R).negRight b))
         (mulZeroRight c)))
 
--- TACTIC-MODE in source (erw).
-def mulNegLeft {R : Real} (a b : Carrier R) : (rmul (rneg a) b) = (rneg (rmul a b)) := sorry
+def mulNegLeft {R : Real} (a b : Carrier R) : (rmul (rneg a) b) = (rneg (rmul a b)) :=
+  eqTrans ((fieldOf R).mulComm (rneg a) b)
+    (eqTrans (mulNegRight b a) (eqCong (fun z => rneg z) ((fieldOf R).mulComm b a)))
 
 def negDivLeft {R : Real} (y e : Carrier R) : (rneg (rdiv y e)) = (rdiv (rneg y) e) :=
   eqSym (mulNegLeft y (rinv e))
@@ -1622,7 +1624,11 @@ def absOfNonneg {R : Real} (a : Carrier R) (h : rle (rzero R) a) : (rabs a) = a 
         (eqSym ((fieldOf R).leAntisym (rzero R) a h h2)))
       (eqTrans (negZero R) ((fieldOf R).leAntisym (rzero R) a h h2)))
 
-def absOfNonpos {R : Real} (a : Carrier R) (h : rle a (rzero R)) : (rabs a) = (rneg a) := sorry
+def absOfNonpos {R : Real} (a : Carrier R) (h : rle a (rzero R)) : (rabs a) = (rneg a) :=
+  absElim a (fun x => x = (rneg a))
+    (fun h2 => eqTrans (eqSym ((fieldOf R).leAntisym (rzero R) a h2 h))
+      (eqTrans (eqSym (negZero R)) (eqCong (fun z => rneg z) ((fieldOf R).leAntisym (rzero R) a h2 h))))
+    (fun _ => rfl)
 
 def negMulNeg {R : Real} (a b : Carrier R) : (rmul (rneg a) (rneg b)) = (rmul a b) :=
   eqTrans (mulNegLeft a (rneg b))
