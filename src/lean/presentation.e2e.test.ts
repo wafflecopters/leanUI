@@ -160,7 +160,10 @@ describe('basisExists reads like mathematics', () => {
     // lives inside `lengthStrongInduction`, invisible to the reader.
     const spine = items.find((i) => i.kind.tag === 'apply' && (i.kind as { name?: string }).name === 'lengthStrongInduction');
     expect(spine).toBeDefined();
-    expect(items.some((i) => i.kind.tag === 'inductionHeader')).toBe(false);
+    // The dichotomy is a case split (isCases) — fine; a NAT induction header
+    // would mean the fuel argument crept back.
+    const inductions = items.filter((i) => i.kind.tag === 'inductionHeader' && !(i.kind as { isCases?: boolean }).isCases);
+    expect(inductions).toEqual([]);
     for (const i of items) expect(latexOf(i)).not.toMatch(/\bfuel\b/);
   });
 

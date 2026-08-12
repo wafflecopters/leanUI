@@ -35,7 +35,20 @@ The proof editor is a **headless controller with a thin UI on top**, not a React
 - Layers, each independently testable: `candidates` (what's worth trying) → `discover` (what Lean's own search finds) → `validate` (what actually works, + previews) → `actions` (what's possible) → `session` (state + dispatch). `useProofSession` is the entire React surface.
 - **Tests:** `npm test` is the fast gate (~1s since M5 removed the TT compiler suites; excludes `*.e2e.test.ts`); `npm run test:e2e` runs the real-Lean suites — **file-serial** (`fileParallelism: false` under `E2E=1`), because each e2e file's fork spawns its own Lean worker pool and a Mathlib-loaded pool is multiple GB. Mathlib e2e runs are expensive by nature: expect one ~5–7GB resident Lean process while they run — always launch them through `scripts/guarded-run.sh -l 14 --`, which kills the process tree if it passes the limit.
 
-## Current Focus
+## Current Focus (loop: adversarial-review fixes + six new showcase proofs)
+- Working the three-proof adversarial review (2026-08-12): remaining items are the
+  induction-principle schema display (suppress the step-premise wall in basisExists),
+  IH-as-Let-condition folding, InSpan prose notation (v ∈ span(vs)), Either-row
+  citations ("by totality of ≤"), a.succ → a+1 in the Nat preset, the simp
+  lemma-name dump, "✓ solved" chips, and calc chains as aligned derivations.
+- SIX NEW PROOFS requested (all must read like a paper AND stay fully editable):
+  (a) Lagrange — subgroup order divides group order; (b) quotient group from a
+  normal subgroup; (c) Fubini; (d) absolute convergence ⇒ rearrangement-invariance;
+  (e) best linear approximation = Jacobian of partials; (f) Vandermonde determinant
+  (the showcase: matrix displays whose grids CHANGE across steps — needs a matrix/
+  ellipsis display model where \vdots is an indexed-family assertion, not a cell).
+
+## Previous Focus
 - **limitAdd fully clickable, twice**: (A) in the from-scratch preset, (B) over Mathlib's ℝ, on one engine. **Verified click-by-click against real Lean, end to end:** `constructor` → `intro ε h` → `have h2 : 0 < ε/2` (Have box) → click `limF` → `use limF.eps_delta` → `cases` → same for limG → `constructor` → `exact rmin deltaF deltaG` → `constructor` → `apply minPos` → `exact fProof.fst` / `exact gProof.fst` → `intro x h h1` → `apply convertEps` → `apply coreEstimate`. Every one of those comes from the tray. **Two rough edges left:** (1) the `⊢ ℝ` slot `apply coreEstimate` opens is not flagged as a value goal, so it offers solvers rather than `exact ε / 2` — the value-goal detector wants the same fact-based treatment the rest just got; (2) the two `have hf := fProof.snd x hx0 (…)` steps are complex terms, so they go through the term builder (click `fProof` → `use fProof.snd` → fill slots) rather than a pill. Then a Mathlib real-analysis preset + parity e2e.
 - Lean-backend performance is the product baseline: persistent `extract --serve` workers (resident env cache), prefix-olean cache, priority analyze queue, ONE active decl card — goal refresh ~0.2-0.4s steady-state.
 - Rendering parity: \lim with under-subscript, ℝ via Carrier unexpander, Greek (ε/δ incl. spelled-out names), ∀ x ∈ T binder prose with and/", then" implication chains, f(x) application style, display-math sizing.
@@ -43,6 +56,21 @@ The proof editor is a **headless controller with a thin UI on top**, not a React
 - Known loose ends: `induction` still takes an identifier (its scrutinee should accept a term like `cases` now does); hover-types exist for case params only (the general version needs `Extract.lean` to emit a type per subexpression, which the new per-goal/per-hypothesis fact plumbing makes straightforward); the value-goal detector still infers from sibling metavariable mentions rather than asking Lean.
 
 ## Recent Progress
+- **Adversarial review round 3 delivered + first fixes (2026-08-12).** Full three-proof
+  critique written (human readability / mathematician quality / model prose per proof).
+  Fixed the two genuine bugs it surfaced: (1) the fx regression — the application rule
+  required a bare Symbol head, but the app path wraps subterms in click-target Groups,
+  so every tagged display read 'fx' product-style; (2) the repetition suppressor was
+  last-row-only — limitAdd displayed the identical ∃δ-bundle three times; now any
+  verbatim re-display reads "the claim above", and apply rows participate. Also: one
+  citation voice everywhere ("This holds by ⟨noun-phrase doc⟩"), all preset docs
+  reworded as noun phrases, IH citations name their instance ("applied to pre ++ post"),
+  and bare-binder quantifier bodies (∀ x, … / ∃ δ, …) get the same prose connectives
+  as telescopes — one grammar per formula. Battery 14/14 over real Lean.
+- **basisExistsAux dropped its fuel argument.** The n was scaffolding (pre ++ post
+  isn't a structural subterm, so List-ctor induction can't carry the step); a library
+  lengthStrongInduction now holds the Nat machinery and the theorem reads: apply it,
+  split on the dichotomy, apply the IH to the strictly-shorter still-spanning list.
 - **Queued-items sweep.** R11: multi-char names render upright everywhere (prose-gen's texName used mathit — epsPos read as a product e·p·s·P·o·s; unified on the editor's textsf convention). R12: the hanging "…, if" before display math reads "…, provided that" (block-heading colons kept — they head indented blocks, which is standard). The Induct-on box accepts a TERM scrutinee like Cases. Attempted and REVERTED with findings: stating limitAdd as Limit (f + g) — the preset's + is a direct radd infix (blocks the function-sum instance), and a partial instance migration leaves mixed-form goals no rw pattern can match; the full library migration is its own session (recorded in TODO with the analysis). Remaining known items, all recorded: that migration, user-editable annotations on have steps (feature), per-subexpression hover types (extractor feature), Mathlib RA preset (long-range).
 - **The basisExists statement reads as a sentence, and Obtain runs group.** Header: "∀ n ∈ ℕ and vs ∈ List(W), |vs| ≤ n and Spans(W, vs), then ∃bs, Basis(W, bs)" — three fixes: the arrow-chain prose now sees through the tagged tree's right-nested Groups (caught by the user: I had verified the plain-text path only); the preset displays a vector space AS its carrier (List(W), the mathematician's abuse of notation, via @[app_unexpander VectorSpace.V]); and |vs| is list length (atomic-noWs macro — the naive notation collided with inductive's own | bars, 19 errors, RA's rabs trick fixed it). Consecutive Obtain rows (≥2, cursor outside) group under one "Obtain:" header with per-row leads dropped — rows keep rename/hover/delete. Separator default flipped: a bound name with unknown facts shows ":" (fact-style), never "∈" a Prop. The template-literal backtick-in-comment trap fired a THIRD time (memory note exists; it still got me).
 - **Mathematician feedback round 2, shipped.** (1) Chain steps CITE visibly again — hover-hiding the chips had buried "by the induction hypothesis", the pivotal citation of an induction proof; the reason (IH wording / lemma doc / name) is now always shown, only the delete × waits for hover. (2) Statement bodies read as prose: "∀ n ∈ ℕ and vs ∈ List(W.V), vs.length ≤ n and Spans(W, vs), then ∃bs, …" — top-level arrow chains join premises with "and" and close with ", then". (3) "since …" continues its sentence inline instead of force-wrapping. (4) Both destructure forms unify as "Obtain ⟨dfPos : 0 < δ_F, fFn : …⟩ from fProof." — types visible inline (the width-cap-to-hover was hiding the math), conditions with ":", data with "∈". (5) `|f x − L|` renders `|f(x) − L|`: the application rule now fires on atom runs between operators, not only when the whole expression is atoms. Deferred: grouped "Obtain:" block for consecutive rows (interaction change).
