@@ -2309,11 +2309,6 @@ notation:50 bs:51 " is\u00a0a\u00a0basis\u00a0of " W:51 => Basis W bs
 @[reducible] def Dependent {K : Field'} (W : VectorSpace K) (vs : List W.V) : Prop :=
   ∃ v pre post, vs = pre ++ v :: post ∧ InSpan W (pre ++ post) v
 
-/-- a nonempty list has positive length — the case is vacuous -/
-theorem consNotLenZero {K : Field'} {W : VectorSpace K} {C : Prop}
-    (a : W.V) (rest : List W.V) (hlen : (a :: rest).length ≤ 0) : C :=
-  (Nat.not_succ_le_zero rest.length hlen).elim
-
 -- Scaling zero gives zero: not an axiom, but forced by distributivity plus
 -- cancellation (s = s + s only for s = 0).
 theorem smulZero {K : Field'} {W : VectorSpace K} (c : K.F) : W.smul c W.zero = W.zero := by
@@ -2406,33 +2401,41 @@ theorem independentOrDependent {K : Field'} {W : VectorSpace K} (vs : List W.V) 
 -- Dropping one vector strictly shrinks the list — the bound for the
 -- recursion. (Library lemma: tactic machinery like simp-at/omega lives here,
 -- so the MAIN proof below stays within the editor's renderable subset.)
-/-- dropping a vector shortens the list -/
-theorem lengthDrop {K : Field'} {W : VectorSpace K} (v : W.V) (pre post : List W.V) {n : Nat} (vs : List W.V)
-    (hvs : vs = pre ++ v :: post) (hlen : vs.length ≤ n + 1) :
-    (pre ++ post).length ≤ n := by
-  subst hvs
-  simp [List.length_append] at hlen ⊢
-  omega
+/-- strong induction on the length of a list -/
+theorem lengthStrongInduction {α : Type u} {P : List α → Prop}
+    (step : ∀ vs : List α, (∀ ws : List α, ws.length < vs.length → P ws) → P vs) :
+    ∀ vs : List α, P vs := by
+  have aux : ∀ n (vs : List α), vs.length ≤ n → P vs := by
+    intro n
+    induction n with
+    | zero =>
+      intro vs hle
+      exact step vs (fun ws hw => absurd (Nat.lt_of_lt_of_le hw hle) (Nat.not_lt_zero _))
+    | succ n ih =>
+      intro vs hle
+      exact step vs (fun ws hw => ih ws (Nat.le_of_lt_succ (Nat.lt_of_lt_of_le hw hle)))
+  intro vs
+  exact aux vs.length vs (Nat.le_refl _)
 
-theorem basisExistsAux {K : Field'} {W : VectorSpace K} (n : Nat) : ∀ vs : List W.V, vs.length ≤ n → Spans W vs →
+/-- dropping a vector strictly shortens the list -/
+theorem lengthDropLt {K : Field'} {W : VectorSpace K} (v : W.V) (pre post vs : List W.V)
+    (hvs : vs = pre ++ v :: post) : (pre ++ post).length < vs.length := by
+  subst hvs
+  simp [List.length_append]
+
+theorem basisExistsAux {K : Field'} {W : VectorSpace K} : ∀ vs : List W.V, Spans W vs →
     ∃ bs : List W.V, Basis W bs := by
-  induction n with
-  | zero =>
-    intro vs hlen h
-    cases vs with
-    | nil => exact ⟨[], h, nilIndependent⟩
-    | cons a rest => exact consNotLenZero a rest hlen
-  | succ m ih =>
-    intro vs hlen h
-    cases independentOrDependent vs with
-    | inl hind => exact ⟨vs, h, hind⟩
-    | inr hdep =>
-      obtain ⟨v, pre, post, hvs, hspan⟩ := hdep
-      exact ih (pre ++ post) (lengthDrop v pre post vs hvs hlen) (spanDrop vs pre post v hvs hspan h)
+  apply lengthStrongInduction
+  intro vs ih h
+  cases independentOrDependent vs with
+  | inl hind => exact ⟨vs, h, hind⟩
+  | inr hdep =>
+    obtain ⟨v, pre, post, hvs, hspan⟩ := hdep
+    exact ih (pre ++ post) (lengthDropLt v pre post vs hvs) (spanDrop vs pre post v hvs hspan h)
 
 theorem basisExists {K : Field'} {W : VectorSpace K} (vs : List W.V) (h : Spans W vs) :
     ∃ bs : List W.V, Basis W bs :=
-  basisExistsAux vs.length vs (Nat.le_refl _) h
+  basisExistsAux vs h
 `;
 
 const MATHLIB = `import Mathlib

@@ -155,9 +155,13 @@ describe('basisExists reads like mathematics', () => {
     items = await proseFor('Vector Spaces (basis)', 'basisExistsAux');
   }, 10 * MIN);
 
-  test('the length induction has a header with base and step', () => {
-    const header = items.find((i) => i.kind.tag === 'inductionHeader');
-    expect(header).toBeDefined();
+  test('the spine is strong induction on length — no fuel argument, no Nat cases', () => {
+    // The fuel-free proof applies the library principle; the Nat machinery
+    // lives inside `lengthStrongInduction`, invisible to the reader.
+    const spine = items.find((i) => i.kind.tag === 'apply' && (i.kind as { name?: string }).name === 'lengthStrongInduction');
+    expect(spine).toBeDefined();
+    expect(items.some((i) => i.kind.tag === 'inductionHeader')).toBe(false);
+    for (const i of items) expect(latexOf(i)).not.toMatch(/\bfuel\b/);
   });
 
   test('the independence dichotomy reads by meaning, not by constructor', () => {
@@ -184,7 +188,7 @@ describe('citations have reasons to cite', () => {
     for (const [preset, names] of [
       ['Real Analysis (chain rule)', ['divTwoPos', 'ltLeTrans', 'absTriangle', 'convertEps', 'addLtBoth', 'leTotal']],
       ['Nat Math (from scratch)', ['summationSplit', 'mulDistribLeft']],
-      ['Vector Spaces (basis)', ['spanDrop', 'lengthDrop', 'independentOrDependent', 'nilIndependent']],
+      ['Vector Spaces (basis)', ['spanDrop', 'lengthDropLt', 'lengthStrongInduction', 'independentOrDependent', 'nilIndependent']],
     ] as const) {
       const p = LEAN_PRESETS.find((x) => x.name === preset)!;
       const base = await analyzeLeanSource(p.code, { timeoutMs: 10 * MIN });
