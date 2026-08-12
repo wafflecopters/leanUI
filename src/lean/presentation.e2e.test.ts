@@ -278,9 +278,11 @@ describe('the determinant development compiles and cites', () => {
     expect(base.bridgeError).toBeFalsy();
     const errors = base.messages.filter((m) => m.severity === 'error').map((m) => m.text.split('\n')[0]);
     expect(errors).toEqual([]);
-    // The column toolkit and both proved identities are present.
+    // The column toolkit, the reduction, and the identity itself.
     for (const n of ['det', 'detColAdd', 'detColSmul', 'detColEqAdjZero', 'detColOpAdj',
-                     'detFirstRowUnit', 'vandermonde', 'vandermonde2']) {
+                     'detFirstRowUnit', 'detScaleRows', 'vandStep', 'detVandSteps',
+                     'vandermonde', 'vandermonde2', 'vandermondeRecursion',
+                     'vandProd', 'vandermondeIdentity', 'vandermondeAgrees']) {
       expect(base.declarations.find((d) => d.name === n), n).toBeDefined();
     }
   }, 30 * MIN);

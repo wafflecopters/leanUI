@@ -3347,6 +3347,7 @@ def detColOpAdj {R : Real} (n : Nat) (A : Mat R n n) (j1 j2 : Fin n)
 -- can match them syntactically.
 def rmulOneRight {R : Real} (a : Carrier R) : (rmul a (rone R)) = a := (fieldOf R).mulOneRight a
 def rmulOneLeft {R : Real} (a : Carrier R) : (rmul (rone R) a) = a := (fieldOf R).mulOneLeft a
+def rmulComm {R : Real} (a b : Carrier R) : (rmul a b) = (rmul b a) := (fieldOf R).mulComm a b
 
 -- V_ij = x_i^j: a total function of (i, j) on the rectangle, which is why the
 -- grid display is DERIVED (1, x_i, x_i^2, …, x_i^{n-1}) rather than authored.
@@ -3386,6 +3387,185 @@ def detFirstRowUnit {R : Real} (n : Nat) (A : Mat R n.succ n.succ)
   exact rmulOneLeft (det n (minor A fin0))
 
 #check @detFirstRowUnit
+
+-- ============ factoring a scalar out of EVERY row ============
+
+/-- the middle-four exchange for products: (ab)(pq) = (ap)(bq) -/
+def mulSwap {R : Real} (a b p q : Carrier R) :
+    (rmul (rmul a b) (rmul p q)) = (rmul (rmul a p) (rmul b q)) :=
+  eqTrans ((fieldOf R).mulAssoc a b (rmul p q))
+    (eqTrans (eqCong (fun z => rmul a z)
+        (eqTrans (eqSym ((fieldOf R).mulAssoc b p q))
+          (eqTrans (eqCong (fun z => rmul z q) ((fieldOf R).mulComm b p))
+            ((fieldOf R).mulAssoc p b q))))
+      (eqSym ((fieldOf R).mulAssoc a p (rmul b q))))
+
+def finProd {R : Real} : (k : Nat) → (Fin k → Carrier R) → Carrier R
+  | .zero, _ => rone R
+  | .succ k, f => rmul (f fin0) (finProd k (fun j => f j.succ))
+
+-- Scale row i by c i, for every row at once.
+def scaleRows {R : Real} {n m : Nat} (A : Mat R n m) (c : Fin n → Carrier R) : Mat R n m :=
+  fun i k => rmul (c i) (A i k)
+
+theorem minorScaleRows {R : Real} {n : Nat} (A : Mat R n.succ n.succ)
+    (c : Fin n.succ → Carrier R) (j : Fin n.succ) :
+    (minor (scaleRows A c) j) = (scaleRows (minor A j) (fun i => c i.succ)) := rfl
+
+/-- factoring one scalar out of every row: the determinant picks up the product -/
+def detScaleRows {R : Real} : (n : Nat) → (A : Mat R n n) → (c : Fin n → Carrier R) →
+    (det n (scaleRows A c)) = (rmul (finProd n c) (det n A))
+  | .zero, _, _ => eqSym (rmulOneLeft (rone R))
+  | .succ n, A, c => by
+    show (altSum n.succ fun j => rmul (rmul (c fin0) (A fin0 j)) (det n (minor (scaleRows A c) j)))
+      = rmul (rmul (c fin0) (finProd n (fun i => c i.succ)))
+          (altSum n.succ fun j => rmul (A fin0 j) (det n (minor A j)))
+    rw [← altSumMul (rmul (c fin0) (finProd n (fun i => c i.succ))) n.succ
+      (fun j => rmul (A fin0 j) (det n (minor A j)))]
+    apply altSumCongr n.succ
+    intro j
+    rw [minorScaleRows A c j, detScaleRows n (minor A j) (fun i => c i.succ)]
+    exact mulSwap (c fin0) (A fin0 j) (finProd n (fun i => c i.succ)) (det n (minor A j))
+
+#check @detScaleRows
+
+-- ============ the column operations, applied one at a time ============
+
+-- The matrix partway through the reduction: columns 0..k still hold the
+-- original powers, every column ABOVE k has already had its neighbour
+-- subtracted and so carries the common factor (x_i - x_1).
+-- k = n-1 is the Vandermonde matrix itself; k = 0 is the fully reduced one.
+def vandStep {R : Real} {n : Nat} (x : Fin n.succ → Carrier R) (k : Nat) : Mat R n.succ n.succ :=
+  fun i j => if Nat.ble j.val k = true then rpow (x i) j.val
+             else rmul (rpow (x i) (Nat.pred j.val)) (rsub (x i) (x fin0))
+
+/-- one column operation, and the reduction advances by one column -/
+def detVandStep {R : Real} {n : Nat} (x : Fin n.succ → Carrier R) (k : Nat)
+    (hk : Nat.lt (Nat.succ k) (Nat.succ n)) :
+    (det n.succ (vandStep x (Nat.succ k))) = (det n.succ (vandStep x k)) := by
+  have key : (updateCol (vandStep x (Nat.succ k)) ⟨Nat.succ k, hk⟩
+      (fun i => rsub ((vandStep x (Nat.succ k)) i ⟨Nat.succ k, hk⟩)
+        (rmul (x fin0) ((vandStep x (Nat.succ k)) i ⟨k, Nat.lt_of_succ_lt hk⟩))))
+      = vandStep x k := by
+    funext i j
+    by_cases hj : j = (⟨Nat.succ k, hk⟩ : Fin n.succ)
+    · -- the operated column: x^{k+1} - x_1 x^k = x^k (x - x_1)
+      rw [hj, updateColSame]
+      show rsub (if Nat.ble (Nat.succ k) (Nat.succ k) = true then rpow (x i) (Nat.succ k) else
+              rmul (rpow (x i) (Nat.pred (Nat.succ k))) (rsub (x i) (x fin0)))
+          (rmul (x fin0) (if Nat.ble k (Nat.succ k) = true then rpow (x i) k else
+              rmul (rpow (x i) (Nat.pred k)) (rsub (x i) (x fin0))))
+        = (if Nat.ble (Nat.succ k) k = true then rpow (x i) (Nat.succ k) else
+            rmul (rpow (x i) (Nat.pred (Nat.succ k))) (rsub (x i) (x fin0)))
+      rw [if_pos (by rw [Nat.ble_eq]; exact Nat.le_refl (Nat.succ k)), if_pos (by rw [Nat.ble_eq]; exact Nat.le_succ k),
+          if_neg (by rw [Nat.ble_eq]; exact fun hle => Nat.not_succ_le_self k hle)]
+      show rsub (rmul (x i) (rpow (x i) k)) (rmul (x fin0) (rpow (x i) k))
+        = rmul (rpow (x i) k) (rsub (x i) (x fin0))
+      rw [mulSubRight (rpow (x i) k) (x i) (x fin0),
+          rmulComm (rpow (x i) k) (x i),
+          rmulComm (rpow (x i) k) (x fin0)]
+    · -- every other column: untouched on both sides, or already operated
+      rw [updateColOther _ _ _ i j hj]
+      show (if Nat.ble j.val (Nat.succ k) = true then rpow (x i) j.val else
+              rmul (rpow (x i) (Nat.pred j.val)) (rsub (x i) (x fin0)))
+        = (if Nat.ble j.val k = true then rpow (x i) j.val else
+              rmul (rpow (x i) (Nat.pred j.val)) (rsub (x i) (x fin0)))
+      by_cases hle : Nat.ble j.val k = true
+      · rw [if_pos hle, if_pos (by rw [Nat.ble_eq] at hle ⊢; exact Nat.le_succ_of_le hle)]
+      · have hgt : Nat.lt k j.val := by
+          rw [Nat.ble_eq] at hle
+          exact Nat.lt_of_not_le hle
+        have hne : j.val = Nat.succ k → False := fun he => hj (Fin.ext he)
+        rw [if_neg hle, if_neg (by
+          rw [Nat.ble_eq]
+          exact fun hle2 => hne (Nat.le_antisymm hle2 (Nat.succ_le_of_lt hgt)))]
+  rw [← key]
+  exact eqSym (detColOpAdj n.succ (vandStep x (Nat.succ k)) ⟨k, Nat.lt_of_succ_lt hk⟩
+    ⟨Nat.succ k, hk⟩ rfl (x fin0))
+
+/-- the whole reduction: every column operation, folded -/
+def detVandSteps {R : Real} {n : Nat} (x : Fin n.succ → Carrier R) :
+    (k : Nat) → (hk : Nat.lt k (Nat.succ n)) →
+    (det n.succ (vandStep x k)) = (det n.succ (vandStep x 0))
+  | .zero, _ => rfl
+  | .succ k, hk => eqTrans (detVandStep x k hk) (detVandSteps x k (Nat.lt_of_succ_lt hk))
+
+#check @detVandSteps
+
+-- ============ THE VANDERMONDE IDENTITY ============
+
+/-- the Vandermonde recursion: the first variable factors out, leaving the
+    Vandermonde determinant of the remaining ones -/
+def vandermondeRecursion {R : Real} {n : Nat} (x : Fin n.succ → Carrier R) :
+    (det n.succ (vandermonde x))
+      = (rmul (finProd n (fun i => rsub (x i.succ) (x fin0)))
+          (det n (vandermonde (fun i => x i.succ)))) := by
+  -- nothing has been operated on yet
+  have htop : (vandermonde x) = (vandStep x n) := by
+    funext i j
+    show rpow (x i) j.val = (if Nat.ble j.val n = true then rpow (x i) j.val else
+      rmul (rpow (x i) (Nat.pred j.val)) (rsub (x i) (x fin0)))
+    rw [if_pos (by rw [Nat.ble_eq]; exact Nat.le_of_lt_succ j.isLt)]
+  -- after every operation the first row is (1, 0, …, 0)
+  have h0 : ((vandStep x 0) fin0 fin0) = rone R := by
+    show (if Nat.ble 0 0 = true then rpow (x fin0) 0 else
+      rmul (rpow (x fin0) (Nat.pred 0)) (rsub (x fin0) (x fin0))) = rone R
+    rfl
+  have hz : (j : Fin n) → ((vandStep x 0) fin0 j.succ) = rzero R := by
+    intro j
+    show (if Nat.ble (Nat.succ j.val) 0 = true then rpow (x fin0) (Nat.succ j.val) else
+      rmul (rpow (x fin0) (Nat.pred (Nat.succ j.val))) (rsub (x fin0) (x fin0))) = rzero R
+    rw [if_neg (by rw [Nat.ble_eq]; exact fun h => Nat.not_succ_le_zero j.val h),
+        subSelf (x fin0)]
+    exact mulZeroRight (rpow (x fin0) j.val)
+  -- and the surviving minor is the smaller Vandermonde, row i scaled by (x_i − x_1)
+  have hminor : (minor (vandStep x 0) fin0)
+      = (scaleRows (vandermonde (fun i => x i.succ)) (fun i => rsub (x i.succ) (x fin0))) := by
+    funext i k
+    show (vandStep x 0) i.succ (skip fin0 k)
+      = rmul (rsub (x i.succ) (x fin0)) (rpow (x i.succ) k.val)
+    rw [skipOfGe fin0 k (Nat.zero_le k.val)]
+    show (if Nat.ble (Nat.succ k.val) 0 = true then rpow (x i.succ) (Nat.succ k.val) else
+      rmul (rpow (x i.succ) (Nat.pred (Nat.succ k.val))) (rsub (x i.succ) (x fin0)))
+      = rmul (rsub (x i.succ) (x fin0)) (rpow (x i.succ) k.val)
+    rw [if_neg (by rw [Nat.ble_eq]; exact fun h => Nat.not_succ_le_zero k.val h)]
+    exact rmulComm (rpow (x i.succ) k.val) (rsub (x i.succ) (x fin0))
+  rw [htop, detVandSteps x n (Nat.lt_succ_self n), detFirstRowUnit n (vandStep x 0) h0 hz,
+      hminor, detScaleRows n (vandermonde (fun i => x i.succ)) (fun i => rsub (x i.succ) (x fin0))]
+
+-- The product over all pairs i < j, written the way the recursion produces it:
+-- (x_2 − x_1)(x_3 − x_1)…(x_n − x_1) times the same for the remaining variables.
+def vandProd {R : Real} : (n : Nat) → (x : Fin n → Carrier R) → Carrier R
+  | .zero, _ => rone R
+  | .succ n, x => rmul (finProd n (fun i => rsub (x i.succ) (x fin0)))
+      (vandProd n (fun i => x i.succ))
+
+/-- VANDERMONDE: det V = ∏_{i<j} (x_j − x_i) -/
+def vandermondeIdentity {R : Real} : (n : Nat) → (x : Fin n → Carrier R) →
+    (det n (vandermonde x)) = (vandProd n x)
+  | .zero, _ => rfl
+  | .succ n, x =>
+    eqTrans (vandermondeRecursion x)
+      (eqCong (fun z => rmul (finProd n (fun i => rsub (x i.succ) (x fin0))) z)
+        (vandermondeIdentity n (fun i => x i.succ)))
+
+#check @vandermondeIdentity
+
+-- SANITY: the product really is (x_2 - x_1) at n = 2, so the identity's
+-- right-hand side is the product a paper writes.
+def vandProd2Check {R : Real} (x : Fin 2 → Carrier R) :
+    (vandProd 2 x) = (rsub (x (Fin.succ fin0)) (x fin0)) := by
+  show rmul (rmul (rsub (x (Fin.succ fin0)) (x fin0)) (rone R)) (rmul (rone R) (rone R))
+    = rsub (x (Fin.succ fin0)) (x fin0)
+  rw [rmulOneRight, rmulOneRight, rmulOneRight]
+
+-- and it agrees with the directly-computed 2x2 determinant
+def vandermondeAgrees {R : Real} (x : Fin 2 → Carrier R) :
+    (vandProd 2 x) = (det 2 (vandermonde x)) :=
+  eqTrans (vandProd2Check x) (eqSym (vandermonde2 x))
+
+#check @vandermondeIdentity
+#check @vandermondeAgrees
 `;
 
 const GROUP_THEORY = `-- Group Theory (from scratch): finite groups as element lists, subgroups,
