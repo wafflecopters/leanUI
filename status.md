@@ -47,15 +47,14 @@ The proof editor is a **headless controller with a thin UI on top**, not a React
   (c) Fubini — DONE (finite double-sum form, ∑∑ swap by outer induction);
   (d) rearrangement — DONE in its finite form (sumList invariant under
   List.Perm, four-case derivation induction; infinite form needs the limit
-  framework, noted); (e) Jacobian — IN PROGRESS: scratchpad mv.lean = RA tower
-  prefix (split at the demo banner) + Vec/Mat/finSum machinery GREEN
-  (finSumCongr/finSumZero/finSumSingle proved), HasDerivAt (Fréchet ≤ ε‖h‖
-  form) defined, jacobianEntries statement renders as lim⟦0⟧ diff-quot = A i j;
-  remaining: two small mul algebra sorries in mulVecBasis, vnormBasis,
-  componentLeNorm, and the analytic estimate (divide the Fréchet bound by |t| —
-  needs RA division algebra: absDiv/mulInvCancel-shaped lemmas, use ε/2 for
-  strictness); (f) Vandermonde determinant (the showcase: matrix displays whose
-  grids CHANGE across steps — needs a matrix/ellipsis display model where
+  framework, noted); (e) Jacobian — THEOREM PROVED (docs/jacobian-draft.lean.txt;
+  propext+Quot.sound only; three RA tower sorries fixed for real along the way:
+  negZero, mulNegLeft, absOfNonpos). Remaining for (e): reshape the main proof's
+  spine into the renderable subset (term-style haves — no refine, no by-blocks
+  inside have, the quotInvDescends lesson), split REAL_ANALYSIS into RA_TOWER +
+  demos in presets.ts, register 'Multivariable (Jacobian)' preset, battery
+  round-trip test; (f) Vandermonde determinant (the showcase: matrix displays
+  whose grids CHANGE across steps — needs a matrix/ellipsis display model where
   \vdots is an indexed-family assertion, not a cell).
 
 ## Previous Focus
