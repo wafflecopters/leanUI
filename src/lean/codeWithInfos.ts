@@ -515,11 +515,10 @@ function restructure(nodes: MathNode[]): MathNode[] {
     const out: MathNode[] = [];
     let run: MathNode[] = [];
     const flushRun = () => {
-      const headIsFn =
-        run.length >= 2 &&
-        run[0].tag === 'Symbol' &&
-        /^[A-Za-z_\\]/.test((run[0] as SymbolNode).value) &&
-        !/^\\/.test((run[0] as SymbolNode).value);
+      // The head may be a bare Symbol OR a click-target Group wrapping one
+      // (the wrapSubterms path wraps EVERY tagged subterm) — see through it.
+      const headId = run.length >= 2 ? headIdentifier(run[0]) : null;
+      const headIsFn = headId !== null && /^[A-Za-z_]/.test(headId);
       if (headIsFn) {
         const [head, ...args] = run;
         out.push(head, mkSymbol('('));
@@ -589,6 +588,17 @@ function operandStartingAt(nodes: MathNode[], start: number): { end: number; ope
     return null;
   }
   return isAppAtom(nodes[start]) ? { end: start, operand: [nodes[start]] } : null;
+}
+
+/** The identifier a run head displays, seen through click-target Group
+ *  wrappers. A Group with several children (a parenthesized expression like
+ *  `(pre ++ post)`) is NOT an identifier — juxtaposition stays as-is. */
+function headIdentifier(n: MathNode): string | null {
+  if (n.tag === 'Symbol') return (n as SymbolNode).value;
+  if (n.tag === 'Group' && (n as GroupNode).children.length === 1) {
+    return headIdentifier((n as GroupNode).children[0]);
+  }
+  return null;
 }
 
 /** Symbols that are operators/punctuation (NOT application operands). */

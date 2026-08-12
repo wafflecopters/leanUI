@@ -669,6 +669,51 @@ describe('case meanings and repeated goals', () => {
     const holes2 = again.filter((i) => i.kind.tag === 'hole');
     expect((holes2[1].kind as any).repeatedGoal).toBe(true);
   });
+
+  test('a branch repeating the PRE-SPLIT goal is flagged even past a busy sibling', () => {
+    // The limitAdd shape: "Let ε…" displays G, the split doesn't change it,
+    // branch 1 opens with a constructor apply (re-showing G, then working on
+    // subgoals A and B), branch 2 is an open hole still owing G. The old
+    // last-row compare saw only branch 1's subgoals and re-displayed the
+    // full ∃δ-bundle twice more.
+    const applyNode: ProofNode = {
+      tag: 'apply', id: 20, name: 'constructor', collapsed: false,
+      children: [{ tag: 'hole', id: 21 }, { tag: 'hole', id: 22 }],
+    } as never;
+    const split: ProofNode = {
+      tag: 'induction', id: 2, scrutinee: 'h', isCases: true, collapsed: false,
+      cases: [
+        { tag: 'case', id: 3, label: 'inl', body: applyNode, collapsed: false, constructorName: 'inl', constructorParamNames: ['a'] },
+        { tag: 'case', id: 4, label: 'inr', body: { tag: 'hole', id: 30 }, collapsed: false, constructorName: 'inr', constructorParamNames: ['b'] },
+      ],
+    };
+    const root: ProofNode = { tag: 'intros', id: 1, names: ['eps'], child: split, collapsed: false } as never;
+    const goalMap = new Map<number, any>([
+      [1, { goalLatex: 'PRE', hypotheses: [] }],
+      [2, { goalLatex: 'G', hypotheses: [] }],
+      [20, { goalLatex: 'G', hypotheses: [] }],   // apply's incoming goal = G
+      [21, { goalLatex: 'A', hypotheses: [] }],
+      [22, { goalLatex: 'B', hypotheses: [] }],
+      [30, { goalLatex: 'G', hypotheses: [] }],   // branch 2 still owes G
+      [3, { goalLatex: 'G', hypotheses: [HYP('a', 'X')] }],
+      [4, { goalLatex: 'G', hypotheses: [HYP('b', 'Y')] }],
+    ]);
+    // The intro row displays G (its CHILD's goal — the split doesn't change it).
+    goalMap.set(1, { goalLatex: 'G', hypotheses: [] });
+    const items = generateProofProse(root, 99, goalMap as any);
+    const apply = items.find((i) => i.kind.tag === 'apply');
+    expect(apply, 'apply row exists').toBeDefined();
+    // Branch 1's constructor re-shows the goal the intro already displayed…
+    expect((apply!.kind as any).repeatedGoal).toBe(true);
+    // …and branch 2's hole re-shows it too, despite A/B displays in between.
+    const hole30 = items.find((i) => i.nodeId === 30);
+    expect((hole30!.kind as any).repeatedGoal).toBe(true);
+    // The subgoal holes repeat their own headers' displays (Goal 1: We must
+    // show A / We must show A) — those flag too; the header rows do not.
+    for (const i of items) {
+      if (i.kind.tag === 'subgoalHeader') expect((i.kind as any).repeatedGoal).toBeUndefined();
+    }
+  });
 });
 
 describe('destructure condition types', () => {

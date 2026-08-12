@@ -10,6 +10,10 @@ import { renderStaticLatex } from '../math-editor/render';
 
 const sym = (n: MathNode): string => (n as SymbolNode).value;
 
+/** Drop click-target \htmlId wrappers so tests compare visible math only. */
+const stripIds = (latex: string): string =>
+  latex.replace(/\\htmlId\{[^}]*\}/g, '').replace(/[{}]/g, '');
+
 describe('tokenizeText', () => {
   test('keeps identifiers whole, drops whitespace', () => {
     const nodes = tokenizeText('Nat.succ n');
@@ -132,6 +136,53 @@ describe('codeWithInfosToMathRow', () => {
     };
     const latex = renderStaticLatex(codeWithInfosToMathRow(app, { wrapSubterms: false }));
     expect(latex.replace(/\s/g, '')).toBe('f(x)');
+  });
+
+  test('application fires when subterms are click-target Groups (the app path)', () => {
+    // The proof-tree UI keeps wrapSubterms: true, so `f x` arrives as
+    // [Group(f), Group(x)]. The run rule must see through the Group wrapper —
+    // this regressed once and every display read `fx`, product-style.
+    const app: TaggedJson = {
+      t: 'append',
+      kids: [
+        { t: 'tag', pos: '/0', child: { t: 'text', s: 'f' } },
+        { t: 'text', s: ' ' },
+        { t: 'tag', pos: '/1', child: { t: 'text', s: 'x' } },
+      ],
+    };
+    const latex = stripIds(renderStaticLatex(codeWithInfosToMathRow(app)));
+    expect(latex.replace(/\s/g, '')).toBe('f(x)');
+  });
+
+  test('Group-headed application inside an operator context: |f x - L|', () => {
+    const abs: TaggedJson = {
+      t: 'append',
+      kids: [
+        { t: 'text', s: '|' },
+        { t: 'tag', pos: '/0', child: { t: 'text', s: 'f' } },
+        { t: 'text', s: ' ' },
+        { t: 'tag', pos: '/1', child: { t: 'text', s: 'x' } },
+        { t: 'text', s: ' - ' },
+        { t: 'tag', pos: '/2', child: { t: 'text', s: 'L' } },
+        { t: 'text', s: '|' },
+      ],
+    };
+    const latex = stripIds(renderStaticLatex(codeWithInfosToMathRow(abs)));
+    expect(latex.replace(/\s/g, '')).toContain('f(x)');
+  });
+
+  test('a parenthesized Group head is NOT called: (pre ++ post) x stays juxtaposed', () => {
+    const app: TaggedJson = {
+      t: 'append',
+      kids: [
+        { t: 'tag', pos: '/0', child: { t: 'text', s: '(pre ++ post)' } },
+        { t: 'text', s: ' ' },
+        { t: 'tag', pos: '/1', child: { t: 'text', s: 'x' } },
+      ],
+    };
+    const latex = renderStaticLatex(codeWithInfosToMathRow(app));
+    expect(latex).not.toContain('(pre');
+    expect(latex.replace(/\s/g, '')).not.toContain('post)(x)');
   });
 
   test('multi-arg application g a b renders as g(a, b) (spine flattened)', () => {

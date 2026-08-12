@@ -4017,7 +4017,7 @@ function ProseItemView({
     if (prevShowedGoal) return null;
     // The goal is EXACTLY the last one already on screen (a case split that
     // didn't change it): a paper states a claim once and then refers to it.
-    if ((kind.tag === 'hole' || kind.tag === 'exact') && kind.repeatedGoal) {
+    if ((kind.tag === 'hole' || kind.tag === 'exact' || kind.tag === 'apply') && kind.repeatedGoal) {
       return <span style={prose}>We must show the claim above.{' '}</span>;
     }
     // The row being edited expands its goal to a display block (room to read

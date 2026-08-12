@@ -57,7 +57,7 @@ export type ProseItemKind =
   | { tag: 'unfold'; name: string; occurrence?: number; preGoalLatex?: string; goalLatex?: string; error?: string }
   | { tag: 'fold'; name: string; occurrence?: number; preGoalLatex?: string; goalLatex?: string; error?: string }
   | { tag: 'rewrite'; name: string; reverse?: boolean; occurrences?: readonly number[]; equationLatex?: string; preGoalLatex?: string; goalLatex?: string; error?: string }
-  | { tag: 'apply'; name: string; preGoalLatex?: string; subgoalLatex?: string[]; appliedArgsLatex?: string[]; error?: string; proofExprs?: readonly string[] }
+  | { tag: 'apply'; name: string; preGoalLatex?: string; subgoalLatex?: string[]; appliedArgsLatex?: string[]; error?: string; proofExprs?: readonly string[]; repeatedGoal?: boolean }
   | {
       tag: 'inductionHeader';
       scrutinee: string;
@@ -807,28 +807,42 @@ function displayedGoal(kind: ProseItemKind): string | undefined {
     case 'exact':
       return kind.goalLatex;
     case 'apply':
-      return (kind.subgoalLatex?.length ?? 0) <= 1 ? kind.subgoalLatex?.[0] : undefined;
+      // A 1-subgoal apply displays that subgoal inline ("It remains to show
+      // S"); a 0- or many-subgoal apply displays its INCOMING goal ("We must
+      // show G. This holds by construction: …").
+      return kind.subgoalLatex?.length === 1 ? kind.subgoalLatex[0] : kind.preGoalLatex;
     default:
       return undefined;
   }
 }
 
 /**
- * Flag "We must show G" rows whose G is EXACTLY the last goal already on
- * screen, so the renderer can say "the claim above" instead of repeating a
- * display equation. A paper states a claim once; the repeat came from case
- * splits (each branch re-showing the goal the split didn't change) and cost a
- * third of the proof's height. Only hole/exact rows are flagged — a transform
- * step's goal genuinely changed, so equality there is information.
+ * Flag "We must show G" rows whose G is EXACTLY a goal already on screen, so
+ * the renderer can say "the claim above" instead of repeating a display
+ * equation. A paper states a claim once; the repeat came from case splits
+ * (each branch re-showing the goal the split didn't change) and cost a third
+ * of the proof's height.
+ *
+ * "Already on screen" means ANYWHERE earlier in the document, not just the
+ * previous row: the second case of a split still matches the goal shown
+ * before the split even when the first branch displayed other goals in
+ * between. (The plain last-row compare missed exactly that, and limitAdd
+ * displayed the same ∃δ-bundle three times.) When the identical formula did
+ * appear above — even in a sibling branch — "the claim above" is what a
+ * paper says; symmetric cases read "similarly", not twice at full width.
+ *
+ * Only hole/exact/apply rows are flagged — a transform step's goal genuinely
+ * changed, so equality there is information.
  */
 function markRepeatedGoals(items: ProseItem[]): ProseItem[] {
-  let last: string | undefined;
+  const seen = new Set<string>();
   return items.map((item) => {
     const g = displayedGoal(item.kind);
     if (!g) return item;
-    const repeated = g === last;
-    last = g;
-    if (!repeated || (item.kind.tag !== 'hole' && item.kind.tag !== 'exact')) return item;
+    const repeated = seen.has(g);
+    seen.add(g);
+    const flaggable = item.kind.tag === 'hole' || item.kind.tag === 'exact' || item.kind.tag === 'apply';
+    if (!repeated || !flaggable) return item;
     return { ...item, kind: { ...item.kind, repeatedGoal: true } };
   });
 }
