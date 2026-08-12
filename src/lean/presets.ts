@@ -4,6 +4,15 @@
  * These replace the old TT/TTK presets (which used the now-superseded surface
  * syntax). Core-mode friendly: none require Mathlib. The Mathlib toggle unlocks
  * the richer examples that import it.
+ *
+ * DOC-COMMENT STYLE: a lemma's doc comment is its CITATION — the prose says
+ * "by <doc>" ("This holds by transitivity.", "Observe … by the triangle
+ * inequality."). Write docs as short noun phrases that read after "by":
+ * "totality of ≤", "positivity of halving", "adding the two estimates".
+ * No sentences, no internal commas, no colons.
+ *
+ * NO BACKTICKS anywhere in this file's Lean code or comments — the presets are
+ * TS template literals and a backtick terminates them mid-file.
  */
 
 export interface LeanPreset {
@@ -844,11 +853,11 @@ def minElim {R : Real} (a b : Carrier R) (C : Carrier R → Sort w)
     (fun h => left h) (fun h => right h)
     ((fieldOf R).leTotal a b)
 
-/-- the minimum is at most its left argument -/
+/-- min bounding its left argument -/
 def minLeLeft {R : Real} (a b : Carrier R) : rle (rmin a b) a :=
   minElim a b (fun z => rle z a) (fun _ => (fieldOf R).leRefl a) (fun h => h)
 
-/-- the minimum is at most its right argument -/
+/-- min bounding its right argument -/
 def minLeRight {R : Real} (a b : Carrier R) : rle (rmin a b) b :=
   minElim a b (fun z => rle z b) (fun h => h) (fun _ => (fieldOf R).leRefl b)
 
@@ -856,7 +865,7 @@ def ltMin {R : Real} (c a b : Carrier R) (ha : rlt c a) (hb : rlt c b) :
     rlt c (rmin a b) :=
   minElim a b (fun z => rlt c z) (fun _ => ha) (fun _ => hb)
 
-/-- the minimum of positives is positive -/
+/-- positivity of the minimum -/
 def minPos {R : Real} (a b : Carrier R) (ha : rlt (rzero R) a) (hb : rlt (rzero R) b) :
     rlt (rzero R) (rmin a b) :=
   ltMin (rzero R) a b ha hb
@@ -994,7 +1003,7 @@ def leLtTransNe {R : Real} (a b c : Carrier R) (hab : rle a b) (hbc : rle b c)
     (nebc : b = c → MyVoid) (eq : a = c) : MyVoid :=
   nebc ((fieldOf R).leAntisym b c hbc (replace (fun z => rle z b) eq hab))
 
-/-- transitivity, chaining ≤ into < -/
+/-- transitivity -/
 def leLtTrans {R : Real} (a b c : Carrier R) (hab : rle a b) (hbc : rlt b c) : rlt a c :=
   Pair.mk (leLtTransLe a b c hab (Pair.fst hbc)) (leLtTransNe a b c hab (Pair.fst hbc) (Pair.snd hbc))
 
@@ -1007,7 +1016,7 @@ def ltLeTransNe {R : Real} (a b c : Carrier R) (hab : rle a b) (neab : a = b →
     ((fieldOf R).leTrans b c a hbc
       (replace (fun z => rle z a) eq ((fieldOf R).leRefl a))))
 
-/-- transitivity, chaining < into ≤ -/
+/-- transitivity -/
 def ltLeTrans {R : Real} (a b c : Carrier R) (hab : rlt a b) (hbc : rle b c) : rlt a c :=
   Pair.mk (ltLeTransLe a b c (Pair.fst hab) hbc) (ltLeTransNe a b c (Pair.fst hab) (Pair.snd hab) hbc)
 
@@ -1580,7 +1589,7 @@ def coreEstimate {R : Real} (f g : Carrier R → Carrier R) (x0 L M he x : Carri
 def halfEqDiv {R : Real} (e : Carrier R) : (rmul (rhalf R) e) = (rdiv e (rtwo R)) :=
   (fieldOf R).mulComm (rhalf R) e
 
-/-- halving preserves positivity -/
+/-- positivity of halving -/
 def divTwoPos {R : Real} (e : Carrier R) (hlt : rlt (rzero R) e) :
     rlt (rzero R) (rdiv e (rtwo R)) :=
   replace (fun z => rlt (rzero R) z) (halfEqDiv e) (halfMulEpsPos e hlt)
@@ -1589,7 +1598,7 @@ def divTwoPos {R : Real} (e : Carrier R) (hlt : rlt (rzero R) e) :
 -- proofs mostly need the divTwoPos special case above, but the general form
 -- belongs in the toolkit (statement faithful; body sorried like the other
 -- ports of TT tactic proofs — the sorry surfaces as a warning, not an error).
-/-- a quotient of positives is positive -/
+/-- positivity of quotients -/
 def divPos {R : Real} (a b : Carrier R) (ha : rlt (rzero R) a) (hb : rlt (rzero R) b) :
     rlt (rzero R) (rdiv a b) :=
   mulPos a (rinv b) ha (invPosStrict b hb)
@@ -1598,7 +1607,7 @@ def divTwoAddEq {R : Real} (e : Carrier R) :
     (radd (rdiv e (rtwo R)) (rdiv e (rtwo R))) = e :=
   replace (fun z => (radd z z) = e) (halfEqDiv e) (halfMulEps e)
 
-/-- the two half-estimates add up to ε -/
+/-- the halves adding up to ε -/
 def convertEps {R : Real} (epsilon v : Carrier R)
     (hlt : rlt v (radd (rdiv epsilon (rtwo R)) (rdiv epsilon (rtwo R)))) : rlt v epsilon :=
   replace (fun z => rlt v z) (divTwoAddEq epsilon) hlt
@@ -2338,7 +2347,7 @@ theorem spanSmul {K : Field'} {W : VectorSpace K} (ws : List W.V) (c : K.F) {a :
 -- Anything in the span of vs is in the span of ws, provided every GENERATOR
 -- of vs is: induct on the derivation, rebuilding each step with the two
 -- closure lemmas.
-/-- spans grow with their generators -/
+/-- monotonicity of span -/
 theorem spanMono {K : Field'} {W : VectorSpace K} (vs ws : List W.V)
     (hgen : ∀ v, v ∈ vs → InSpan W ws v) {u : W.V}
     (hu : InSpan W vs u) : InSpan W ws u := by
@@ -2347,7 +2356,7 @@ theorem spanMono {K : Field'} {W : VectorSpace K} (vs ws : List W.V)
   | step c v hv hu ih => exact spanAdd ws (spanSmul ws c (hgen v hv)) ih
 
 -- Every generator is in the span: c := one, rest := zero.
-/-- every generator lies in the span -/
+/-- generators lying in their own span -/
 theorem generatorInSpan {K : Field'} {W : VectorSpace K} (vs : List W.V) (v : W.V) (hv : v ∈ vs) :
     InSpan W vs v := by
   have h := InSpan.step K.one v hv InSpan.zero
@@ -2358,7 +2367,7 @@ theorem generatorInSpan {K : Field'} {W : VectorSpace K} (vs : List W.V) (v : W.
 -- of basis extraction. Every generator of vs is in the span of pre ++ post
 -- (v by hv, the others by membership), so spanMono carries every derivation
 -- across.
-/-- removing a vector the rest already spans keeps the span -/
+/-- redundancy of a vector the rest already spans -/
 theorem spanDrop {K : Field'} {W : VectorSpace K} (vs pre post : List W.V) (v : W.V)
     (hvs : vs = pre ++ v :: post)
     (hv : InSpan W (pre ++ post) v)
@@ -2375,7 +2384,7 @@ theorem spanDrop {K : Field'} {W : VectorSpace K} (vs pre post : List W.V) (v : 
   · exact hs u
 
 -- The empty list is trivially independent.
-/-- the empty list is vacuously independent -/
+/-- vacuous independence of the empty list -/
 theorem nilIndependent {K : Field'} {W : VectorSpace K} : Independent W [] := by
   intro v pre post h
   cases pre <;> simp_all
@@ -2383,7 +2392,7 @@ theorem nilIndependent {K : Field'} {W : VectorSpace K} : Independent W [] := by
 -- Classically, a list is independent or some vector lies in the span of the
 -- others. (The negation-pushing lives HERE, once, so the main proof below
 -- reads as a clean case split.)
-/-- classically: independent, or some vector lies in the span of the others -/
+/-- the independence dichotomy -/
 theorem independentOrDependent {K : Field'} {W : VectorSpace K} (vs : List W.V) :
     Independent W vs ∨ Dependent W vs := by
   cases Classical.em (Independent W vs) with
@@ -2417,7 +2426,7 @@ theorem lengthStrongInduction {α : Type u} {P : List α → Prop}
   intro vs
   exact aux vs.length vs (Nat.le_refl _)
 
-/-- dropping a vector strictly shortens the list -/
+/-- the length decrease from dropping a vector -/
 theorem lengthDropLt {K : Field'} {W : VectorSpace K} (v : W.V) (pre post vs : List W.V)
     (hvs : vs = pre ++ v :: post) : (pre ++ post).length < vs.length := by
   subst hvs

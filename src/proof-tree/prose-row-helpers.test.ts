@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { splitAnonTuple, existsBinderFromLatex,
+import { splitAnonTuple, existsBinderFromLatex, firstExplicitArg,
   describeApplyProse,
   describeExactProse,
   describeInductionHeader,
@@ -164,5 +164,24 @@ describe('exists-witness tuples', () => {
   test('existsBinderFromLatex finds the binder, null otherwise', () => {
     expect(existsBinderFromLatex('{\\exists {\\operatorname{bs}},{X}}')).toBe('bs');
     expect(existsBinderFromLatex('0 < x')).toBeNull();
+  });
+});
+
+describe('firstExplicitArg — what a citation is applied to', () => {
+  test('a parenthesized first argument comes back without its parens', () => {
+    expect(firstExplicitArg('ih (pre ++ post) (lengthDropLt v pre post vs hvs) h')).toBe('pre ++ post');
+  });
+
+  test('a bare-identifier first argument', () => {
+    expect(firstExplicitArg('ih ws hw')).toBe('ws');
+  });
+
+  test('a bare name has no argument', () => {
+    expect(firstExplicitArg('assumption_h')).toBeNull();
+    expect(firstExplicitArg('⟨a, b⟩')).toBeNull();
+  });
+
+  test('unbalanced parens fail closed', () => {
+    expect(firstExplicitArg('ih (pre ++ post')).toBeNull();
   });
 });

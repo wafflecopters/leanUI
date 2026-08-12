@@ -34,7 +34,7 @@ import {
   proseItemShowsVisibleGoal,
   visibleLatexLength,
 } from '../proof-tree/prose-view-helpers';
-import { splitAnonTuple, existsBinderFromLatex,
+import { splitAnonTuple, existsBinderFromLatex, firstExplicitArg,
   describeApplyProse,
   describeExactProse,
   describeInductionHeader,
@@ -2791,7 +2791,9 @@ function HaveExprBlock({
   if (proofLatex) {
     return (
       <span style={{ opacity: 0.75 }}>
-        <span style={prose}>{' '}since{' '}</span>
+        {/* "by ⟨reason⟩" — every citation voice in the document says "by";
+            docs are written as noun phrases so they read after it. */}
+        <span style={prose}>{' '}by{' '}</span>
         {docText ? (
           /* The reason reads as prose; the term is one hover away and the
              click still opens the builder — display changed, model untouched. */
@@ -3279,13 +3281,19 @@ function ExactProseItem({
   // For a VALUE exact the term IS the content (never swap it for a doc);
   // for a proof, the head lemma's doc is the reason a paper would give.
   const exactHead = exprHeadName(kind.exprLatex);
+  const isIH = !kind.isValueType && /(^|_)ih\d*$/.test(exactHead ?? '');
   const exactDoc = kind.isValueType
     ? undefined
-    : /(^|_)ih\d*$/.test(exactHead ?? '')
+    : isIH
       // Applying the IH is THE move of an induction proof — say so. (Our own
       // enrichment names induction hypotheses ih/*_ih.)
       ? 'the induction hypothesis'
       : lemmaDocOf(exactHead);
+  // WHICH instance the IH is applied to is the content of the step — a paper
+  // writes "by the induction hypothesis applied to pre ++ post". Only when the
+  // argument is short enough to read inline; the full term stays on hover.
+  const ihFirstArg = isIH ? firstExplicitArg(kind.exprLatex) : null;
+  const ihAppliedTo = ihFirstArg && ihFirstArg.length <= 40 ? ihFirstArg : null;
   // A one-liner closing a goal ALREADY on screen reads as a typed witness —
   // "⟨[], h, nilIndependent⟩ : ∃bs, Basis(W, bs)." — not as the stilted
   // "We must show the claim above. By ⟨…⟩." Only when short enough to stay
@@ -3348,10 +3356,16 @@ function ExactProseItem({
       {description.mode !== 'error' ? (
         exactDoc ? (
           <>
-            <span style={prose}>{kind.isValueType ? 'Take' : 'This follows:'}{' '}</span>
+            <span style={prose}>{kind.isValueType ? 'Take' : 'This holds by'}{' '}</span>
             <HoverType typeLatex={description.displayLatex}>
               <span style={{ ...prose, borderBottom: '1px dashed rgba(139, 148, 158, 0.4)' }}>{exactDoc}</span>
             </HoverType>
+            {ihAppliedTo && (
+              <>
+                <span style={prose}>{' '}applied to{' '}</span>
+                <InlineKaTeX latex={textToLatex(ihAppliedTo)} style={{ fontSize: '13px' }} />
+              </>
+            )}
             <span style={prose}>.</span>
           </>
         ) : (

@@ -203,6 +203,29 @@ export function splitAnonTuple(expr: string): string[] | null {
   return parts.length >= 2 && parts.every((p) => p.length > 0) ? parts : null;
 }
 
+/** The first argument of an application expression — what a citation is
+ *  "applied to". `ih (pre ++ post) h1 h2` → `pre ++ post`; a bare name has
+ *  none. Textual and display-only; used so "by the induction hypothesis"
+ *  can say WHICH instance, which is the whole content of the step. */
+export function firstExplicitArg(expr: string): string | null {
+  const m = expr.trim().match(/^[A-Za-z_][A-Za-z0-9_.']*\s+(.*)$/s);
+  if (!m) return null;
+  const rest = m[1].trim();
+  if (!rest) return null;
+  if (rest.startsWith('(')) {
+    let depth = 0;
+    for (let i = 0; i < rest.length; i++) {
+      if (rest[i] === '(') depth++;
+      else if (rest[i] === ')') {
+        depth--;
+        if (depth === 0) return rest.slice(1, i).trim() || null;
+      }
+    }
+    return null;
+  }
+  return rest.split(/\s/)[0] || null;
+}
+
 /** The ∃-binder's name out of a rendered goal — `\exists {\operatorname{bs}}, …`
  *  → `bs`. Display-only; null when the goal isn't a simple ∃. */
 export function existsBinderFromLatex(goalLatex: string): string | null {
