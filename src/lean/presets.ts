@@ -2844,6 +2844,550 @@ def jacobianEntries {R : Real} {m n : Nat}
 #check @jacobianEntries
 `;
 
+const VANDERMONDE = MULTIVAR + `
+------------------------------------------------------------
+-- Determinants: first-row Laplace expansion
+------------------------------------------------------------
+-- (The tower binds + * - / to the carrier, so Nat index arithmetic is
+-- spelled n.succ / Fin.succ throughout.)
+
+-- Powers, for the Vandermonde entries.
+def rpow {R : Real} (a : Carrier R) : Nat → Carrier R
+  | .zero => rone R
+  | .succ k => rmul a (rpow a k)
+
+-- The first index of a nonempty Fin range.
+def fin0 {k : Nat} : Fin k.succ := ⟨0, Nat.succ_pos k⟩
+
+-- Alternating sum over Fin k: f 0 − f 1 + f 2 − …
+def altSum {R : Real} : (k : Nat) → (Fin k → Carrier R) → Carrier R
+  | .zero, _ => rzero R
+  | .succ k, f => rsub (f fin0) (altSum k (fun j => f j.succ))
+
+-- The k-th index of Fin n.succ with position j skipped: the columns of a
+-- minor, renumbered. (Core Lean has no Fin.succAbove; this is it.)
+def skip {n : Nat} (j : Fin n.succ) (k : Fin n) : Fin n.succ :=
+  if Nat.blt k.val j.val then k.castSucc else k.succ
+
+-- Delete row 0 and column j.
+def minor {R : Real} {n : Nat} (A : Mat R n.succ n.succ) (j : Fin n.succ) : Mat R n n :=
+  fun i k => A i.succ (skip j k)
+
+-- The determinant, by expansion along the first row.
+def det {R : Real} : (n : Nat) → Mat R n n → Carrier R
+  | .zero, _ => rone R
+  | .succ n, A => altSum n.succ (fun j => rmul (A fin0 j) (det n (minor A j)))
+
+-- Replace one column.
+def updateCol {R : Real} {n m : Nat} (A : Mat R n m) (j : Fin m) (u : Fin n → Carrier R) : Mat R n m :=
+  fun i k => if k = j then u i else A i k
+
+-- Scale one row.
+def scaleRow {R : Real} {n m : Nat} (A : Mat R n m) (i0 : Fin n) (c : Carrier R) : Mat R n m :=
+  fun i k => if i = i0 then rmul c (A i k) else A i k
+
+#check @det
+#check @minor
+
+-- c(a − b) = ca − cb.
+def mulSubRight {R : Real} (c a b : Carrier R) :
+    (rmul c (rsub a b)) = (rsub (rmul c a) (rmul c b)) :=
+  eqTrans ((fieldOf R).distribLeft c a (rneg b))
+    (eqCong (fun z => radd (rmul c a) z) (mulNegRight c b))
+
+def altSumCongr {R : Real} : (k : Nat) → {f g : Fin k → Carrier R} →
+    ((j : Fin k) → (f j) = (g j)) → (altSum k f) = (altSum k g)
+  | .zero, _, _, _ => rfl
+  | .succ k, f, g, h =>
+    eqTrans (eqCong (fun z => rsub z (altSum k (fun j => f j.succ))) (h fin0))
+      (eqCong (fun z => rsub (g fin0) z) (altSumCongr k (fun j => h j.succ)))
+
+def altSumZero {R : Real} : (k : Nat) → (altSum (R := R) k (fun _ => rzero R)) = (rzero R)
+  | .zero => rfl
+  | .succ k =>
+    eqTrans (eqCong (fun z => rsub (rzero R) z) (altSumZero k)) (subZero (rzero R))
+
+-- When every term past the head vanishes, the alternating sum IS the head.
+/-- an alternating sum collapsing to its head -/
+def altSumHead {R : Real} {k : Nat} (f : Fin k.succ → Carrier R)
+    (h : (j : Fin k) → (f j.succ) = (rzero R)) : (altSum k.succ f) = (f fin0) :=
+  eqTrans (eqCong (fun z => rsub (f fin0) z)
+      (eqTrans (altSumCongr k h) (altSumZero k)))
+    (subZero (f fin0))
+
+-- Alternating sums scale.
+/-- scaling an alternating sum -/
+def altSumMul {R : Real} (c : Carrier R) : (k : Nat) → (f : Fin k → Carrier R) →
+    (altSum k (fun j => rmul c (f j))) = (rmul c (altSum k f))
+  | .zero, _ => eqSym (mulZeroRight c)
+  | .succ k, f =>
+    eqTrans (eqCong (fun z => rsub (rmul c (f fin0)) z) (altSumMul c k (fun j => f j.succ)))
+      (eqSym (mulSubRight c (f fin0) (altSum k (fun j => f j.succ))))
+
+/-- scaling a later row commuting with the minor -/
+def minorScaleRow {R : Real} {n : Nat} (A : Mat R n.succ n.succ) (i0 : Fin n) (c : Carrier R)
+    (j : Fin n.succ) :
+    (minor (scaleRow A i0.succ c) j) = (scaleRow (minor A j) i0 c) := by
+  funext i k
+  show (scaleRow A i0.succ c) i.succ (skip j k) = (scaleRow (minor A j) i0 c) i k
+  by_cases hi : i = i0
+  · rw [hi]
+    show (if i0.succ = i0.succ then rmul c (A i0.succ (skip j k)) else A i0.succ (skip j k))
+      = (if i0 = i0 then rmul c ((minor A j) i0 k) else (minor A j) i0 k)
+    rw [if_pos rfl, if_pos rfl]
+    rfl
+  · have his : i.succ = i0.succ → False := fun he => hi (Fin.succ_inj.mp he)
+    show (if i.succ = i0.succ then rmul c (A i.succ (skip j k)) else A i.succ (skip j k))
+      = (if i = i0 then rmul c ((minor A j) i k) else (minor A j) i k)
+    rw [if_neg his, if_neg hi]
+    rfl
+
+/-- homogeneity of the determinant in each row -/
+def detScaleRow {R : Real} : (n : Nat) → (A : Mat R n n) → (i0 : Fin n) → (c : Carrier R) →
+    (det n (scaleRow A i0 c)) = (rmul c (det n A))
+  | .succ n, A, i0, c => by
+    induction i0 using Fin.cases with
+    | zero =>
+      show (altSum n.succ fun j => rmul ((scaleRow A fin0 c) fin0 j) (det n (minor (scaleRow A fin0 c) j)))
+        = rmul c (altSum n.succ fun j => rmul (A fin0 j) (det n (minor A j)))
+      rw [← altSumMul c n.succ (fun j => rmul (A fin0 j) (det n (minor A j)))]
+      apply altSumCongr n.succ
+      intro j
+      have h1 : (scaleRow A fin0 c) fin0 j = rmul c (A fin0 j) := by
+        show (if (fin0 : Fin n.succ) = fin0 then rmul c (A fin0 j) else A fin0 j) = rmul c (A fin0 j)
+        rw [if_pos rfl]
+      have h2 : (minor (scaleRow A fin0 c) j) = (minor A j) := by
+        funext i k
+        show (if i.succ = fin0 then rmul c (A i.succ (skip j k)) else A i.succ (skip j k))
+          = A i.succ (skip j k)
+        rw [if_neg (fun he => Nat.succ_ne_zero i.val (congrArg Fin.val he))]
+      rw [h1, h2]
+      exact (fieldOf R).mulAssoc c (A fin0 j) (det n (minor A j))
+    | succ i0' =>
+      show (altSum n.succ fun j => rmul ((scaleRow A i0'.succ c) fin0 j) (det n (minor (scaleRow A i0'.succ c) j)))
+        = rmul c (altSum n.succ fun j => rmul (A fin0 j) (det n (minor A j)))
+      rw [← altSumMul c n.succ (fun j => rmul (A fin0 j) (det n (minor A j)))]
+      apply altSumCongr n.succ
+      intro j
+      have h1 : (scaleRow A i0'.succ c) fin0 j = A fin0 j := by
+        show (if (fin0 : Fin n.succ) = i0'.succ then rmul c (A fin0 j) else A fin0 j) = A fin0 j
+        rw [if_neg (fun he => Nat.succ_ne_zero i0'.val (congrArg Fin.val he).symm)]
+      rw [h1, minorScaleRow A i0' c j, detScaleRow n (minor A j) i0' c]
+      exact eqTrans (eqSym ((fieldOf R).mulAssoc (A fin0 j) c (det n (minor A j))))
+        (eqTrans (eqCong (fun z => rmul z (det n (minor A j))) ((fieldOf R).mulComm (A fin0 j) c))
+          ((fieldOf R).mulAssoc c (A fin0 j) (det n (minor A j))))
+
+#check @detScaleRow
+
+-- ============ index bookkeeping for minors ============
+-- (Pure term proofs: omega cannot see this file's Nat.lt hypotheses.)
+
+theorem skipOfLt {n : Nat} (j : Fin n.succ) (k : Fin n) (h : Nat.lt k.val j.val) :
+    (skip j k) = k.castSucc := by
+  unfold skip
+  rw [if_pos (by rw [Nat.blt_eq]; exact h)]
+
+theorem skipOfGe {n : Nat} (j : Fin n.succ) (k : Fin n) (h : Nat.le j.val k.val) :
+    (skip j k) = k.succ := by
+  unfold skip
+  rw [if_neg (by rw [Nat.blt_eq]; exact Nat.not_lt.mpr h)]
+
+theorem skipValLt {n : Nat} (j : Fin n.succ) (k : Fin n) (h : Nat.lt k.val j.val) :
+    (skip j k).val = k.val := by
+  rw [skipOfLt j k h]
+  rfl
+
+theorem skipValGe {n : Nat} (j : Fin n.succ) (k : Fin n) (h : Nat.le j.val k.val) :
+    (skip j k).val = Nat.succ k.val := by
+  rw [skipOfGe j k h]
+  rfl
+
+theorem skipNe {n : Nat} (j : Fin n.succ) (k : Fin n) : (skip j k) = j → False := by
+  intro he
+  have hv := congrArg Fin.val he
+  by_cases h : Nat.lt k.val j.val
+  · rw [skipValLt j k h] at hv
+    exact Nat.lt_irrefl j.val (hv ▸ h)
+  · have h2 := Nat.le_of_not_lt h
+    rw [skipValGe j k h2] at hv
+    exact Nat.not_succ_le_self k.val (by rw [hv]; exact h2)
+
+theorem skipInj {n : Nat} (j : Fin n.succ) (k1 k2 : Fin n) (he : (skip j k1) = (skip j k2)) :
+    k1 = k2 := by
+  have hv := congrArg Fin.val he
+  apply Fin.ext
+  by_cases h1 : Nat.lt k1.val j.val
+  · rw [skipValLt j k1 h1] at hv
+    by_cases h2 : Nat.lt k2.val j.val
+    · rw [skipValLt j k2 h2] at hv
+      exact hv
+    · rw [skipValGe j k2 (Nat.le_of_not_lt h2)] at hv
+      exact absurd hv (Nat.ne_of_lt (Nat.lt_succ_of_le (Nat.le_of_lt (Nat.lt_of_lt_of_le h1 (Nat.le_of_not_lt h2)))))
+  · rw [skipValGe j k1 (Nat.le_of_not_lt h1)] at hv
+    by_cases h2 : Nat.lt k2.val j.val
+    · rw [skipValLt j k2 h2] at hv
+      exact absurd hv (Ne.symm (Nat.ne_of_lt (Nat.lt_succ_of_le (Nat.le_of_lt (Nat.lt_of_lt_of_le h2 (Nat.le_of_not_lt h1))))))
+    · rw [skipValGe j k2 (Nat.le_of_not_lt h2)] at hv
+      exact Nat.succ.inj hv
+
+-- The position of column j inside the minor that skips column j2 (j ≠ j2).
+def unskip {n : Nat} (j2 j : Fin n.succ) (hne : j.val = j2.val → False) : Fin n :=
+  if h : Nat.blt j.val j2.val then
+    ⟨j.val, Nat.lt_of_lt_of_le (Nat.blt_eq ▸ h) (Nat.le_of_lt_succ j2.isLt)⟩
+  else
+    ⟨Nat.pred j.val,
+      Nat.lt_of_lt_of_le
+        (Nat.pred_lt (fun h0 => Nat.not_lt_zero j2.val (h0 ▸
+          (Nat.lt_of_le_of_ne (Nat.le_of_not_lt (fun hl => h ((Nat.blt_eq (x := j.val) (y := j2.val)).symm ▸ hl)))
+            (fun he => hne he.symm)))))
+        (Nat.le_of_lt_succ j.isLt)⟩
+
+/-- the column-index round trip through a minor -/
+theorem skipUnskip {n : Nat} (j2 j : Fin n.succ) (hne : j.val = j2.val → False) :
+    (skip j2 (unskip j2 j hne)) = j := by
+  apply Fin.ext
+  unfold unskip
+  by_cases h : Nat.blt j.val j2.val
+  · rw [dif_pos h]
+    rw [Nat.blt_eq] at h
+    exact skipValLt j2 _ h
+  · rw [dif_neg h]
+    rw [Nat.blt_eq] at h
+    have hlt : Nat.lt j2.val j.val :=
+      Nat.lt_of_le_of_ne (Nat.le_of_not_lt h) (fun he => hne he.symm)
+    have hpos : Nat.lt 0 j.val := Nat.lt_of_le_of_lt (Nat.zero_le j2.val) hlt
+    have h3 : Nat.le j2.val (Nat.pred j.val) := Nat.le_pred_of_lt hlt
+    rw [skipValGe j2 _ h3]
+    show Nat.succ (Nat.pred j.val) = j.val
+    exact Nat.succ_pred_eq_of_pos hpos
+
+#check @skipUnskip
+
+-- ============ columns: update, minors, multilinearity ============
+
+theorem updateColSame {R : Real} {n m : Nat} (A : Mat R n m) (j : Fin m)
+    (u : Fin n → Carrier R) (i : Fin n) : (updateCol A j u) i j = u i := by
+  show (if j = j then u i else A i j) = u i
+  rw [if_pos rfl]
+
+theorem updateColOther {R : Real} {n m : Nat} (A : Mat R n m) (j : Fin m)
+    (u : Fin n → Carrier R) (i : Fin n) (j2 : Fin m) (hne : j2 = j → False) :
+    (updateCol A j u) i j2 = A i j2 := by
+  show (if j2 = j then u i else A i j2) = A i j2
+  rw [if_neg hne]
+
+-- Replacing a column and then DELETING it changes nothing.
+theorem minorUpdateColSame {R : Real} {n : Nat} (A : Mat R n.succ n.succ) (j : Fin n.succ)
+    (u : Fin n.succ → Carrier R) : (minor (updateCol A j u) j) = (minor A j) := by
+  funext i k
+  exact updateColOther A j u i.succ (skip j k) (skipNe j k)
+
+theorem skipEqIff {n : Nat} (j2 j : Fin n.succ) (hne : j.val = j2.val → False) (k : Fin n) :
+    ((skip j2 k) = j) ↔ (k = unskip j2 j hne) := by
+  constructor
+  · intro h
+    exact skipInj j2 k (unskip j2 j hne) (eqTrans h (eqSym (skipUnskip j2 j hne)))
+  · intro h
+    rw [h]
+    exact skipUnskip j2 j hne
+
+-- Replacing column j and then deleting a DIFFERENT column j2 leaves the
+-- replacement in place, at the position column j occupies inside the minor.
+theorem minorUpdateColOther {R : Real} {n : Nat} (A : Mat R n.succ n.succ)
+    (j2 j : Fin n.succ) (hne : j.val = j2.val → False) (u : Fin n.succ → Carrier R) :
+    (minor (updateCol A j u) j2)
+      = (updateCol (minor A j2) (unskip j2 j hne) (fun i => u i.succ)) := by
+  funext i k
+  by_cases hk : k = unskip j2 j hne
+  · have h1 : (skip j2 k) = j := (skipEqIff j2 j hne k).2 hk
+    show (updateCol A j u) i.succ (skip j2 k) = (updateCol (minor A j2) (unskip j2 j hne) (fun i => u i.succ)) i k
+    rw [h1, updateColSame A j u i.succ, hk, updateColSame (minor A j2) (unskip j2 j hne) _ i]
+  · have h1 : (skip j2 k) = j → False := fun he => hk ((skipEqIff j2 j hne k).1 he)
+    show (updateCol A j u) i.succ (skip j2 k) = (updateCol (minor A j2) (unskip j2 j hne) (fun i => u i.succ)) i k
+    rw [updateColOther A j u i.succ (skip j2 k) h1,
+        updateColOther (minor A j2) (unskip j2 j hne) _ i k hk]
+    rfl
+
+/-- additivity of alternating sums -/
+def altSumAdd {R : Real} : (k : Nat) → (f g : Fin k → Carrier R) →
+    (altSum k (fun j => radd (f j) (g j))) = (radd (altSum k f) (altSum k g))
+  | .zero, _, _ => eqSym (addZeroLeft (rzero R))
+  | .succ k, f, g =>
+    eqTrans (eqCong (fun z => rsub (radd (f fin0) (g fin0)) z)
+        (altSumAdd k (fun j => f j.succ) (fun j => g j.succ)))
+      (subAddSub (f fin0) (g fin0)
+        (altSum k (fun j => f j.succ)) (altSum k (fun j => g j.succ)))
+
+/-- additivity of the determinant in any one column -/
+def detColAdd {R : Real} : (n : Nat) → (A : Mat R n n) → (j : Fin n) → (u v : Fin n → Carrier R) →
+    (det n (updateCol A j (fun i => radd (u i) (v i))))
+      = (radd (det n (updateCol A j u)) (det n (updateCol A j v)))
+  | .zero, _, j, _, _ => j.elim0
+  | .succ n, A, j, u, v => by
+    show (altSum n.succ fun j2 => rmul ((updateCol A j (fun i => radd (u i) (v i))) fin0 j2)
+        (det n (minor (updateCol A j (fun i => radd (u i) (v i))) j2)))
+      = radd (altSum n.succ fun j2 => rmul ((updateCol A j u) fin0 j2) (det n (minor (updateCol A j u) j2)))
+          (altSum n.succ fun j2 => rmul ((updateCol A j v) fin0 j2) (det n (minor (updateCol A j v) j2)))
+    rw [← altSumAdd n.succ
+      (fun j2 => rmul ((updateCol A j u) fin0 j2) (det n (minor (updateCol A j u) j2)))
+      (fun j2 => rmul ((updateCol A j v) fin0 j2) (det n (minor (updateCol A j v) j2)))]
+    apply altSumCongr n.succ
+    intro j2
+    by_cases hj : j = j2
+    · -- the replaced column is the one being deleted: the minors coincide
+      rw [← hj, updateColSame A j _ fin0, updateColSame A j u fin0, updateColSame A j v fin0,
+          minorUpdateColSame A j, minorUpdateColSame A j u, minorUpdateColSame A j v]
+      exact (fieldOf R).distribRight (u fin0) (v fin0) (det n (minor A j))
+    · -- a different column is deleted: the replacement survives inside the minor
+      have hne : j.val = j2.val → False := fun he => hj (Fin.ext he)
+      have hne2 : j = j2 → False := hj
+      rw [updateColOther A j _ fin0 j2 (fun he => hne2 (eqSym he)),
+          updateColOther A j u fin0 j2 (fun he => hne2 (eqSym he)),
+          updateColOther A j v fin0 j2 (fun he => hne2 (eqSym he)),
+          minorUpdateColOther A j2 j hne _, minorUpdateColOther A j2 j hne u,
+          minorUpdateColOther A j2 j hne v,
+          detColAdd n (minor A j2) (unskip j2 j hne) (fun i => u i.succ) (fun i => v i.succ)]
+      exact (fieldOf R).distribLeft (A fin0 j2)
+        (det n (updateCol (minor A j2) (unskip j2 j hne) fun i => u i.succ))
+        (det n (updateCol (minor A j2) (unskip j2 j hne) fun i => v i.succ))
+
+#check @detColAdd
+
+/-- homogeneity of the determinant in any one column -/
+def detColSmul {R : Real} : (n : Nat) → (A : Mat R n n) → (j : Fin n) → (c : Carrier R) →
+    (u : Fin n → Carrier R) →
+    (det n (updateCol A j (fun i => rmul c (u i)))) = (rmul c (det n (updateCol A j u)))
+  | .zero, _, j, _, _ => j.elim0
+  | .succ n, A, j, c, u => by
+    show (altSum n.succ fun j2 => rmul ((updateCol A j (fun i => rmul c (u i))) fin0 j2)
+        (det n (minor (updateCol A j (fun i => rmul c (u i))) j2)))
+      = rmul c (altSum n.succ fun j2 => rmul ((updateCol A j u) fin0 j2) (det n (minor (updateCol A j u) j2)))
+    rw [← altSumMul c n.succ
+      (fun j2 => rmul ((updateCol A j u) fin0 j2) (det n (minor (updateCol A j u) j2)))]
+    apply altSumCongr n.succ
+    intro j2
+    by_cases hj : j = j2
+    · rw [← hj, updateColSame A j _ fin0, updateColSame A j u fin0,
+          minorUpdateColSame A j, minorUpdateColSame A j u]
+      exact (fieldOf R).mulAssoc c (u fin0) (det n (minor A j))
+    · have hne : j.val = j2.val → False := fun he => hj (Fin.ext he)
+      rw [updateColOther A j _ fin0 j2 (fun he => hj (eqSym he)),
+          updateColOther A j u fin0 j2 (fun he => hj (eqSym he)),
+          minorUpdateColOther A j2 j hne _, minorUpdateColOther A j2 j hne u,
+          detColSmul n (minor A j2) (unskip j2 j hne) c (fun i => u i.succ)]
+      exact eqTrans (eqSym ((fieldOf R).mulAssoc (A fin0 j2) c
+          (det n (updateCol (minor A j2) (unskip j2 j hne) fun i => u i.succ))))
+        (eqTrans (eqCong (fun z => rmul z (det n (updateCol (minor A j2) (unskip j2 j hne) fun i => u i.succ)))
+            ((fieldOf R).mulComm (A fin0 j2) c))
+          ((fieldOf R).mulAssoc c (A fin0 j2)
+            (det n (updateCol (minor A j2) (unskip j2 j hne) fun i => u i.succ))))
+
+-- a − a = 0.
+def subSelf {R : Real} (a : Carrier R) : (rsub a a) = (rzero R) := addNegRight a
+
+-- An alternating sum in which only two ADJACENT terms survive, and they are
+-- equal, is zero: consecutive terms always carry opposite signs. (Induct on
+-- the position of the pair; the head case is "f 0 − f 1", the step drops a
+-- vanishing head.)
+/-- cancellation of two equal adjacent terms of an alternating sum -/
+def altSumPairCancel {R : Real} : (p : Nat) → (k : Nat) → (f : Fin k → Carrier R) →
+    (hp : Nat.lt (Nat.succ p) k) →
+    (hz : (j : Fin k) → (j.val = p → False) → (j.val = Nat.succ p → False) → (f j) = (rzero R)) →
+    (heq : (j1 : Fin k) → (j2 : Fin k) → j1.val = p → j2.val = Nat.succ p → (f j1) = (f j2)) →
+    (altSum k f) = (rzero R)
+  | .zero, .succ (.succ k), f, _, hz, heq => by
+    have htail : (altSum k.succ (fun j => f j.succ)) = f (Fin.succ fin0) := by
+      apply altSumHead (fun j => f j.succ)
+      intro j
+      exact hz j.succ.succ (fun he => Nat.succ_ne_zero j.val.succ he)
+        (fun he => Nat.succ_ne_zero j.val (Nat.succ.inj he))
+    show (rsub (f fin0) (altSum k.succ (fun j => f j.succ))) = rzero R
+    rw [htail, ← heq fin0 (Fin.succ fin0) rfl rfl]
+    exact subSelf (f fin0)
+  | .zero, .succ .zero, _, hp, _, _ => absurd hp (Nat.lt_irrefl 1)
+  | .succ p, .succ k, f, hp, hz, heq => by
+    have hhead : (f fin0) = rzero R :=
+      hz fin0 (fun he => Nat.succ_ne_zero p (eqSym he)) (fun he => Nat.succ_ne_zero p.succ (eqSym he))
+    have htail : (altSum k (fun j => f j.succ)) = rzero R := by
+      apply altSumPairCancel p k (fun j => f j.succ) (Nat.lt_of_succ_lt_succ hp)
+      · intro j h1 h2
+        exact hz j.succ (fun he => h1 (Nat.succ.inj he)) (fun he => h2 (Nat.succ.inj he))
+      · intro j1 j2 h1 h2
+        exact heq j1.succ j2.succ (congrArg Nat.succ h1) (congrArg Nat.succ h2)
+    show (rsub (f fin0) (altSum k (fun j => f j.succ))) = rzero R
+    rw [hhead, htail]
+    exact subSelf (rzero R)
+
+#check @detColSmul
+
+theorem unskipValLt {n : Nat} (j0 j : Fin n.succ) (hne : j.val = j0.val → False)
+    (h : Nat.lt j.val j0.val) : (unskip j0 j hne).val = j.val := by
+  unfold unskip
+  rw [dif_pos (by rw [Nat.blt_eq]; exact h)]
+
+theorem unskipValGt {n : Nat} (j0 j : Fin n.succ) (hne : j.val = j0.val → False)
+    (h : Nat.lt j0.val j.val) : (unskip j0 j hne).val = Nat.pred j.val := by
+  unfold unskip
+  rw [dif_neg (by rw [Nat.blt_eq]; exact Nat.not_lt.mpr (Nat.le_of_lt h))]
+
+-- Deleting a column OUTSIDE an adjacent pair keeps the pair adjacent.
+/-- a deleted column outside a pair keeping the pair adjacent -/
+theorem unskipAdj {n : Nat} (j0 j1 j2 : Fin n.succ)
+    (h1 : j1.val = j0.val → False) (h2 : j2.val = j0.val → False)
+    (hadj : j2.val = Nat.succ j1.val) :
+    (unskip j0 j2 h2).val = Nat.succ (unskip j0 j1 h1).val := by
+  by_cases hlt : Nat.lt j1.val j0.val
+  · -- j0 is to the RIGHT of the pair: is it right of j2 too?
+    have h2lt : Nat.lt j2.val j0.val :=
+      Nat.lt_of_le_of_ne (by rw [hadj]; exact hlt) h2
+    rw [unskipValLt j0 j1 h1 hlt, unskipValLt j0 j2 h2 h2lt, hadj]
+  · -- j0 is to the LEFT of the pair (it cannot be inside it)
+    have hgt1 : Nat.lt j0.val j1.val :=
+      Nat.lt_of_le_of_ne (Nat.le_of_not_lt hlt) (fun he => h1 (eqSym he))
+    have hgt2 : Nat.lt j0.val j2.val := by
+      rw [hadj]; exact Nat.lt_succ_of_lt hgt1
+    rw [unskipValGt j0 j1 h1 hgt1, unskipValGt j0 j2 h2 hgt2, hadj]
+    show Nat.pred (Nat.succ j1.val) = Nat.succ (Nat.pred j1.val)
+    rw [Nat.succ_pred_eq_of_pos (Nat.lt_of_le_of_lt (Nat.zero_le j0.val) hgt1)]
+    exact Nat.pred_succ j1.val
+
+-- Deleting EITHER of two equal adjacent columns leaves the same matrix.
+/-- deleting either of two equal adjacent columns -/
+theorem minorEqAdj {R : Real} {n : Nat} (A : Mat R n.succ n.succ) (j1 j2 : Fin n.succ)
+    (hadj : j2.val = Nat.succ j1.val) (heq : (i : Fin n.succ) → (A i j1) = (A i j2)) :
+    (minor A j1) = (minor A j2) := by
+  funext i k
+  show A i.succ (skip j1 k) = A i.succ (skip j2 k)
+  by_cases hk : Nat.lt k.val j1.val
+  · rw [skipOfLt j1 k hk, skipOfLt j2 k (by rw [hadj]; exact Nat.lt_succ_of_lt hk)]
+  · by_cases hk2 : k.val = j1.val
+    · -- the two skips land on the two EQUAL columns, opposite ways round
+      have e1 : (skip j1 k) = j2 := by
+        apply Fin.ext
+        rw [skipValGe j1 k (Nat.le_of_eq (eqSym hk2)), hadj, hk2]
+      have e2 : (skip j2 k) = j1 := by
+        apply Fin.ext
+        rw [skipValLt j2 k (by rw [hadj, hk2]; exact Nat.lt_succ_self j1.val), hk2]
+      rw [e1, e2]
+      exact eqSym (heq i.succ)
+    · have hge : Nat.le j2.val k.val := by
+        rw [hadj]
+        exact Nat.succ_le_of_lt (Nat.lt_of_le_of_ne (Nat.le_of_not_lt hk) (fun he => hk2 (eqSym he)))
+      rw [skipOfGe j1 k (Nat.le_of_not_lt hk), skipOfGe j2 k hge]
+
+/-- a determinant with two equal adjacent columns vanishes -/
+def detColEqAdjZero {R : Real} : (n : Nat) → (A : Mat R n n) → (j1 : Fin n) → (j2 : Fin n) →
+    (hadj : j2.val = Nat.succ j1.val) → ((i : Fin n) → (A i j1) = (A i j2)) →
+    (det n A) = (rzero R)
+  | .zero, _, j1, _, _, _ => j1.elim0
+  | .succ n, A, j1, j2, hadj, heq => by
+    show (altSum n.succ fun j0 => rmul (A fin0 j0) (det n (minor A j0))) = rzero R
+    apply altSumPairCancel j1.val n.succ _ (by rw [← hadj]; exact j2.isLt)
+    · -- every OTHER expansion term drops: its minor still has the equal pair
+      intro j0 hz1 hz2
+      have h1 : j1.val = j0.val → False := fun he => hz1 (eqSym he)
+      have h2 : j2.val = j0.val → False := fun he => hz2 (eqSym (eqTrans (eqSym hadj) he))
+      have hminor : (det n (minor A j0)) = rzero R := by
+        apply detColEqAdjZero n (minor A j0) (unskip j0 j1 h1) (unskip j0 j2 h2)
+          (unskipAdj j0 j1 j2 h1 h2 hadj)
+        intro i
+        show A i.succ (skip j0 (unskip j0 j1 h1)) = A i.succ (skip j0 (unskip j0 j2 h2))
+        rw [skipUnskip j0 j1 h1, skipUnskip j0 j2 h2]
+        exact heq i.succ
+      rw [hminor]
+      exact mulZeroRight (A fin0 j0)
+    · -- the two surviving terms are equal, and adjacent terms cancel
+      intro k1 k2 hk1 hk2
+      have e1 : k1 = j1 := Fin.ext hk1
+      have e2 : k2 = j2 := Fin.ext (eqTrans hk2 (eqSym hadj))
+      rw [e1, e2, heq fin0, minorEqAdj A j1 j2 hadj heq]
+
+#check @detColEqAdjZero
+
+theorem updateColSelf {R : Real} {n m : Nat} (A : Mat R n m) (j : Fin m) :
+    (updateCol A j (fun i => A i j)) = A := by
+  funext i k
+  by_cases hk : k = j
+  · rw [hk]
+    exact updateColSame A j (fun i => A i j) i
+  · exact updateColOther A j (fun i => A i j) i k hk
+
+/-- a column operation leaving the determinant unchanged: subtracting a
+    multiple of the neighbouring column -/
+def detColOpAdj {R : Real} (n : Nat) (A : Mat R n n) (j1 j2 : Fin n)
+    (hadj : j2.val = Nat.succ j1.val) (c : Carrier R) :
+    (det n (updateCol A j2 (fun i => rsub (A i j2) (rmul c (A i j1))))) = (det n A) := by
+  have hne : j1 = j2 → False := fun he => Nat.succ_ne_self j1.val
+    (eqTrans (eqSym hadj) (congrArg Fin.val (eqSym he)))
+  -- rewrite the subtraction as an addition of a scaled column
+  have hform : (fun i => rsub (A i j2) (rmul c (A i j1)))
+      = (fun i => radd (A i j2) (rmul (rneg c) (A i j1))) := by
+    funext i
+    show radd (A i j2) (rneg (rmul c (A i j1))) = radd (A i j2) (rmul (rneg c) (A i j1))
+    rw [mulNegLeft c (A i j1)]
+  rw [hform,
+      detColAdd n A j2 (fun i => A i j2) (fun i => rmul (rneg c) (A i j1)),
+      updateColSelf A j2,
+      detColSmul n A j2 (rneg c) (fun i => A i j1)]
+  -- the second determinant has two equal adjacent columns
+  have hzero : (det n (updateCol A j2 (fun i => A i j1))) = rzero R := by
+    apply detColEqAdjZero n (updateCol A j2 (fun i => A i j1)) j1 j2 hadj
+    intro i
+    rw [updateColOther A j2 (fun i => A i j1) i j1 hne,
+        updateColSame A j2 (fun i => A i j1) i]
+  rw [hzero, mulZeroRight (rneg c)]
+  exact (fieldOf R).addZeroRight (det n A)
+
+#check @detColOpAdj
+
+-- ============ the Vandermonde matrix ============
+
+-- The tower's lemmas are stated on the field RECORD; these restate the two
+-- unit laws on the rmul/rone spellings the goals actually contain, so \`rw\`
+-- can match them syntactically.
+def rmulOneRight {R : Real} (a : Carrier R) : (rmul a (rone R)) = a := (fieldOf R).mulOneRight a
+def rmulOneLeft {R : Real} (a : Carrier R) : (rmul (rone R) a) = a := (fieldOf R).mulOneLeft a
+
+-- V_ij = x_i^j: a total function of (i, j) on the rectangle, which is why the
+-- grid display is DERIVED (1, x_i, x_i^2, …, x_i^{n-1}) rather than authored.
+def vandermonde {R : Real} {n : Nat} (x : Fin n → Carrier R) : Mat R n n :=
+  fun i j => rpow (x i) j.val
+
+/-- the 1x1 Vandermonde determinant: the empty product -/
+def vandermonde1 {R : Real} (x : Fin 1 → Carrier R) :
+    (det 1 (vandermonde x)) = (rone R) :=
+  eqTrans (subZero (rmul (rone R) (rone R))) (rmulOneRight (rone R))
+
+/-- the 2x2 Vandermonde determinant: x_2 - x_1 -/
+def vandermonde2 {R : Real} (x : Fin 2 → Carrier R) :
+    (det 2 (vandermonde x)) = (rsub (x (Fin.succ fin0)) (x fin0)) := by
+  -- the expansion, written out: 1·(x_2·1·1 − 0) − ((x_1·1)·(1·1 − 0) − 0)
+  show rsub (rmul (rone R) (rsub (rmul (rmul (x (Fin.succ fin0)) (rone R)) (rone R)) (rzero R)))
+      (rsub (rmul (rmul (x fin0) (rone R)) (rsub (rmul (rone R) (rone R)) (rzero R))) (rzero R))
+    = rsub (x (Fin.succ fin0)) (x fin0)
+  simp only [subZero, rmulOneRight, rmulOneLeft]
+
+#check @vandermonde
+#check @vandermonde2
+
+/-- expansion along a cleared first row: when the top row is (1, 0, …, 0),
+    the determinant IS the determinant of the first minor -/
+def detFirstRowUnit {R : Real} (n : Nat) (A : Mat R n.succ n.succ)
+    (h0 : (A fin0 fin0) = (rone R))
+    (hz : (j : Fin n) → (A fin0 j.succ) = (rzero R)) :
+    (det n.succ A) = (det n (minor A fin0)) := by
+  show (altSum n.succ fun j => rmul (A fin0 j) (det n (minor A j))) = det n (minor A fin0)
+  rw [altSumHead (fun j => rmul (A fin0 j) (det n (minor A j)))
+    (fun j => by
+      show rmul (A fin0 j.succ) (det n (minor A j.succ)) = rzero R
+      rw [hz j]
+      exact mulZeroLeft (det n (minor A j.succ)))]
+  rw [h0]
+  exact rmulOneLeft (det n (minor A fin0))
+
+#check @detFirstRowUnit
+`;
+
 const GROUP_THEORY = `-- Group Theory (from scratch): finite groups as element lists, subgroups,
 -- cosets, and Lagrange's theorem — the order of a subgroup divides the order
 -- of the group. NO Mathlib; the counting arguments live in library lemmas so
@@ -3316,6 +3860,7 @@ export const LEAN_PRESETS: LeanPreset[] = [
   { name: 'Vector Spaces (basis)', code: VECTOR_SPACE },
   { name: 'Group Theory (Lagrange)', code: GROUP_THEORY },
   { name: 'Multivariable (Jacobian)', code: MULTIVAR },
+  { name: 'Determinants (Vandermonde)', code: VANDERMONDE },
   { name: 'Mathlib (∑, ring)', code: MATHLIB, mathlib: true },
 ];
 

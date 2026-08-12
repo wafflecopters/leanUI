@@ -271,6 +271,21 @@ describe('the Jacobian reads like mathematics', () => {
   }, 10 * MIN);
 });
 
+describe('the determinant development compiles and cites', () => {
+  test('the Vandermonde preset elaborates with zero errors', async () => {
+    const p = LEAN_PRESETS.find((x) => x.name === 'Determinants (Vandermonde)')!;
+    const base = await analyzeLeanSource(p.code, { timeoutMs: 10 * MIN });
+    expect(base.bridgeError).toBeFalsy();
+    const errors = base.messages.filter((m) => m.severity === 'error').map((m) => m.text.split('\n')[0]);
+    expect(errors).toEqual([]);
+    // The column toolkit and both proved identities are present.
+    for (const n of ['det', 'detColAdd', 'detColSmul', 'detColEqAdjZero', 'detColOpAdj',
+                     'detFirstRowUnit', 'vandermonde', 'vandermonde2']) {
+      expect(base.declarations.find((d) => d.name === n), n).toBeDefined();
+    }
+  }, 30 * MIN);
+});
+
 describe('citations have reasons to cite', () => {
   test('the justification lemmas of all three proofs carry doc comments', async () => {
     for (const [preset, names] of [
@@ -278,6 +293,7 @@ describe('citations have reasons to cite', () => {
       ['Nat Math (from scratch)', ['summationSplit', 'mulDistribLeft']],
       ['Vector Spaces (basis)', ['spanDrop', 'lengthDropLt', 'lengthStrongInduction', 'independentOrDependent', 'nilIndependent']],
       ['Group Theory (Lagrange)', ['cosetSplit', 'cosetPartOrder', 'restShorter', 'restSaturated', 'lengthStrongInduction', 'emptyOrMem', 'fullSaturated', 'conjMem', 'cosetEqSymm', 'cosetEqTrans', 'quotRegroup']],
+      ['Determinants (Vandermonde)', ['detScaleRow', 'detColAdd', 'detColSmul', 'detColEqAdjZero', 'detColOpAdj', 'detFirstRowUnit', 'altSumHead', 'altSumPairCancel', 'minorEqAdj']],
     ] as const) {
       const p = LEAN_PRESETS.find((x) => x.name === preset)!;
       const base = await analyzeLeanSource(p.code, { timeoutMs: 10 * MIN });
