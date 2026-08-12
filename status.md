@@ -47,15 +47,14 @@ The proof editor is a **headless controller with a thin UI on top**, not a React
   (c) Fubini — DONE (finite double-sum form, ∑∑ swap by outer induction);
   (d) rearrangement — DONE in its finite form (sumList invariant under
   List.Perm, four-case derivation induction; infinite form needs the limit
-  framework, noted); (e) Jacobian — THEOREM PROVED (docs/jacobian-draft.lean.txt;
-  propext+Quot.sound only; three RA tower sorries fixed for real along the way:
-  negZero, mulNegLeft, absOfNonpos). Remaining for (e): reshape the main proof's
-  spine into the renderable subset (term-style haves — no refine, no by-blocks
-  inside have, the quotInvDescends lesson), split REAL_ANALYSIS into RA_TOWER +
-  demos in presets.ts, register 'Multivariable (Jacobian)' preset, battery
-  round-trip test; (f) Vandermonde determinant (the showcase: matrix displays
-  whose grids CHANGE across steps — needs a matrix/ellipsis display model where
-  \vdots is an indexed-family assertion, not a cell).
+  framework, noted); (e) Jacobian — DONE ('Multivariable (Jacobian)' preset:
+  RA_TOWER now shared, HasDerivAt Fréchet form, jacobianEntries in renderable
+  house style, round-trip zero errors, battery 26/26; three RA tower sorries
+  fixed for real along the way); (f) Vandermonde determinant — LAST ONE (the
+  showcase: matrix displays whose grids CHANGE across steps — needs a matrix/
+  ellipsis display model where \vdots is an indexed-family assertion, not a
+  cell; determinant by first-row expansion + column ops over the RA reals or
+  a polynomial-free commutative ring).
 
 ## Previous Focus
 - **limitAdd fully clickable, twice**: (A) in the from-scratch preset, (B) over Mathlib's ℝ, on one engine. **Verified click-by-click against real Lean, end to end:** `constructor` → `intro ε h` → `have h2 : 0 < ε/2` (Have box) → click `limF` → `use limF.eps_delta` → `cases` → same for limG → `constructor` → `exact rmin deltaF deltaG` → `constructor` → `apply minPos` → `exact fProof.fst` / `exact gProof.fst` → `intro x h h1` → `apply convertEps` → `apply coreEstimate`. Every one of those comes from the tray. **Two rough edges left:** (1) the `⊢ ℝ` slot `apply coreEstimate` opens is not flagged as a value goal, so it offers solvers rather than `exact ε / 2` — the value-goal detector wants the same fact-based treatment the rest just got; (2) the two `have hf := fProof.snd x hx0 (…)` steps are complex terms, so they go through the term builder (click `fProof` → `use fProof.snd` → fill slots) rather than a pill. Then a Mathlib real-analysis preset + parity e2e.
