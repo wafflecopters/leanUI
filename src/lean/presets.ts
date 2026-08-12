@@ -408,10 +408,35 @@ def fubini (m : MyNat) (f : MyNat → MyNat → MyNat) :
     ·
       constructor
 
+-- ============ rearrangement (finite form) ============
+
+def sumList : List MyNat → MyNat
+  | [] => .zero
+  | x :: xs => plus x (sumList xs)
+
+-- REARRANGEMENT (finite form): a finite sum may be reorganized freely — the
+-- sum of a list is invariant under any permutation of its terms. (The
+-- infinite statement needs absolute convergence and the limit framework;
+-- this is its finite heart.) Induct on the permutation derivation: nothing
+-- to show for [], a shared head passes through, a swap is commutativity two
+-- terms deep, and two permutations in sequence chain.
+def rearrangement (l1 l2 : List MyNat) (hp : l1.Perm l2) :
+    (sumList l1) = (sumList l2) := by
+  induction hp with
+  | nil =>
+    rfl
+  | cons x _ ih =>
+    exact congPlusRight _ ih
+  | swap x y l =>
+    exact plusLeftComm y x (sumList l)
+  | trans _ _ ih1 ih2 =>
+    exact eqTrans ih1 ih2
+
 #check natSemiring
 #check leqAntisym
 #check triangleSum
 #check fubini
+#check rearrangement
 `;
 
 // Ported from the TT "Nat Math (Tactics)" preset. A tactics showcase over the

@@ -155,6 +155,13 @@ describe('triangleSum reads like mathematics', () => {
     expect(all).toContain('\\sum');
     expect(all).not.toContain('sumStartCount'); // the recursion scaffold stays hidden
   }, 10 * MIN);
+
+  test('REARRANGEMENT: the permutation induction round-trips with four named cases', async () => {
+    const r = await sessionProse('Nat Math (from scratch)', 'rearrangement');
+    expect(r.errors).toEqual([]);
+    const cases = r.items.filter((i) => i.kind.tag === 'caseHeader' && !(i.kind as { anonymous?: boolean }).anonymous);
+    expect(cases.length).toBe(4); // nil, cons, swap, trans
+  }, 10 * MIN);
 });
 
 describe('basisExists reads like mathematics', () => {
