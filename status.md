@@ -47,8 +47,14 @@ The proof editor is a **headless controller with a thin UI on top**, not a React
   (c) Fubini — DONE (finite double-sum form, ∑∑ swap by outer induction);
   (d) rearrangement — DONE in its finite form (sumList invariant under
   List.Perm, four-case derivation induction; infinite form needs the limit
-  framework, noted); (e) best linear approximation = Jacobian of partials —
-  NEXT; (f) Vandermonde determinant (the showcase: matrix displays whose
+  framework, noted); (e) Jacobian — IN PROGRESS: scratchpad mv.lean = RA tower
+  prefix (split at the demo banner) + Vec/Mat/finSum machinery GREEN
+  (finSumCongr/finSumZero/finSumSingle proved), HasDerivAt (Fréchet ≤ ε‖h‖
+  form) defined, jacobianEntries statement renders as lim⟦0⟧ diff-quot = A i j;
+  remaining: two small mul algebra sorries in mulVecBasis, vnormBasis,
+  componentLeNorm, and the analytic estimate (divide the Fréchet bound by |t| —
+  needs RA division algebra: absDiv/mulInvCancel-shaped lemmas, use ε/2 for
+  strictness); (f) Vandermonde determinant (the showcase: matrix displays whose
   grids CHANGE across steps — needs a matrix/ellipsis display model where
   \vdots is an indexed-family assertion, not a cell).
 
