@@ -42,13 +42,15 @@ The proof editor is a **headless controller with a thin UI on top**, not a React
   citations ("by totality of ≤"), a.succ → a+1 in the Nat preset, the simp
   lemma-name dump, "✓ solved" chips, and calc chains as aligned derivations.
 - SIX NEW PROOFS requested (all must read like a paper AND stay fully editable):
-  (a) Lagrange — DONE (new Group Theory preset, from scratch, round-trip clean);
-  (b) quotient group from a normal subgroup — NEXT (extend the group preset);
-  (c) Fubini (finite double-sum form, Nat preset); (d) absolute convergence ⇒
-  rearrangement-invariance; (e) best linear approximation = Jacobian of partials;
-  (f) Vandermonde determinant (the showcase: matrix displays whose grids CHANGE
-  across steps — needs a matrix/ellipsis display model where \vdots is an
-  indexed-family assertion, not a cell).
+  (a) Lagrange — DONE; (b) quotient groups — DONE (Normal, a ≡ b (mod N),
+  quotMulDescends well-definedness, QuotientGroup via Quotient.lift);
+  (c) Fubini — DONE (finite double-sum form, ∑∑ swap by outer induction);
+  (d) rearrangement — DONE in its finite form (sumList invariant under
+  List.Perm, four-case derivation induction; infinite form needs the limit
+  framework, noted); (e) best linear approximation = Jacobian of partials —
+  NEXT; (f) Vandermonde determinant (the showcase: matrix displays whose
+  grids CHANGE across steps — needs a matrix/ellipsis display model where
+  \vdots is an indexed-family assertion, not a cell).
 
 ## Previous Focus
 - **limitAdd fully clickable, twice**: (A) in the from-scratch preset, (B) over Mathlib's ℝ, on one engine. **Verified click-by-click against real Lean, end to end:** `constructor` → `intro ε h` → `have h2 : 0 < ε/2` (Have box) → click `limF` → `use limF.eps_delta` → `cases` → same for limG → `constructor` → `exact rmin deltaF deltaG` → `constructor` → `apply minPos` → `exact fProof.fst` / `exact gProof.fst` → `intro x h h1` → `apply convertEps` → `apply coreEstimate`. Every one of those comes from the tray. **Two rough edges left:** (1) the `⊢ ℝ` slot `apply coreEstimate` opens is not flagged as a value goal, so it offers solvers rather than `exact ε / 2` — the value-goal detector wants the same fact-based treatment the rest just got; (2) the two `have hf := fProof.snd x hx0 (…)` steps are complex terms, so they go through the term builder (click `fProof` → `use fProof.snd` → fill slots) rather than a pill. Then a Mathlib real-analysis preset + parity e2e.
