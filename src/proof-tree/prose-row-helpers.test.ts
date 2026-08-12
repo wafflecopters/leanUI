@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { splitAnonTuple, existsBinderFromLatex, firstExplicitArg,
+import { splitAnonTuple, existsBinderFromLatex, firstExplicitArg, primitiveClosingPhrase,
   describeApplyProse,
   describeExactProse,
   describeInductionHeader,
@@ -183,5 +183,22 @@ describe('firstExplicitArg — what a citation is applied to', () => {
 
   test('unbalanced parens fail closed', () => {
     expect(firstExplicitArg('ih (pre ++ post')).toBeNull();
+  });
+});
+
+describe('primitive closers speak like a paper, not like a tactic', () => {
+  test('rfl states the fact instead of naming the tactic', () => {
+    expect(primitiveClosingPhrase('rfl')).toBe('Both sides are identical');
+    expect(primitiveClosingPhrase('  rfl ')).toBe('Both sides are identical');
+  });
+
+  test('the other core closers too', () => {
+    expect(primitiveClosingPhrase('trivial')).toBe('This is immediate');
+    expect(primitiveClosingPhrase('assumption')).toBe('This is one of our assumptions');
+  });
+
+  test('a real term keeps its term — only Lean primitives get a phrase', () => {
+    expect(primitiveClosingPhrase('divTwoPos ε epsPos')).toBeNull();
+    expect(primitiveClosingPhrase('⟨vs, h, hind⟩')).toBeNull();
   });
 });

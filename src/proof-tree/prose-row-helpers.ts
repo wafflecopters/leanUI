@@ -180,6 +180,28 @@ export function describeExactProse(kind: ExactKind): ExactProseDescription {
   };
 }
 
+/**
+ * The sentence Lean's PRIMITIVE closers deserve. "By rfl." is tactic-speak
+ * for something a paper states outright, and the reader has no use for the
+ * tactic's name. Keyed on Lean's own primitives — generic, not domain
+ * knowledge — and null for anything else, which keeps its term on screen.
+ */
+export function primitiveClosingPhrase(expr: string): string | null {
+  switch (expr.trim()) {
+    case 'rfl':
+    case 'Eq.refl _':
+      return 'Both sides are identical';
+    case 'trivial':
+      return 'This is immediate';
+    case 'decide':
+      return 'This is decidable, and decides true';
+    case 'assumption':
+      return 'This is one of our assumptions';
+    default:
+      return null;
+  }
+}
+
 /** Top-level components of an anonymous-constructor tuple `⟨a, b, c⟩`, or
  *  null when the text isn't one. Splits on depth-0 commas only. */
 export function splitAnonTuple(expr: string): string[] | null {

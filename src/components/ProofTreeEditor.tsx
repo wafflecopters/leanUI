@@ -34,7 +34,7 @@ import {
   proseItemShowsVisibleGoal,
   visibleLatexLength,
 } from '../proof-tree/prose-view-helpers';
-import { splitAnonTuple, existsBinderFromLatex, firstExplicitArg,
+import { splitAnonTuple, existsBinderFromLatex, firstExplicitArg, primitiveClosingPhrase,
   describeApplyProse,
   describeExactProse,
   describeInductionHeader,
@@ -3392,6 +3392,20 @@ function ExactProseItem({
         <span style={prose}>{' : '}</span>
         <InlineKaTeX latex={kind.goalLatex!} style={{ fontSize: '13px' }} />
         <span style={prose}>.</span>
+      </ProseRow>
+    );
+  }
+
+  // Lean's primitive closers say something a paper states outright; "By rfl."
+  // is the tactic's name, which the reader has no use for.
+  const primitive = description.mode !== 'error' && !kind.isValueType
+    ? primitiveClosingPhrase(kind.exprLatex)
+    : null;
+  if (primitive) {
+    return (
+      <ProseRow rowStyle={rowStyle} rowHandlers={rowHandlers} deleteBtn={deleteBtn}>
+        {mustShowPrefix(kind.goalLatex, kind.isValueType)}
+        <span style={prose}>{primitive}.</span>
       </ProseRow>
     );
   }
