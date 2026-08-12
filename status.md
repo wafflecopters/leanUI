@@ -42,11 +42,13 @@ The proof editor is a **headless controller with a thin UI on top**, not a React
   citations ("by totality of ≤"), a.succ → a+1 in the Nat preset, the simp
   lemma-name dump, "✓ solved" chips, and calc chains as aligned derivations.
 - SIX NEW PROOFS requested (all must read like a paper AND stay fully editable):
-  (a) Lagrange — subgroup order divides group order; (b) quotient group from a
-  normal subgroup; (c) Fubini; (d) absolute convergence ⇒ rearrangement-invariance;
-  (e) best linear approximation = Jacobian of partials; (f) Vandermonde determinant
-  (the showcase: matrix displays whose grids CHANGE across steps — needs a matrix/
-  ellipsis display model where \vdots is an indexed-family assertion, not a cell).
+  (a) Lagrange — DONE (new Group Theory preset, from scratch, round-trip clean);
+  (b) quotient group from a normal subgroup — NEXT (extend the group preset);
+  (c) Fubini (finite double-sum form, Nat preset); (d) absolute convergence ⇒
+  rearrangement-invariance; (e) best linear approximation = Jacobian of partials;
+  (f) Vandermonde determinant (the showcase: matrix displays whose grids CHANGE
+  across steps — needs a matrix/ellipsis display model where \vdots is an
+  indexed-family assertion, not a cell).
 
 ## Previous Focus
 - **limitAdd fully clickable, twice**: (A) in the from-scratch preset, (B) over Mathlib's ℝ, on one engine. **Verified click-by-click against real Lean, end to end:** `constructor` → `intro ε h` → `have h2 : 0 < ε/2` (Have box) → click `limF` → `use limF.eps_delta` → `cases` → same for limG → `constructor` → `exact rmin deltaF deltaG` → `constructor` → `apply minPos` → `exact fProof.fst` / `exact gProof.fst` → `intro x h h1` → `apply convertEps` → `apply coreEstimate`. Every one of those comes from the tray. **Two rough edges left:** (1) the `⊢ ℝ` slot `apply coreEstimate` opens is not flagged as a value goal, so it offers solvers rather than `exact ε / 2` — the value-goal detector wants the same fact-based treatment the rest just got; (2) the two `have hf := fProof.snd x hx0 (…)` steps are complex terms, so they go through the term builder (click `fProof` → `use fProof.snd` → fill slots) rather than a pill. Then a Mathlib real-analysis preset + parity e2e.
@@ -56,6 +58,21 @@ The proof editor is a **headless controller with a thin UI on top**, not a React
 - Known loose ends: `induction` still takes an identifier (its scrutinee should accept a term like `cases` now does); hover-types exist for case params only (the general version needs `Extract.lean` to emit a type per subexpression, which the new per-goal/per-hypothesis fact plumbing makes straightforward); the value-goal detector still infers from sibling metavariable mentions rather than asking Lean.
 
 ## Recent Progress
+- **Lagrange's theorem, from scratch, in the editor (2026-08-12).** New 'Group
+  Theory (Lagrange)' preset: finite groups as element lists, subgroups, cosets,
+  and the saturation counting argument — remove one coset (it counts exactly
+  order H, translation being injective), the rest stays saturated and strictly
+  shrinks, strong-induct. Both theorems sorry-free; lagrangeAux mirrors
+  basisExistsAux's renderable house style and round-trips with zero errors.
+  Prose notation a * b / a⁻¹ / 1 via per-carrier instances (Nat's * untouched).
+  Battery 19/19.
+- **Review round-3 fixes, iteration 2 (2026-08-12).** Schema suppression (an
+  induction principle's step-premise wall no longer prints — the Let-row carries
+  it), IH folds to 'the induction hypothesis (ih)' with the statement on hover,
+  case-split headers cite their lemma ('Either A or B, by totality of ≤.'),
+  succ a displays as a + 1, InSpan as v ∈ span(pre ++ post). Two renderer bugs
+  found by probes: word notation swallowed as call arguments ('vs(spans, W)'),
+  double-parens on already-parenthesized args.
 - **Adversarial review round 3 delivered + first fixes (2026-08-12).** Full three-proof
   critique written (human readability / mathematician quality / model prose per proof).
   Fixed the two genuine bugs it surfaced: (1) the fx regression — the application rule
