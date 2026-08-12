@@ -218,13 +218,40 @@ describe('lagrange reads like mathematics', () => {
   }, 10 * MIN);
 });
 
+describe('the quotient group reads like mathematics', () => {
+  let items: ProseItem[];
+  beforeAll(async () => {
+    items = await proseFor('Group Theory (Lagrange)', 'quotMulDescends');
+  }, 10 * MIN);
+
+  test('congruence displays as a ≡ b (mod N), never as raw CosetEq', () => {
+    const all = items.map(latexOf).join(' ');
+    expect(all).not.toContain('CosetEq');
+    expect(all).toContain('\\equiv');
+  });
+
+  test('the well-definedness steps carry their reasons (have rows with proofs)', () => {
+    const haves = items.filter((i) => i.kind.tag === 'have');
+    expect(haves.length).toBeGreaterThanOrEqual(2); // hconj, hprod
+  });
+
+  test('no daggered names anywhere the reader looks', () => {
+    expectNoDaggers(items);
+  });
+
+  test('inversion well-definedness round-trips clean too', async () => {
+    const r = await sessionProse('Group Theory (Lagrange)', 'quotInvDescends');
+    expect(r.errors).toEqual([]);
+  }, 10 * MIN);
+});
+
 describe('citations have reasons to cite', () => {
   test('the justification lemmas of all three proofs carry doc comments', async () => {
     for (const [preset, names] of [
       ['Real Analysis (chain rule)', ['divTwoPos', 'ltLeTrans', 'absTriangle', 'convertEps', 'addLtBoth', 'leTotal']],
       ['Nat Math (from scratch)', ['summationSplit', 'mulDistribLeft']],
       ['Vector Spaces (basis)', ['spanDrop', 'lengthDropLt', 'lengthStrongInduction', 'independentOrDependent', 'nilIndependent']],
-      ['Group Theory (Lagrange)', ['cosetSplit', 'cosetPartOrder', 'restShorter', 'restSaturated', 'lengthStrongInduction', 'emptyOrMem', 'fullSaturated']],
+      ['Group Theory (Lagrange)', ['cosetSplit', 'cosetPartOrder', 'restShorter', 'restSaturated', 'lengthStrongInduction', 'emptyOrMem', 'fullSaturated', 'conjMem', 'cosetEqSymm', 'cosetEqTrans', 'quotRegroup']],
     ] as const) {
       const p = LEAN_PRESETS.find((x) => x.name === preset)!;
       const base = await analyzeLeanSource(p.code, { timeoutMs: 10 * MIN });

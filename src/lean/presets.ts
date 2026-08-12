@@ -2501,9 +2501,6 @@ structure MyGroup where
   mulAssoc : ∀ a b c, mul (mul a b) c = mul a (mul b c)
   oneMul : ∀ a, mul one a = a
   invMul : ∀ a, mul (inv a) a = one
-  deq : DecidableEq carrier
-
-instance (G : MyGroup) : DecidableEq G.carrier := G.deq
 
 namespace MyGroup
 
@@ -2674,6 +2671,7 @@ theorem lengthStrongInduction {α : Type u} {P : List α → Prop}
 -- ============ finite groups, subgroups, cosets ============
 
 structure FiniteGroup extends MyGroup where
+  deq : DecidableEq carrier
   elems : List carrier
   elemsNodup : elems.Nodup
   elemsComplete : ∀ x, x ∈ elems
@@ -2838,6 +2836,114 @@ theorem fullSaturated {G : FiniteGroup} (H : Subgroup G) : Saturated H G.elems :
 theorem lagrange {G : FiniteGroup} (H : Subgroup G) : H.order ∣ G.order := by
   obtain ⟨k, hk⟩ := lagrangeAux H G.elems G.elemsNodup (fullSaturated H)
   exact ⟨k, by show G.elems.length = H.order * k; rw [hk, Nat.mul_comm]⟩
+
+-- ============ quotient groups ============
+
+-- N is NORMAL when conjugation never leaves it: g n g⁻¹ ∈ N.
+def Normal {G : FiniteGroup} (N : Subgroup G) : Prop :=
+  ∀ g n, n ∈ N.members → G.mul g (G.mul n (G.inv g)) ∈ N.members
+
+/-- conjugation by an inverse staying inside a normal subgroup -/
+theorem conjMem {G : FiniteGroup} {N : Subgroup G} (hN : Normal N) (g : G.carrier)
+    {n : G.carrier} (hn : n ∈ N.members) :
+    G.mul (G.inv g) (G.mul n g) ∈ N.members := by
+  have h := hN (G.inv g) n hn
+  rw [MyGroup.invInv] at h
+  exact h
+
+-- Two elements are congruent mod N when they lie in the same left coset.
+def CosetEq {G : FiniteGroup} (N : Subgroup G) (a b : G.carrier) : Prop :=
+  G.mul (G.inv a) b ∈ N.members
+
+-- Congruence reads the way number theory writes it: a ≡ b (mod N).
+notation:50 a:51 " ≡ " b:51 " (mod " N:51 ")" => CosetEq N a b
+
+/-- congruence mod N is reflexive: a⁻¹a = 1 ∈ N -/
+theorem cosetEqRefl {G : FiniteGroup} (N : Subgroup G) (a : G.carrier) : CosetEq N a a := by
+  unfold CosetEq
+  rw [G.invMul]
+  exact N.oneMem
+
+/-- congruence mod N is symmetric: invert the witness -/
+theorem cosetEqSymm {G : FiniteGroup} {N : Subgroup G} {a b : G.carrier}
+    (h : CosetEq N a b) : CosetEq N b a := by
+  unfold CosetEq
+  have hi := N.invMem _ h
+  rw [MyGroup.invMulRev, MyGroup.invInv] at hi
+  exact hi
+
+/-- congruence mod N is transitive: multiply the witnesses -/
+theorem cosetEqTrans {G : FiniteGroup} {N : Subgroup G} {a b c : G.carrier}
+    (hab : CosetEq N a b) (hbc : CosetEq N b c) : CosetEq N a c := by
+  unfold CosetEq
+  have hprod := N.mulMem _ hab _ hbc
+  rw [G.mulAssoc, ← G.mulAssoc b (G.inv b) c, MyGroup.mulInv, G.oneMul] at hprod
+  exact hprod
+
+/-- the regrouping behind well-definedness: (ac)⁻¹(bd) = [c⁻¹(a⁻¹b)c]·[c⁻¹d] -/
+theorem quotRegroup {G : FiniteGroup} (a b c d : G.carrier) :
+    G.mul (G.inv (G.mul a c)) (G.mul b d) =
+      G.mul (G.mul (G.inv c) (G.mul (G.mul (G.inv a) b) c)) (G.mul (G.inv c) d) := by
+  rw [MyGroup.invMulRev]
+  rw [G.mulAssoc (G.inv c) (G.mul (G.mul (G.inv a) b) c) (G.mul (G.inv c) d)]
+  rw [G.mulAssoc (G.mul (G.inv a) b) c (G.mul (G.inv c) d)]
+  rw [← G.mulAssoc c (G.inv c) d]
+  rw [MyGroup.mulInv, G.oneMul]
+  rw [G.mulAssoc (G.inv c) (G.inv a) (G.mul b d)]
+  rw [G.mulAssoc (G.inv a) b d]
+
+/-- THE well-definedness: multiplication descends to cosets when N is normal -/
+theorem quotMulDescends {G : FiniteGroup} {N : Subgroup G} (hN : Normal N)
+    {a b c d : G.carrier} (hab : CosetEq N a b) (hcd : CosetEq N c d) :
+    CosetEq N (G.mul a c) (G.mul b d) := by
+  unfold CosetEq
+  have hconj : G.mul (G.inv c) (G.mul (G.mul (G.inv a) b) c) ∈ N.members := conjMem hN c hab
+  have hprod : G.mul (G.mul (G.inv c) (G.mul (G.mul (G.inv a) b) c)) (G.mul (G.inv c) d) ∈ N.members :=
+    N.mulMem _ hconj _ hcd
+  rw [quotRegroup]
+  exact hprod
+
+/-- conjugation by a collapsing onto the witness: a·(b⁻¹a)·a⁻¹ = a·b⁻¹ -/
+theorem conjCollapse {G : FiniteGroup} (a b : G.carrier) :
+    G.mul a (G.mul (G.mul (G.inv b) a) (G.inv a)) = G.mul a (G.inv b) := by
+  rw [G.mulAssoc (G.inv b) a (G.inv a), MyGroup.mulInv, MyGroup.mulOne]
+
+/-- inversion descends to cosets when N is normal -/
+theorem quotInvDescends {G : FiniteGroup} {N : Subgroup G} (hN : Normal N)
+    {a b : G.carrier} (hab : CosetEq N a b) :
+    CosetEq N (G.inv a) (G.inv b) := by
+  unfold CosetEq
+  have hsym := cosetEqSymm hab
+  have hconj : G.mul a (G.mul (G.mul (G.inv b) a) (G.inv a)) ∈ N.members := hN a _ hsym
+  rw [MyGroup.invInv, ← conjCollapse a b]
+  exact hconj
+
+-- congruence mod N as a Setoid, so Lean's Quotient can carry the cosets
+def cosetSetoid {G : FiniteGroup} (N : Subgroup G) : Setoid G.carrier :=
+  ⟨CosetEq N, fun a => cosetEqRefl N a, cosetEqSymm, cosetEqTrans⟩
+
+/-- THE QUOTIENT GROUP: a normal subgroup induces a group on the cosets -/
+def QuotientGroup {G : FiniteGroup} (N : Subgroup G) (hN : Normal N) : MyGroup where
+  carrier := Quotient (cosetSetoid N)
+  mul := Quotient.lift₂ (fun a b => Quotient.mk (cosetSetoid N) (G.mul a b))
+    (fun _ _ _ _ hab hcd => Quot.sound (quotMulDescends hN hab hcd))
+  one := Quotient.mk (cosetSetoid N) G.one
+  inv := Quotient.lift (fun a => Quotient.mk (cosetSetoid N) (G.inv a))
+    (fun _ _ hab => Quot.sound (quotInvDescends hN hab))
+  mulAssoc := by
+    intro a b c
+    induction a using Quotient.ind
+    induction b using Quotient.ind
+    induction c using Quotient.ind
+    exact congrArg (Quotient.mk _) (G.mulAssoc _ _ _)
+  oneMul := by
+    intro a
+    induction a using Quotient.ind
+    exact congrArg (Quotient.mk _) (G.oneMul _)
+  invMul := by
+    intro a
+    induction a using Quotient.ind
+    exact congrArg (Quotient.mk _) (G.invMul _)
 `;
 
 export const LEAN_PRESETS: LeanPreset[] = [
