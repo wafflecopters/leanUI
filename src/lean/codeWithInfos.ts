@@ -584,15 +584,35 @@ function restructure(nodes: MathNode[]): MathNode[] {
       // The head may be a bare Symbol OR a click-target Group wrapping one
       // (the wrapSubterms path wraps EVERY tagged subterm) — see through it.
       const headId = run.length >= 2 ? headIdentifier(run[0]) : null;
-      const headIsFn = headId !== null && /^[A-Za-z_]/.test(headId);
+      // A Group head with a bare WORD Symbol later in the run is word
+      // notation ("vs spans W": subterms are tagged Groups, the notation text
+      // is not) — juxtapose, never call. A bare-Symbol head keeps call style
+      // (that's what an untagged application run looks like).
+      const wordNotation =
+        run.length >= 2 &&
+        run[0].tag === 'Group' &&
+        run.some((n) => n.tag === 'Symbol' && /^[A-Za-z]{2,}/.test((n as SymbolNode).value));
+      const headIsFn = headId !== null && /^[A-Za-z_]/.test(headId) && !wordNotation;
       if (headIsFn) {
         const [head, ...args] = run;
-        out.push(head, mkSymbol('('));
-        args.forEach((a, i) => {
-          if (i > 0) out.push(mkSymbol(','));
-          out.push(a);
-        });
-        out.push(mkSymbol(')'));
+        // A single argument that already carries its own parens (a tagged
+        // Group around a parenthesized subterm — Lean printed `span (pre ++
+        // post)`) must not get a second pair: `span(pre ++ post)`, not
+        // `span((pre ++ post))`.
+        const alreadyParen =
+          args.length === 1 && args[0].tag === 'Group' &&
+          isOpSymbol((args[0] as GroupNode).children[0], '(') &&
+          isOpSymbol((args[0] as GroupNode).children[(args[0] as GroupNode).children.length - 1], ')');
+        if (alreadyParen) {
+          out.push(head, args[0]);
+        } else {
+          out.push(head, mkSymbol('('));
+          args.forEach((a, i) => {
+            if (i > 0) out.push(mkSymbol(','));
+            out.push(a);
+          });
+          out.push(mkSymbol(')'));
+        }
         changed = true;
       } else {
         out.push(...run);

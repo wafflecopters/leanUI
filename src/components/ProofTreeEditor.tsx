@@ -3151,7 +3151,9 @@ function ApplyProseItem({
           </>
         )}
         {errorSuffix}
-        {renderGoalSection(applyDescription.subgoals[0], ', provided that')}
+        {/* The Let-row that follows restates this subgoal by introducing it —
+            an induction principle's schema stays unprinted, like in a paper. */}
+        {!kind.subgoalIntroduced && renderGoalSection(applyDescription.subgoals[0], ', provided that')}
       </ProseRow>
     );
   }
@@ -3234,6 +3236,25 @@ function InductionHeaderProseItem({
   // When every branch has a meaning, the header reads like a paper: "Either
   // δF ≤ δG or δG ≤ δF." — the scrutinee term is plumbing (still visible in
   // the Tactics tab).
+  // A dichotomy asserted with no justification is what a referee circles:
+  // "Either δF ≤ δG or δG ≤ δF" cites the lemma that says so — its doc in the
+  // usual "by ⟨reason⟩" voice, the term on hover.
+  const splitDoc = lemmaDocOf(exprHeadName(kind.scrutinee));
+  const docSpan = splitDoc && (
+    kind.scrutineeLatex ? (
+      <HoverType typeLatex={kind.scrutineeLatex}>
+        <span style={{ ...prose, borderBottom: '1px dashed rgba(139, 148, 158, 0.4)' }}>{splitDoc}</span>
+      </HoverType>
+    ) : (
+      <span style={prose}>{splitDoc}</span>
+    )
+  );
+  const citation = docSpan && (
+    <>
+      <span style={prose}>, by{' '}</span>
+      {docSpan}
+    </>
+  );
   if (kind.caseMeanings && kind.caseMeanings.length === 2) {
     return (
       <ProseRow rowStyle={rowStyle} rowHandlers={rowHandlers} deleteBtn={deleteBtn}>
@@ -3241,6 +3262,7 @@ function InductionHeaderProseItem({
         <InlineKaTeX latex={kind.caseMeanings[0]} style={{ fontSize: '13px' }} />
         <span style={prose}>{' '}or{' '}</span>
         <InlineKaTeX latex={kind.caseMeanings[1]} style={{ fontSize: '13px' }} />
+        {citation}
         <span style={prose}>.</span>
       </ProseRow>
     );
@@ -3248,7 +3270,9 @@ function InductionHeaderProseItem({
   if (kind.caseMeanings && kind.caseMeanings.length > 2) {
     return (
       <ProseRow rowStyle={rowStyle} rowHandlers={rowHandlers} deleteBtn={deleteBtn}>
-        <span style={prose}>One of the following holds:</span>
+        <span style={prose}>One of the following holds{docSpan && <>, by </>}</span>
+        {docSpan}
+        <span style={prose}>:</span>
       </ProseRow>
     );
   }
@@ -3691,12 +3715,29 @@ function IntroProseItem({
               <React.Fragment key={gi}>
                 {joiner && <span style={prose}>{joiner}</span>}
                 {group.isProp ? (
+                  group.tokens.length === 1 && /(^|_)ih\d*$/.test(group.tokens[0].name) ? (
+                    // The IH stated in full made the Let-line a five-line
+                    // breath; a paper says "suppose the claim holds for
+                    // smaller instances" in one clause. Words here, the
+                    // statement one hover away, the name still clickable.
+                    <>
+                      <HoverType typeLatex={group.typeLatex}>
+                        <span style={{ ...prose, borderBottom: '1px dashed rgba(139, 148, 158, 0.4)' }}>
+                          the induction hypothesis
+                        </span>
+                      </HoverType>
+                      <span style={{ ...prose, color: '#484f58', fontSize: '11px' }}>{' ('}</span>
+                      {nameTokens(true)}
+                      <span style={{ ...prose, color: '#484f58', fontSize: '11px' }}>)</span>
+                    </>
+                  ) : (
                   <>
                     <InlineKaTeX latex={group.typeLatex} style={{ fontSize: '13px' }} />
                     <span style={{ ...prose, color: '#484f58', fontSize: '11px' }}>{' ('}</span>
                     {nameTokens(true)}
                     <span style={{ ...prose, color: '#484f58', fontSize: '11px' }}>)</span>
                   </>
+                  )
                 ) : (
                   <>
                     {nameTokens(false)}

@@ -111,6 +111,12 @@ instance : OfNat MyNat 1 := ⟨one⟩
 @[app_unexpander MyNat.zero] def unexpMyNatZero : Lean.PrettyPrinter.Unexpander
   | \`($_) => \`(0)
 
+-- Render succ a as a + 1 — a paper never writes a.succ. Display-only: the
+-- constructor spelling still parses, and case labels keep their own path.
+@[app_unexpander MyNat.succ] def unexpMyNatSucc : Lean.PrettyPrinter.Unexpander
+  | \`($_ $n) => \`($n + 1)
+  | _ => throw ()
+
 -- Equality helpers (named to avoid clashing with Lean's Trans/_root_.trans)
 def congSucc {n m : MyNat} : n = m → (MyNat.succ n) = (MyNat.succ m)
   | rfl => rfl
@@ -2313,6 +2319,15 @@ def Basis {K : Field'} (W : VectorSpace K) (vs : List W.V) : Prop :=
 -- exactly where the domain lives: in the preset.
 notation:50 vs:51 " spans " W:51 => Spans W vs
 notation:50 bs:51 " is\u00a0a\u00a0basis\u00a0of " W:51 => Basis W bs
+-- "v \u2208 span vs" \u2014 the operator reading of InSpan. The NBSP keeps "span" from
+-- becoming a reserved keyword (same trick as the basis notation above); the
+-- vector space is inferred from the list.
+notation:50 v:51 " \u2208\u00a0span " vs:max => InSpan _ vs v
+-- The wildcard in the expansion blocks the auto-generated delaborator, so
+-- displays kept printing raw InSpan applications; say it explicitly.
+@[app_unexpander InSpan] def unexpInSpan : Lean.PrettyPrinter.Unexpander
+  | \`($_ $W $vs $v) => \`($v \u2208\u00a0span $vs)
+  | _ => throw ()
 
 -- Some vector is in the span of the OTHERS. (Reducible so obtain unpacks it.)
 @[reducible] def Dependent {K : Field'} (W : VectorSpace K) (vs : List W.V) : Prop :=

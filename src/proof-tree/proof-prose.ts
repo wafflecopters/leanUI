@@ -57,7 +57,7 @@ export type ProseItemKind =
   | { tag: 'unfold'; name: string; occurrence?: number; preGoalLatex?: string; goalLatex?: string; error?: string }
   | { tag: 'fold'; name: string; occurrence?: number; preGoalLatex?: string; goalLatex?: string; error?: string }
   | { tag: 'rewrite'; name: string; reverse?: boolean; occurrences?: readonly number[]; equationLatex?: string; preGoalLatex?: string; goalLatex?: string; error?: string }
-  | { tag: 'apply'; name: string; preGoalLatex?: string; subgoalLatex?: string[]; appliedArgsLatex?: string[]; error?: string; proofExprs?: readonly string[]; repeatedGoal?: boolean }
+  | { tag: 'apply'; name: string; preGoalLatex?: string; subgoalLatex?: string[]; appliedArgsLatex?: string[]; error?: string; proofExprs?: readonly string[]; repeatedGoal?: boolean; subgoalIntroduced?: boolean }
   | {
       tag: 'inductionHeader';
       scrutinee: string;
@@ -511,7 +511,13 @@ export function generateProofProse(
           break;
         }
 
-        emit(node.id, depth, { tag: 'apply', name: node.name, preGoalLatex: info?.goalLatex, subgoalLatex, appliedArgsLatex: info?.appliedArgsLatex, error: info?.tacticError });
+        // A single subgoal whose continuation immediately INTRODUCES it (the
+        // child is an intros) is fully restated by the Let-row that follows —
+        // displaying an induction principle's step-premise schema first is
+        // the wall of math no paper prints ("by strong induction" IS the
+        // schema). The renderer suppresses the display when this flag is set.
+        const introducesNext = node.children.length === 1 && node.children[0].tag === 'intros';
+        emit(node.id, depth, { tag: 'apply', name: node.name, preGoalLatex: info?.goalLatex, subgoalLatex, appliedArgsLatex: info?.appliedArgsLatex, error: info?.tacticError, ...(introducesNext ? { subgoalIntroduced: true } : {}) });
         // A 0-subgoal apply (e.g., `apply zeroLeOne` on `0 ≤ 1`) closes the
         // goal outright. Emit a qed marker so the prose shows the ∎ box,
         // matching what an exact-closing goal does (lines 262-264).
@@ -808,9 +814,12 @@ function displayedGoal(kind: ProseItemKind): string | undefined {
       return kind.goalLatex;
     case 'apply':
       // A 1-subgoal apply displays that subgoal inline ("It remains to show
-      // S"); a 0- or many-subgoal apply displays its INCOMING goal ("We must
-      // show G. This holds by construction: …").
-      return kind.subgoalLatex?.length === 1 ? kind.subgoalLatex[0] : kind.preGoalLatex;
+      // S") — unless the display is suppressed because the following Let-row
+      // introduces it. A 0- or many-subgoal apply displays its INCOMING goal
+      // ("We must show G. This holds by construction: …").
+      return kind.subgoalLatex?.length === 1 && !kind.subgoalIntroduced
+        ? kind.subgoalLatex[0]
+        : kind.preGoalLatex;
     default:
       return undefined;
   }

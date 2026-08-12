@@ -171,6 +171,50 @@ describe('codeWithInfosToMathRow', () => {
     expect(latex.replace(/\s/g, '')).toContain('f(x)');
   });
 
+  test('word NOTATION between tagged subterms is never a call argument', () => {
+    // "vs spans W" prints as Group(vs) Symbol(spans) Group(W): the bare word
+    // between click-target Groups is notation text, not an argument — the
+    // Group-head fix once turned it into vs(spans, W).
+    const app: TaggedJson = {
+      t: 'append',
+      kids: [
+        { t: 'tag', pos: '/0', child: { t: 'text', s: 'vs' } },
+        { t: 'text', s: ' spans ' },
+        { t: 'tag', pos: '/1', child: { t: 'text', s: 'W' } },
+      ],
+    };
+    const latex = stripIds(renderStaticLatex(codeWithInfosToMathRow(app)));
+    expect(latex).not.toContain('(');
+    expect(latex.replace(/\\operatorname|\\,|\s/g, '')).toBe('vsspansW');
+  });
+
+  test('a bare word head with Group args still calls: span(pre ++ post)', () => {
+    const app: TaggedJson = {
+      t: 'append',
+      kids: [
+        { t: 'text', s: 'span ' },
+        { t: 'tag', pos: '/0', child: { t: 'text', s: 'ws' } },
+      ],
+    };
+    const latex = stripIds(renderStaticLatex(codeWithInfosToMathRow(app)));
+    expect(latex.replace(/\\operatorname|\\,|\s/g, '')).toBe('span(ws)');
+  });
+
+  test('an already-parenthesized single argument is not double-wrapped', () => {
+    // Lean prints `span (pre ++ post)` with its own parens (vs:max); the call
+    // rule must yield span(pre ++ post), not span((pre ++ post)).
+    const app: TaggedJson = {
+      t: 'append',
+      kids: [
+        { t: 'text', s: 'span ' },
+        { t: 'tag', pos: '/0', child: { t: 'text', s: '(ws ++ zs)' } },
+      ],
+    };
+    const latex = stripIds(renderStaticLatex(codeWithInfosToMathRow(app)));
+    expect(latex).not.toContain('((');
+    expect(latex).toContain('(');
+  });
+
   test('a parenthesized Group head is NOT called: (pre ++ post) x stays juxtaposed', () => {
     const app: TaggedJson = {
       t: 'append',
