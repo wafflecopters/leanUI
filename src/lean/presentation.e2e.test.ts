@@ -147,6 +147,14 @@ describe('triangleSum reads like mathematics', () => {
     }
     expect(items.length).toBeGreaterThan(4);
   });
+
+  test('FUBINI: the double-sum swap round-trips clean and shows ∑ throughout', async () => {
+    const r = await sessionProse('Nat Math (from scratch)', 'fubini');
+    expect(r.errors).toEqual([]);
+    const all = r.items.map(latexOf).join(' ');
+    expect(all).toContain('\\sum');
+    expect(all).not.toContain('sumStartCount'); // the recursion scaffold stays hidden
+  }, 10 * MIN);
 });
 
 describe('basisExists reads like mathematics', () => {

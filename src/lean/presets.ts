@@ -356,9 +356,62 @@ def triangleSum (n : MyNat) :
     ·
       constructor
 
+-- ============ Fubini for finite double sums ============
+
+/-- the middle-four exchange: (a+b)+(c+d) = (a+c)+(b+d) -/
+def plusSwap (a b c d : MyNat) :
+    (plus (plus a b) (plus c d)) = (plus (plus a c) (plus b d)) :=
+  eqTrans (plusAssoc a b (plus c d))
+    (eqTrans (congPlusRight a (plusLeftComm b c d))
+      (eqSym (plusAssoc a c (plus b d))))
+
+def sumStartCountCongr (s : MyNat) {f g : MyNat → MyNat} (h : ∀ k, (f k) = (g k)) :
+    (c : MyNat) → (sumStartCount s c f) = (sumStartCount s c g)
+  | .zero => rfl
+  | .succ c =>
+    eqTrans (congPlusLeft (f (plus s c)) (sumStartCountCongr s h c))
+      (congPlusRight (sumStartCount s c g) (h (plus s c)))
+
+/-- sums of pointwise-equal functions agree -/
+def sumCongr (lo hi : MyNat) {f g : MyNat → MyNat} (h : ∀ k, (f k) = (g k)) :
+    (sum lo hi f) = (sum lo hi g) :=
+  sumStartCountCongr lo h (minus (.succ hi) lo)
+
+def sumStartCountAdd (s : MyNat) (f g : MyNat → MyNat) :
+    (c : MyNat) → (sumStartCount s c (fun k => plus (f k) (g k)))
+      = (plus (sumStartCount s c f) (sumStartCount s c g))
+  | .zero => rfl
+  | .succ c =>
+    eqTrans (congPlusLeft _ (sumStartCountAdd s f g c))
+      (plusSwap (sumStartCount s c f) (sumStartCount s c g) (f (plus s c)) (g (plus s c)))
+
+/-- a sum of pointwise sums splits into two sums -/
+def sumAdd (lo hi : MyNat) (f g : MyNat → MyNat) :
+    (sum lo hi (fun k => plus (f k) (g k))) = (plus (sum lo hi f) (sum lo hi g)) :=
+  sumStartCountAdd lo f g (minus (.succ hi) lo)
+
+-- FUBINI (finite form): the two orders of a double sum agree. Induct on the
+-- outer bound; split off its last row, swap the smaller double sum by the
+-- induction hypothesis, absorb the split row back inside with sumAdd.
+def fubini (m : MyNat) (f : MyNat → MyNat → MyNat) :
+    (n : MyNat) → (∑[i,0,n] (∑[j,0,m] f i j)) = (∑[j,0,m] (∑[i,0,n] f i j)) := by
+  intro n
+  induction n with
+  | zero =>
+    rfl
+  | succ a ih =>
+    rw [summationSplit]
+    ·
+      rw [ih]
+      rw [← sumAdd]
+      exact sumCongr 0 m (fun j => eqSym (summationSplit 0 a .LeqZero (fun i => f i j)))
+    ·
+      constructor
+
 #check natSemiring
 #check leqAntisym
 #check triangleSum
+#check fubini
 `;
 
 // Ported from the TT "Nat Math (Tactics)" preset. A tactics showcase over the
