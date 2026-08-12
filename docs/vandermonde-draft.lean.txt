@@ -1480,3 +1480,86 @@ def detScaleRow {R : Real} : (n : Nat) → (A : Mat R n n) → (i0 : Fin n) → 
           ((fieldOf R).mulAssoc c (A fin0 j) (det n (minor A j))))
 
 #check @detScaleRow
+
+-- ============ index bookkeeping for minors ============
+-- (Pure term proofs: omega cannot see this file's Nat.lt hypotheses.)
+
+theorem skipOfLt {n : Nat} (j : Fin n.succ) (k : Fin n) (h : Nat.lt k.val j.val) :
+    (skip j k) = k.castSucc := by
+  unfold skip
+  rw [if_pos (by rw [Nat.blt_eq]; exact h)]
+
+theorem skipOfGe {n : Nat} (j : Fin n.succ) (k : Fin n) (h : Nat.le j.val k.val) :
+    (skip j k) = k.succ := by
+  unfold skip
+  rw [if_neg (by rw [Nat.blt_eq]; exact Nat.not_lt.mpr h)]
+
+theorem skipValLt {n : Nat} (j : Fin n.succ) (k : Fin n) (h : Nat.lt k.val j.val) :
+    (skip j k).val = k.val := by
+  rw [skipOfLt j k h]
+  rfl
+
+theorem skipValGe {n : Nat} (j : Fin n.succ) (k : Fin n) (h : Nat.le j.val k.val) :
+    (skip j k).val = Nat.succ k.val := by
+  rw [skipOfGe j k h]
+  rfl
+
+theorem skipNe {n : Nat} (j : Fin n.succ) (k : Fin n) : (skip j k) = j → False := by
+  intro he
+  have hv := congrArg Fin.val he
+  by_cases h : Nat.lt k.val j.val
+  · rw [skipValLt j k h] at hv
+    exact Nat.lt_irrefl j.val (hv ▸ h)
+  · have h2 := Nat.le_of_not_lt h
+    rw [skipValGe j k h2] at hv
+    exact Nat.not_succ_le_self k.val (by rw [hv]; exact h2)
+
+theorem skipInj {n : Nat} (j : Fin n.succ) (k1 k2 : Fin n) (he : (skip j k1) = (skip j k2)) :
+    k1 = k2 := by
+  have hv := congrArg Fin.val he
+  apply Fin.ext
+  by_cases h1 : Nat.lt k1.val j.val
+  · rw [skipValLt j k1 h1] at hv
+    by_cases h2 : Nat.lt k2.val j.val
+    · rw [skipValLt j k2 h2] at hv
+      exact hv
+    · rw [skipValGe j k2 (Nat.le_of_not_lt h2)] at hv
+      exact absurd hv (Nat.ne_of_lt (Nat.lt_succ_of_le (Nat.le_of_lt (Nat.lt_of_lt_of_le h1 (Nat.le_of_not_lt h2)))))
+  · rw [skipValGe j k1 (Nat.le_of_not_lt h1)] at hv
+    by_cases h2 : Nat.lt k2.val j.val
+    · rw [skipValLt j k2 h2] at hv
+      exact absurd hv (Ne.symm (Nat.ne_of_lt (Nat.lt_succ_of_le (Nat.le_of_lt (Nat.lt_of_lt_of_le h2 (Nat.le_of_not_lt h1))))))
+    · rw [skipValGe j k2 (Nat.le_of_not_lt h2)] at hv
+      exact Nat.succ.inj hv
+
+-- The position of column j inside the minor that skips column j2 (j ≠ j2).
+def unskip {n : Nat} (j2 j : Fin n.succ) (hne : j.val = j2.val → False) : Fin n :=
+  if h : Nat.blt j.val j2.val then
+    ⟨j.val, Nat.lt_of_lt_of_le (Nat.blt_eq ▸ h) (Nat.le_of_lt_succ j2.isLt)⟩
+  else
+    ⟨Nat.pred j.val,
+      Nat.lt_of_lt_of_le
+        (Nat.pred_lt (fun h0 => Nat.not_lt_zero j2.val (h0 ▸
+          (Nat.lt_of_le_of_ne (Nat.le_of_not_lt (fun hl => h ((Nat.blt_eq (x := j.val) (y := j2.val)).symm ▸ hl)))
+            (fun he => hne he.symm)))))
+        (Nat.le_of_lt_succ j.isLt)⟩
+
+theorem skipUnskip {n : Nat} (j2 j : Fin n.succ) (hne : j.val = j2.val → False) :
+    (skip j2 (unskip j2 j hne)) = j := by
+  apply Fin.ext
+  unfold unskip
+  by_cases h : Nat.blt j.val j2.val
+  · rw [dif_pos h]
+    rw [Nat.blt_eq] at h
+    exact skipValLt j2 _ h
+  · rw [dif_neg h]
+    rw [Nat.blt_eq] at h
+    have hlt : Nat.lt j2.val j.val :=
+      Nat.lt_of_le_of_ne (Nat.le_of_not_lt h) (fun he => hne he.symm)
+    have hpos : Nat.lt 0 j.val := Nat.lt_of_le_of_lt (Nat.zero_le j2.val) hlt
+    have h3 : Nat.le j2.val (Nat.pred j.val) := Nat.le_pred_of_lt hlt
+    rw [skipValGe j2 _ h3]
+    show Nat.succ (Nat.pred j.val) = j.val
+    exact Nat.succ_pred_eq_of_pos hpos
+
+#check @skipUnskip
