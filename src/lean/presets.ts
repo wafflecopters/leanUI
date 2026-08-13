@@ -358,7 +358,8 @@ def triangleSum (n : MyNat) :
 
 -- ============ Fubini for finite double sums ============
 
-/-- the middle-four exchange: (a+b)+(c+d) = (a+c)+(b+d) -/
+-- (a+b)+(c+d) = (a+c)+(b+d)
+/-- the middle-four exchange -/
 def plusSwap (a b c d : MyNat) :
     (plus (plus a b) (plus c d)) = (plus (plus a c) (plus b d)) :=
   eqTrans (plusAssoc a b (plus c d))
@@ -3226,7 +3227,7 @@ def subSelf {R : Real} (a : Carrier R) : (rsub a a) = (rzero R) := addNegRight a
 -- equal, is zero: consecutive terms always carry opposite signs. (Induct on
 -- the position of the pair; the head case is "f 0 − f 1", the step drops a
 -- vanishing head.)
-/-- cancellation of two equal adjacent terms of an alternating sum -/
+/-- cancellation of equal adjacent terms -/
 def altSumPairCancel {R : Real} : (p : Nat) → (k : Nat) → (f : Fin k → Carrier R) →
     (hp : Nat.lt (Nat.succ p) k) →
     (hz : (j : Fin k) → (j.val = p → False) → (j.val = Nat.succ p → False) → (f j) = (rzero R)) →
@@ -3349,8 +3350,8 @@ theorem updateColSelf {R : Real} {n m : Nat} (A : Mat R n m) (j : Fin m) :
     exact updateColSame A j (fun i => A i j) i
   · exact updateColOther A j (fun i => A i j) i k hk
 
-/-- a column operation leaving the determinant unchanged: subtracting a
-    multiple of the neighbouring column -/
+-- subtracting a multiple of the neighbouring column
+/-- invariance under a column operation -/
 def detColOpAdj {R : Real} (n : Nat) (A : Mat R n n) (j1 j2 : Fin n)
     (hadj : j2.val = Nat.succ j1.val) (c : Carrier R) :
     (det n (updateCol A j2 (fun i => rsub (A i j2) (rmul c (A i j1))))) = (det n A) := by
@@ -3391,12 +3392,12 @@ def rmulComm {R : Real} (a b : Carrier R) : (rmul a b) = (rmul b a) := (fieldOf 
 def vandermonde {R : Real} {n : Nat} (x : Fin n → Carrier R) : Mat R n n :=
   fun i j => rpow (x i) j.val
 
-/-- the 1x1 Vandermonde determinant: the empty product -/
+/-- the 1x1 Vandermonde determinant -/
 def vandermonde1 {R : Real} (x : Fin 1 → Carrier R) :
     (det 1 (vandermonde x)) = (rone R) :=
   eqTrans (subZero (rmul (rone R) (rone R))) (rmulOneRight (rone R))
 
-/-- the 2x2 Vandermonde determinant: x_2 - x_1 -/
+/-- the 2x2 Vandermonde determinant -/
 def vandermonde2 {R : Real} (x : Fin 2 → Carrier R) :
     (det 2 (vandermonde x)) = (rsub (x (Fin.succ fin0)) (x fin0)) := by
   -- the expansion, written out: 1·(x_2·1·1 − 0) − ((x_1·1)·(1·1 − 0) − 0)
@@ -3408,8 +3409,8 @@ def vandermonde2 {R : Real} (x : Fin 2 → Carrier R) :
 #check @vandermonde
 #check @vandermonde2
 
-/-- expansion along a cleared first row: when the top row is (1, 0, …, 0),
-    the determinant IS the determinant of the first minor -/
+-- when the top row is (1, 0, …, 0) the determinant IS the first minor's
+/-- expansion along a cleared first row -/
 def detFirstRowUnit {R : Real} (n : Nat) (A : Mat R n.succ n.succ)
     (h0 : (A fin0 fin0) = (rone R))
     (hz : (j : Fin n) → (A fin0 j.succ) = (rzero R)) :
@@ -3427,7 +3428,8 @@ def detFirstRowUnit {R : Real} (n : Nat) (A : Mat R n.succ n.succ)
 
 -- ============ factoring a scalar out of EVERY row ============
 
-/-- the middle-four exchange for products: (ab)(pq) = (ap)(bq) -/
+-- (ab)(pq) = (ap)(bq)
+/-- the middle-four exchange for products -/
 def mulSwap {R : Real} (a b p q : Carrier R) :
     (rmul (rmul a b) (rmul p q)) = (rmul (rmul a p) (rmul b q)) :=
   eqTrans ((fieldOf R).mulAssoc a b (rmul p q))
@@ -3449,7 +3451,8 @@ theorem minorScaleRows {R : Real} {n : Nat} (A : Mat R n.succ n.succ)
     (c : Fin n.succ → Carrier R) (j : Fin n.succ) :
     (minor (scaleRows A c) j) = (scaleRows (minor A j) (fun i => c i.succ)) := rfl
 
-/-- factoring one scalar out of every row: the determinant picks up the product -/
+-- the determinant picks up the product of the scalars
+/-- factoring a scalar out of every row -/
 def detScaleRows {R : Real} : (n : Nat) → (A : Mat R n n) → (c : Fin n → Carrier R) →
     (det n (scaleRows A c)) = (rmul (finProd n c) (det n A))
   | .zero, _, _ => eqSym (rmulOneLeft (rone R))
@@ -3476,7 +3479,7 @@ def vandStep {R : Real} {n : Nat} (x : Fin n.succ → Carrier R) (k : Nat) : Mat
   fun i j => if Nat.ble j.val k = true then rpow (x i) j.val
              else rmul (rpow (x i) (Nat.pred j.val)) (rsub (x i) (x fin0))
 
-/-- one column operation, and the reduction advances by one column -/
+/-- one step of the column reduction -/
 def detVandStep {R : Real} {n : Nat} (x : Fin n.succ → Carrier R) (k : Nat)
     (hk : Nat.lt (Nat.succ k) (Nat.succ n)) :
     (det n.succ (vandStep x (Nat.succ k))) = (det n.succ (vandStep x k)) := by
@@ -3520,7 +3523,7 @@ def detVandStep {R : Real} {n : Nat} (x : Fin n.succ → Carrier R) (k : Nat)
   exact eqSym (detColOpAdj n.succ (vandStep x (Nat.succ k)) ⟨k, Nat.lt_of_succ_lt hk⟩
     ⟨Nat.succ k, hk⟩ rfl (x fin0))
 
-/-- the whole reduction: every column operation, folded -/
+/-- the whole column reduction -/
 def detVandSteps {R : Real} {n : Nat} (x : Fin n.succ → Carrier R) :
     (k : Nat) → (hk : Nat.lt k (Nat.succ n)) →
     (det n.succ (vandStep x k)) = (det n.succ (vandStep x 0))
@@ -3531,8 +3534,9 @@ def detVandSteps {R : Real} {n : Nat} (x : Fin n.succ → Carrier R) :
 
 -- ============ THE VANDERMONDE IDENTITY ============
 
-/-- the Vandermonde recursion: the first variable factors out, leaving the
-    Vandermonde determinant of the remaining ones -/
+-- the first variable factors out, leaving the Vandermonde determinant of
+-- the remaining ones
+/-- the Vandermonde recursion -/
 def vandermondeRecursion {R : Real} {n : Nat} (x : Fin n.succ → Carrier R) :
     (det n.succ (vandermonde x))
       = (rmul (finProd n (fun i => rsub (x i.succ) (x fin0)))
@@ -3577,7 +3581,8 @@ def vandProd {R : Real} : (n : Nat) → (x : Fin n → Carrier R) → Carrier R
   | .succ n, x => rmul (finProd n (fun i => rsub (x i.succ) (x fin0)))
       (vandProd n (fun i => x i.succ))
 
-/-- VANDERMONDE: det V = ∏_{i<j} (x_j − x_i) -/
+-- VANDERMONDE: det V = ∏_{i<j} (x_j − x_i)
+/-- Vandermonde's identity -/
 theorem vandermondeIdentity {R : Real} : ∀ (n : Nat) (x : Fin n → Carrier R),
     (det n (vandermonde x)) = (vandProd n x) := by
   intro n
@@ -3704,7 +3709,7 @@ theorem nodupMap {α β : Type} {f : α → β}
 
 -- Two nodup lists with the same members have the same length: the bijection
 -- a paper would not even bother to mention. Proved by induction with erase.
-/-- two distinct-element lists with the same members having the same length -/
+/-- equal length from equal membership -/
 theorem lengthEqOfSameMem {α : Type} [DecidableEq α] :
     ∀ (l1 l2 : List α), l1.Nodup → l2.Nodup → (∀ x, x ∈ l1 ↔ x ∈ l2) →
       l1.length = l2.length := by
@@ -3801,7 +3806,7 @@ structure FiniteGroup extends MyGroup where
 
 instance (G : FiniteGroup) : DecidableEq G.carrier := G.deq
 
-/-- the order of a finite group: how many elements it has -/
+/-- the order of a finite group -/
 def FiniteGroup.order (G : FiniteGroup) : Nat := G.elems.length
 
 structure Subgroup (G : FiniteGroup) where
@@ -3814,11 +3819,13 @@ structure Subgroup (G : FiniteGroup) where
 /-- the order of a subgroup -/
 def Subgroup.order {G : FiniteGroup} (H : Subgroup G) : Nat := H.members.length
 
-/-- the left coset gH: every element of H translated by g -/
+-- every element of H translated by g
+/-- the left coset gH -/
 def coset {G : FiniteGroup} (g : G.carrier) (H : Subgroup G) : List G.carrier :=
   H.members.map (G.mul g)
 
-/-- translation is injective, so a coset has exactly the subgroup's order -/
+-- translation is injective, so a coset has exactly the subgroup's order
+/-- the order of a coset -/
 theorem cosetOrder {G : FiniteGroup} (g : G.carrier) (H : Subgroup G) :
     (coset g H).length = H.order := List.length_map ..
 
@@ -3853,7 +3860,7 @@ def Saturated {G : FiniteGroup} (H : Subgroup G) (r : List G.carrier) : Prop :=
 def cosetPart {G : FiniteGroup} (H : Subgroup G) (g : G.carrier) (r : List G.carrier) : List G.carrier :=
   r.filter (fun x => decide (G.mul (G.inv g) x ∈ H.members))
 
-/-- what is left of r after removing the coset gH -/
+/-- the remainder after removing a coset -/
 def rest {G : FiniteGroup} (H : Subgroup G) (g : G.carrier) (r : List G.carrier) : List G.carrier :=
   r.filter (fun x => !decide (G.mul (G.inv g) x ∈ H.members))
 
@@ -3862,7 +3869,8 @@ theorem cosetSplit {G : FiniteGroup} (H : Subgroup G) (g : G.carrier) (r : List 
     r.length = (cosetPart H g r).length + (rest H g r).length :=
   (lengthFilterSplit _ r).symm
 
-/-- in a saturated set, the part lying in gH is ALL of gH — order H many -/
+-- in a saturated set the part lying in gH is ALL of gH: order H many
+/-- the order of a coset inside a saturated set -/
 theorem cosetPartOrder {G : FiniteGroup} (H : Subgroup G) {g : G.carrier} {r : List G.carrier}
     (hnd : r.Nodup) (hg : g ∈ r) (hsat : Saturated H r) :
     (cosetPart H g r).length = H.order := by
@@ -3881,7 +3889,7 @@ theorem cosetPartOrder {G : FiniteGroup} (H : Subgroup G) {g : G.carrier} {r : L
 theorem restNodup {G : FiniteGroup} (H : Subgroup G) (g : G.carrier) {r : List G.carrier}
     (hnd : r.Nodup) : (rest H g r).Nodup := nodupFilter _ hnd
 
-/-- membership in the rest, unfolded -/
+/-- membership in the remainder -/
 theorem memRest {G : FiniteGroup} {H : Subgroup G} {g x : G.carrier} {r : List G.carrier} :
     x ∈ rest H g r ↔ x ∈ r ∧ ¬ G.mul (G.inv g) x ∈ H.members := by
   unfold rest
@@ -3895,8 +3903,8 @@ theorem memRest {G : FiniteGroup} {H : Subgroup G} {g x : G.carrier} {r : List G
     refine ⟨hr, ?_⟩
     simp [decide_eq_false hx]
 
-/-- removing a whole coset keeps the remainder saturated: two elements of one
-    coset see the same cosets -/
+-- two elements of one coset see the same cosets
+/-- saturation surviving the removal of a coset -/
 theorem restSaturated {G : FiniteGroup} (H : Subgroup G) (g : G.carrier) {r : List G.carrier}
     (hsat : Saturated H r) : Saturated H (rest H g r) := by
   intro x hx y hy
@@ -3914,8 +3922,8 @@ theorem restSaturated {G : FiniteGroup} (H : Subgroup G) (g : G.carrier) {r : Li
   rw [G.mulAssoc, ← G.mulAssoc y (G.inv y) x, MyGroup.mulInv, G.oneMul] at hprod
   exact hprod
 
-/-- the coset we removed was not empty (g itself is in it), so the rest is
-    strictly smaller -/
+-- g itself lies in the coset removed, so something really went
+/-- the strict decrease from removing a nonempty coset -/
 theorem restShorter {G : FiniteGroup} (H : Subgroup G) {g : G.carrier} {r : List G.carrier}
     (hg : g ∈ r) : (rest H g r).length < r.length := by
   have hsplit := cosetSplit H g r
@@ -3927,7 +3935,7 @@ theorem restShorter {G : FiniteGroup} (H : Subgroup G) {g : G.carrier} {r : List
   have hpos : 0 < (cosetPart H g r).length := List.length_pos_of_mem hgpart
   omega
 
-/-- a list is empty or has a member -/
+/-- the empty-or-inhabited dichotomy -/
 theorem emptyOrMem {α : Type} : ∀ l : List α, l = [] ∨ ∃ x, x ∈ l := by
   intro l
   cases l with
@@ -3936,7 +3944,7 @@ theorem emptyOrMem {α : Type} : ∀ l : List α, l = [] ∨ ∃ x, x ∈ l := b
 
 -- ============ Lagrange ============
 
-/-- counting a saturated set: always a multiple of the order of H -/
+/-- saturated sets counting in multiples of the order of H -/
 theorem lagrangeAux {G : FiniteGroup} (H : Subgroup G) :
     ∀ r : List G.carrier, r.Nodup → Saturated H r → ∃ k, r.length = k * H.order := by
   apply lengthStrongInduction
@@ -3951,11 +3959,13 @@ theorem lagrangeAux {G : FiniteGroup} (H : Subgroup G) :
     have hpart : (cosetPart H g r).length = H.order := cosetPartOrder H hnd hg hsat
     exact ⟨k + 1, by rw [hsplit, hpart, hk, Nat.succ_mul, Nat.add_comm]⟩
 
-/-- the whole group being saturated: it contains everything -/
+-- the group contains everything, so it is saturated for any H
+/-- the whole group being saturated -/
 theorem fullSaturated {G : FiniteGroup} (H : Subgroup G) : Saturated H G.elems :=
   fun _ _ y _ => G.elemsComplete y
 
-/-- LAGRANGE: the order of a subgroup divides the order of the group -/
+-- LAGRANGE: the order of a subgroup divides the order of the group
+/-- Lagrange's theorem -/
 theorem lagrange {G : FiniteGroup} (H : Subgroup G) : H.order ∣ G.order := by
   obtain ⟨k, hk⟩ := lagrangeAux H G.elems G.elemsNodup (fullSaturated H)
   exact ⟨k, by show G.elems.length = H.order * k; rw [hk, Nat.mul_comm]⟩
@@ -3981,13 +3991,14 @@ def CosetEq {G : FiniteGroup} (N : Subgroup G) (a b : G.carrier) : Prop :=
 -- Congruence reads the way number theory writes it: a ≡ b (mod N).
 notation:50 a:51 " ≡ " b:51 " (mod " N:51 ")" => CosetEq N a b
 
-/-- congruence mod N is reflexive: a⁻¹a = 1 ∈ N -/
+/-- reflexivity of congruence mod N -/
 theorem cosetEqRefl {G : FiniteGroup} (N : Subgroup G) (a : G.carrier) : CosetEq N a a := by
   unfold CosetEq
   rw [G.invMul]
   exact N.oneMem
 
-/-- congruence mod N is symmetric: invert the witness -/
+-- invert the witness
+/-- symmetry of congruence mod N -/
 theorem cosetEqSymm {G : FiniteGroup} {N : Subgroup G} {a b : G.carrier}
     (h : CosetEq N a b) : CosetEq N b a := by
   unfold CosetEq
@@ -3995,7 +4006,8 @@ theorem cosetEqSymm {G : FiniteGroup} {N : Subgroup G} {a b : G.carrier}
   rw [MyGroup.invMulRev, MyGroup.invInv] at hi
   exact hi
 
-/-- congruence mod N is transitive: multiply the witnesses -/
+-- multiply the witnesses
+/-- transitivity of congruence mod N -/
 theorem cosetEqTrans {G : FiniteGroup} {N : Subgroup G} {a b c : G.carrier}
     (hab : CosetEq N a b) (hbc : CosetEq N b c) : CosetEq N a c := by
   unfold CosetEq
@@ -4003,7 +4015,8 @@ theorem cosetEqTrans {G : FiniteGroup} {N : Subgroup G} {a b c : G.carrier}
   rw [G.mulAssoc, ← G.mulAssoc b (G.inv b) c, MyGroup.mulInv, G.oneMul] at hprod
   exact hprod
 
-/-- the regrouping behind well-definedness: (ac)⁻¹(bd) = [c⁻¹(a⁻¹b)c]·[c⁻¹d] -/
+-- (ac)⁻¹(bd) = [c⁻¹(a⁻¹b)c]·[c⁻¹d]
+/-- the regrouping behind well-definedness -/
 theorem quotRegroup {G : FiniteGroup} (a b c d : G.carrier) :
     G.mul (G.inv (G.mul a c)) (G.mul b d) =
       G.mul (G.mul (G.inv c) (G.mul (G.mul (G.inv a) b) c)) (G.mul (G.inv c) d) := by
@@ -4015,7 +4028,7 @@ theorem quotRegroup {G : FiniteGroup} (a b c d : G.carrier) :
   rw [G.mulAssoc (G.inv c) (G.inv a) (G.mul b d)]
   rw [G.mulAssoc (G.inv a) b d]
 
-/-- THE well-definedness: multiplication descends to cosets when N is normal -/
+/-- multiplication descending to the cosets -/
 theorem quotMulDescends {G : FiniteGroup} {N : Subgroup G} (hN : Normal N)
     {a b c d : G.carrier} (hab : CosetEq N a b) (hcd : CosetEq N c d) :
     CosetEq N (G.mul a c) (G.mul b d) := by
@@ -4026,12 +4039,13 @@ theorem quotMulDescends {G : FiniteGroup} {N : Subgroup G} (hN : Normal N)
   rw [quotRegroup]
   exact hprod
 
-/-- conjugation by a collapsing onto the witness: a·(b⁻¹a)·a⁻¹ = a·b⁻¹ -/
+-- a·(b⁻¹a)·a⁻¹ = a·b⁻¹
+/-- conjugation collapsing onto the witness -/
 theorem conjCollapse {G : FiniteGroup} (a b : G.carrier) :
     G.mul a (G.mul (G.mul (G.inv b) a) (G.inv a)) = G.mul a (G.inv b) := by
   rw [G.mulAssoc (G.inv b) a (G.inv a), MyGroup.mulInv, MyGroup.mulOne]
 
-/-- inversion descends to cosets when N is normal -/
+/-- inversion descending to the cosets -/
 theorem quotInvDescends {G : FiniteGroup} {N : Subgroup G} (hN : Normal N)
     {a b : G.carrier} (hab : CosetEq N a b) :
     CosetEq N (G.inv a) (G.inv b) := by
@@ -4045,7 +4059,7 @@ theorem quotInvDescends {G : FiniteGroup} {N : Subgroup G} (hN : Normal N)
 def cosetSetoid {G : FiniteGroup} (N : Subgroup G) : Setoid G.carrier :=
   ⟨CosetEq N, fun a => cosetEqRefl N a, cosetEqSymm, cosetEqTrans⟩
 
-/-- THE QUOTIENT GROUP: a normal subgroup induces a group on the cosets -/
+/-- the quotient group induced by a normal subgroup -/
 def QuotientGroup {G : FiniteGroup} (N : Subgroup G) (hN : Normal N) : MyGroup where
   carrier := Quotient (cosetSetoid N)
   mul := Quotient.lift₂ (fun a b => Quotient.mk (cosetSetoid N) (G.mul a b))
