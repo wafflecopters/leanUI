@@ -9,6 +9,8 @@ import { proofSeedBlock } from '../lean/extractTacticBlock';
 import { applySubgoalCount, rewriteSideGoalCount } from '../lean/rewriteCandidates';
 import { caseBranchCount } from '../lean/caseBranches';
 import { taggedToInteractiveGoal } from '../lean/leanInteractiveGoal';
+import { codeWithInfosToMathRow, mathTextToLatex } from '../lean/codeWithInfos';
+import { renderStaticLatex } from '../math-editor/render';
 import type { TacticSuggestion } from '../proof-tree/suggestion-types';
 import { useProofSession } from '../controller/useProofSession';
 import { createTermBuilderProvider } from '../controller/termBuilder';
@@ -309,6 +311,22 @@ function LeanProofEditor({
   active?: boolean;
   onSourceChange?: (next: string) => void;
 }) {
+  // A citation's hover shows WHAT THE CITED LEMMA SAYS. Lean has already
+  // applied the preset's notation when it printed the type, so the statement
+  // arrives in the document's own vocabulary; the tagged form additionally
+  // goes through the renderer's prose rules (∀-telescopes, "and"/"then").
+  const lemmaTypeLatex = useMemo(() => {
+    const byName = new Map(allDeclarations.map((d) => [d.name, d]));
+    return (name: string): string | undefined => {
+      const d = byName.get(name);
+      if (!d) return undefined;
+      if (d.typeTagged) {
+        return renderStaticLatex(codeWithInfosToMathRow(d.typeTagged, { wrapSubterms: false }));
+      }
+      return d.prettyType ? mathTextToLatex(d.prettyType) : undefined;
+    };
+  }, [allDeclarations]);
+
   const { session, state, error, starting } = useProofSession({
     source,
     declarations: allDeclarations,
@@ -488,6 +506,7 @@ function LeanProofEditor({
           caseBranchCount(allDeclarations, session.hypothesesWithTypes(), scrutinee)
         }
         lemmaDoc={(name) => allDeclarations.find((d) => d.name === name)?.doc}
+        lemmaType={lemmaTypeLatex}
         declSignature={`${state.decl.kind} ${state.decl.name} : ${state.decl.typeText}`}
         rewriteSideGoalCount={(name) => rewriteSideGoalCount(allDeclarations, name)}
         hypSuggestionsOverride={hypTraySuggestions}

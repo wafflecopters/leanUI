@@ -127,6 +127,8 @@ export interface ProofTreeEditorProps {
   caseBranchCount?: (scrutinee: string) => number | null;
   /** Doc comment of a file lemma, for reason-style citations. */
   lemmaDoc?: (name: string) => string | undefined;
+  /** The cited lemma's STATEMENT, for hover — 'what IS this lemma?' */
+  lemmaType?: (name: string) => string | undefined;
   /** The declaration's raw Lean signature — shown above the Tactics tree. */
   declSignature?: string;
   rewriteSideGoalCount?: (name: string) => number;
@@ -212,7 +214,7 @@ type TacticMode = null | ProofTreeManualTacticMode;
 /** Stable empty list, so memo deps don't churn. */
 const EMPTY_SUGGESTIONS: readonly TacticSuggestion[] = [];
 
-export function ProofTreeEditor({ history, onHistoryChange, registry, goalMapOverride, typedContextOverride, interactiveGoalOverride, onGoalPathSelect, goalExtraSlot, applySubgoalCount, caseBranchCount, lemmaDoc, declSignature, rewriteSideGoalCount, hypSuggestionsOverride, onHypothesisSelect, onApplySuggestionOverride, termBuilderProvider }: ProofTreeEditorProps) {
+export function ProofTreeEditor({ history, onHistoryChange, registry, goalMapOverride, typedContextOverride, interactiveGoalOverride, onGoalPathSelect, goalExtraSlot, applySubgoalCount, caseBranchCount, lemmaDoc, lemmaType, declSignature, rewriteSideGoalCount, hypSuggestionsOverride, onHypothesisSelect, onApplySuggestionOverride, termBuilderProvider }: ProofTreeEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const state = history.current;
 
@@ -406,8 +408,8 @@ export function ProofTreeEditor({ history, onHistoryChange, registry, goalMapOve
   }, [state, moveCursor]);
 
   const leanCounters = useMemo(
-    () => ({ applySubgoalCount, caseBranchCount, rewriteSideGoalCount, lemmaDoc }),
-    [applySubgoalCount, caseBranchCount, rewriteSideGoalCount, lemmaDoc],
+    () => ({ applySubgoalCount, caseBranchCount, rewriteSideGoalCount, lemmaDoc, lemmaType }),
+    [applySubgoalCount, caseBranchCount, rewriteSideGoalCount, lemmaDoc, lemmaType],
   );
   const hypTrayValue = useMemo(
     () => ({ suggestions: hypSuggestions, onSelect: onHypothesisSelect, onApply: handleApplySuggestion }),
@@ -1450,6 +1452,8 @@ const LeanCounters = createContext<{
   caseBranchCount?: (scrutinee: string) => number | null;
   /** Doc comment of a file lemma, for reason-style citations. */
   lemmaDoc?: (name: string) => string | undefined;
+  /** The cited lemma's STATEMENT, for hover — 'what IS this lemma?' */
+  lemmaType?: (name: string) => string | undefined;
   /** The declaration's raw Lean signature — shown above the Tactics tree. */
   declSignature?: string;
   rewriteSideGoalCount?: (name: string) => number;
@@ -2324,6 +2328,8 @@ interface ProseViewProps {
   caseBranchCount?: (scrutinee: string) => number | null;
   /** Doc comment of a file lemma, for reason-style citations. */
   lemmaDoc?: (name: string) => string | undefined;
+  /** The cited lemma's STATEMENT, for hover — 'what IS this lemma?' */
+  lemmaType?: (name: string) => string | undefined;
   /** The declaration's raw Lean signature — shown above the Tactics tree. */
   declSignature?: string;
   rewriteSideGoalCount?: (name: string) => number;
@@ -2560,6 +2566,8 @@ interface ProseItemViewProps {
   caseBranchCount?: (scrutinee: string) => number | null;
   /** Doc comment of a file lemma, for reason-style citations. */
   lemmaDoc?: (name: string) => string | undefined;
+  /** The cited lemma's STATEMENT, for hover — 'what IS this lemma?' */
+  lemmaType?: (name: string) => string | undefined;
   /** The declaration's raw Lean signature — shown above the Tactics tree. */
   declSignature?: string;
   rewriteSideGoalCount?: (name: string) => number;
@@ -2992,10 +3000,14 @@ function ApplyLeadFragment({
   // The lemma's /-- doc --/ is the REASON; the identifier demotes to a small
   // citation tag. Undocumented lemmas keep the name — an honest fallback.
   const doc = lemmaDocOf(theoremName);
+  const typeLatex = lemmaTypeLatexOf(theoremName);
   if (doc) {
     return (
       <>
-        <span style={prose}>This holds by {doc}</span>
+        <span style={prose}>This holds by{' '}</span>
+        <HoverType typeLatex={typeLatex}>
+          <span style={{ ...prose, borderBottom: '1px dashed rgba(139, 148, 158, 0.4)' }}>{doc}</span>
+        </HoverType>
         <span style={{ color: '#484f58', fontSize: '10px', marginLeft: '5px' }}>[{theoremName}]</span>
       </>
     );
@@ -3003,9 +3015,19 @@ function ApplyLeadFragment({
   return (
     <>
       <span style={prose}>This holds by{' '}</span>
-      <InlineProseName name={theoremName ?? ''} />
+      <HoverType typeLatex={typeLatex}>
+        <InlineProseName name={theoremName ?? ''} />
+      </HoverType>
     </>
   );
+}
+
+/** The cited lemma's statement, already LaTeX — what a reader means by
+ *  "what IS this?". The Lean layer supplies it; this stays engine-agnostic. */
+function lemmaTypeLatexOf(name: string | undefined): string | undefined {
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const counters = useContext(LeanCounters);
+  return name ? counters.lemmaType?.(name) : undefined;
 }
 
 /** Doc for a lemma name via the counters context (hook-shaped helper). */
@@ -4526,6 +4548,8 @@ interface HoleProseViewProps {
   caseBranchCount?: (scrutinee: string) => number | null;
   /** Doc comment of a file lemma, for reason-style citations. */
   lemmaDoc?: (name: string) => string | undefined;
+  /** The cited lemma's STATEMENT, for hover — 'what IS this lemma?' */
+  lemmaType?: (name: string) => string | undefined;
   /** The declaration's raw Lean signature — shown above the Tactics tree. */
   declSignature?: string;
   rewriteSideGoalCount?: (name: string) => number;
