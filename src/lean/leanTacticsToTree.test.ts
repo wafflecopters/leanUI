@@ -324,3 +324,81 @@ describe('wrapped tactics are ONE tactic', () => {
   });
 });
 
+describe('a deeper-indented line continues the tactic unless a block opened', () => {
+  test('a multi-line show is ONE tactic', () => {
+    const tree = leanTacticsToTree([
+      'show rsub (rmul a b)',
+      '    (rsub c d)',
+      '  = rsub e f',
+      'exact h',
+    ].join('\n'));
+    const printed = proofTreeToSource(tree);
+    expect(printed).toContain('rsub e f');
+    expect(printed).not.toContain('sorry');
+  });
+
+  test('a case block\'s body is NOT swallowed into its header', () => {
+    const tree = leanTacticsToTree([
+      'induction n with',
+      '| zero =>',
+      '  rfl',
+      '| succ k ih =>',
+      '  exact ih',
+    ].join('\n'));
+    const printed = proofTreeToSource(tree);
+    expect(printed).toContain('rfl');
+    expect(printed).toContain('exact ih');
+    expect(printed).not.toContain('=> rfl');
+  });
+
+  test('a bullet body stays separate from the bullet', () => {
+    const tree = leanTacticsToTree([
+      'constructor',
+      '· exact a',
+      '· exact b',
+    ].join('\n'));
+    const printed = proofTreeToSource(tree);
+    expect(printed).toContain('exact a');
+    expect(printed).toContain('exact b');
+  });
+});
+
+describe('comments are not tactics', () => {
+  test('a full-line comment does not swallow the proof beneath it', () => {
+    // This was severe: the comment fell into the terminal unrecognized-tactic
+    // fallback, so the whole proof reprinted as nothing but the comment.
+    const tree = leanTacticsToTree([
+      '-- the expansion, written out',
+      'intro x',
+      'exact h',
+    ].join('\n'));
+    const printed = proofTreeToSource(tree);
+    expect(printed).toContain('intro x');
+    expect(printed).toContain('exact h');
+    expect(printed).not.toContain('--');
+  });
+
+  test('a trailing comment is stripped from its tactic', () => {
+    const tree = leanTacticsToTree('exact h -- because of the above');
+    const printed = proofTreeToSource(tree);
+    expect(printed).toContain('exact h');
+    expect(printed).not.toContain('because');
+  });
+
+  test('a block comment, on one line and across lines', () => {
+    const one = proofTreeToSource(leanTacticsToTree('/- aside -/ intro x\nexact h'));
+    expect(one).toContain('intro x');
+    expect(one).toContain('exact h');
+    const many = proofTreeToSource(leanTacticsToTree(
+      ['intro x', '/- a long', '   aside -/', 'exact h'].join('\n')));
+    expect(many).toContain('intro x');
+    expect(many).toContain('exact h');
+    expect(many).not.toContain('aside');
+  });
+
+  test('a double dash inside a string is not a comment', () => {
+    const tree = leanTacticsToTree('exact foo "a--b"');
+    expect(proofTreeToSource(tree)).toContain('a--b');
+  });
+});
+

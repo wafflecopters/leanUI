@@ -40,6 +40,16 @@ interface Line {
  * brackets. Note `have h : T := by` is FINISHED by this rule — it ends with
  * `by` and its body is a genuine indented block, which must stay separate.
  */
+/**
+ * Does this line OPEN a block whose body is the indented lines beneath it?
+ * `case h =>`, `| zero =>`, `have h : T := by`, `induction n with`, and a `·`
+ * bullet all do — their bodies are separate tactics. Anything else that is
+ * followed by a deeper-indented line is a WRAPPED tactic, not a block.
+ */
+function opensBlock(text: string): boolean {
+  return /(?:=>|\bby|\bwith|\bdo)\s*$/.test(text) || /^[·.]/.test(text);
+}
+
 function continuesOnNextLine(text: string): boolean {
   if (/:=\s*$/.test(text)) return true;
   let depth = 0;
@@ -53,12 +63,45 @@ function continuesOnNextLine(text: string): boolean {
   return depth > 0;
 }
 
+/** Strip a trailing `--` comment, ignoring one inside a string literal. */
+function stripLineComment(text: string): string {
+  let inStr = false;
+  for (let i = 0; i < text.length - 1; i++) {
+    if (text[i] === '"') inStr = !inStr;
+    if (!inStr && text[i] === '-' && text[i + 1] === '-') return text.slice(0, i).replace(/\s+$/, '');
+  }
+  return text;
+}
+
 function lex(block: string): Line[] {
   const out: Line[] = [];
+  let inBlockComment = false;
   for (const raw of block.split('\n')) {
-    const trimmedEnd = raw.replace(/\s+$/, '');
-    if (trimmedEnd.trim() === '') continue; // skip blank lines
-    const indent = trimmedEnd.length - trimmedEnd.trimStart().length;
+    let trimmedEnd = raw.replace(/\s+$/, '');
+    // Indentation is the LINE's, measured before any comment is removed —
+    // stripping an inline `/- … -/` would otherwise shift the tactic right and
+    // break the chain that indentation defines.
+    const rawIndent = trimmedEnd.length - trimmedEnd.trimStart().length;
+    // Comments are not tactics. Untreated, a `--` line fell into the
+    // unrecognized-tactic fallback, which is TERMINAL — one explanatory
+    // comment inside a proof swallowed every tactic beneath it and the whole
+    // proof reprinted as just that comment.
+    if (inBlockComment) {
+      const end = trimmedEnd.indexOf('-/');
+      if (end === -1) continue;
+      inBlockComment = false;
+      trimmedEnd = trimmedEnd.slice(end + 2);
+    }
+    for (;;) {
+      const open = trimmedEnd.indexOf('/-');
+      if (open === -1) break;
+      const close = trimmedEnd.indexOf('-/', open + 2);
+      if (close === -1) { inBlockComment = true; trimmedEnd = trimmedEnd.slice(0, open); break; }
+      trimmedEnd = trimmedEnd.slice(0, open) + trimmedEnd.slice(close + 2);
+    }
+    trimmedEnd = stripLineComment(trimmedEnd).replace(/\s+$/, '');
+    if (trimmedEnd.trim() === '') continue; // skip blank and comment-only lines
+    const indent = rawIndent;
     const text = trimmedEnd.trim();
     // A wrapped tactic is ONE tactic. Lean's own source style breaks a long
     // `have h : T :=` before its term, and treating the term as its own line
@@ -66,7 +109,13 @@ function lex(block: string): Line[] {
     // swallowed into the resulting `sorry` (quotMulDescends read as unproved
     // while Lean considered it fine).
     const prev = out[out.length - 1];
-    if (prev && continuesOnNextLine(prev.text)) {
+    // A tactic wraps when the previous line is syntactically unfinished, OR
+    // simply when this line is indented deeper than it and it did not open a
+    // block. Lean's own style breaks long `show`/`exact`/`refine` terms that
+    // way, with no trailing operator to hint at it — untreated, the tail
+    // parsed as its own tactic and the whole proof failed to reprint.
+    if (prev && (continuesOnNextLine(prev.text)
+        || (indent > prev.indent && !opensBlock(prev.text)))) {
       prev.text = `${prev.text} ${text}`;
       continue;
     }
