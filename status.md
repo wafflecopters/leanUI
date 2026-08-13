@@ -35,7 +35,26 @@ The proof editor is a **headless controller with a thin UI on top**, not a React
 - Layers, each independently testable: `candidates` (what's worth trying) → `discover` (what Lean's own search finds) → `validate` (what actually works, + previews) → `actions` (what's possible) → `session` (state + dispatch). `useProofSession` is the entire React surface.
 - **Tests:** `npm test` is the fast gate (~1s since M5 removed the TT compiler suites; excludes `*.e2e.test.ts`); `npm run test:e2e` runs the real-Lean suites — **file-serial** (`fileParallelism: false` under `E2E=1`), because each e2e file's fork spawns its own Lean worker pool and a Mathlib-loaded pool is multiple GB. Mathlib e2e runs are expensive by nature: expect one ~5–7GB resident Lean process while they run — always launch them through `scripts/guarded-run.sh -l 14 --`, which kills the process tree if it passes the limit.
 
-## Current Focus (all six requested proofs are DONE; polish + editability next)
+## Current Focus (six proofs DONE; one parser gap left)
+- **Audit, not assumption.** Every linked proof is now checked for whether it
+  OPENS and reads complete in the editor, not just whether Lean accepts it.
+  COMPLETE: lagrange, lagrangeAux, quotMulDescends, quotInvDescends, fubini,
+  rearrangement, triangleSum, jacobianEntries, vandermondeIdentity,
+  basisExistsAux. (limitAdd keeps one open goal BY DESIGN — the demo exercise.)
+- **The one gap left**: `show` is still an unrecognized (terminal) tactic, so
+  the five determinant LIBRARY lemmas (vandermondeRecursion, detColOpAdj,
+  detFirstRowUnit, vandermonde2, detColEqAdjZero) lose steps when opened. Fix
+  is a ShowNode: `{tag:'show', type, child}` — a chaining no-op — added to the
+  ~10 switch sites the DestructureNode work already mapped, with
+  walker-coverage.test.ts as the net. Decide first what a show row SAYS, given
+  the goal display already states the goal.
+- **Also unstyled**: `have` justification TERMS render from source text, not
+  from Lean's pretty-printer, so preset notation does not reach them
+  (`vadd x (smulV t (basis j))` still shows raw in the Observe rows). Wants
+  `proofExprTagged` from Extract.lean — same family as per-subexpression
+  hover types.
+
+## Previous Focus (all six requested proofs are DONE; polish + editability next)
 - **All six proofs land, none sorried.** (a) Lagrange, (b) quotient groups,
   (c) Fubini, (d) rearrangement (finite), (e) Jacobian, (f) Vandermonde's
   determinant identity. Four new presets: Group Theory (Lagrange),
@@ -81,6 +100,18 @@ The proof editor is a **headless controller with a thin UI on top**, not a React
 - Known loose ends: `induction` still takes an identifier (its scrutinee should accept a term like `cases` now does); hover-types exist for case params only (the general version needs `Extract.lean` to emit a type per subexpression, which the new per-goal/per-hypothesis fact plumbing makes straightforward); the value-goal detector still infers from sibling metavariable mentions rather than asking Lean.
 
 ## Recent Progress
+- **The vector layer reads as mathematics, and five parser/renderer defects
+  behind it (2026-08-12).** The Multivariable preset never got notation, so
+  every operation printed as a call; it now has infix + - • ⬝, ‖v‖, e_ j,
+  ℝ^m and ℝ^n×m with unexpanders, and jacobianEntries reads
+  |(f(x + t · e_j, i) − f(x, i))/t − A(i,j)| < ε. Exposed and fixed: • and ⬝
+  were absent from the unicode map so they parsed as call OPERANDS; a name
+  ending in `_` now takes the next atom as a subscript; call arguments no
+  longer get doubled parens. In the tactic parser: a COMMENT inside a proof
+  used to destroy it (terminal fallback swallowed everything beneath), and a
+  tactic wrapped across lines lost its tail — both fixed, so quotMulDescends
+  went from silently-unproved to COMPLETE. vandermondeIdentity was a term-mode
+  recursion the editor could not open at all; it is now a tactic proof.
 - **Vandermonde's identity proved, and the matrix display model behind it
   (2026-08-12).** det V = ∏_{i<j}(x_j − x_i) from scratch: the determinant by
   first-row Laplace expansion, then the full column toolkit (additivity,

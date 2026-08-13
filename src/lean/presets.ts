@@ -2675,6 +2675,9 @@ notation:max "ℝ^" m:max => Vec _ m
 @[app_unexpander Vec] def unexpVec : Lean.PrettyPrinter.Unexpander
   | \`($_ $_R $m) => \`(ℝ^$m)
   | _ => throw ()
+@[app_unexpander Mat] def unexpMat : Lean.PrettyPrinter.Unexpander
+  | \`($_ $_R $n $m) => \`(ℝ^$n×$m)
+  | _ => throw ()
 
 -- Matrix times a scaled basis vector picks out one column, scaled:
 -- (A · (t e_j))_i = t * A_ij.
