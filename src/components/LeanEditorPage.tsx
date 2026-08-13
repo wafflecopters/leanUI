@@ -5,7 +5,7 @@ import type { editor } from 'monaco-editor';
 import type { AnalyzeResult, LeanDeclaration, LeanGoal, LeanGoalState, LeanMessage, LeanSeverity } from '../lean/types';
 import { pickGoalAtCursor } from '../lean/goalAtCursor';
 import { LEAN_PRESETS, DEFAULT_LEAN_SOURCE } from '../lean/presets';
-import { parseEditorUrlParams, presetSlug, resolveSymbolName } from '../lean/presetLookup';
+import { findPresetBySlug, parseEditorUrlParams, presetSlug, resolveSymbolName } from '../lean/presetLookup';
 import { analyzeRequest } from '../lean/analyzeClient';
 import { LeanMathView } from './LeanMathView';
 import { LeanMathEditor } from './LeanMathEditor';
@@ -87,6 +87,11 @@ export function LeanEditorPage() {
   // on it, not on the default source), and the symbol is held pending until the
   // async analyze produces declarations to resolve it against.
   const [initialParams] = useState(() => parseEditorUrlParams(searchParams, LEAN_PRESETS));
+  /** The preset the URL currently names — what the picker should display. */
+  const currentPresetName = useMemo(() => {
+    const p = searchParams.get('preset');
+    return p ? (findPresetBySlug(LEAN_PRESETS, p)?.name ?? '') : '';
+  }, [searchParams]);
   const [source, setSource] = useState(initialParams.preset?.code ?? DEFAULT_LEAN_SOURCE);
   const [mathlib, setMathlib] = useState(initialParams.preset?.mathlib ?? false);
   const [pendingSymbol, setPendingSymbol] = useState<string | null>(initialParams.symbol);
@@ -246,9 +251,13 @@ export function LeanEditorPage() {
         <label style={{ fontSize: 12, color: C.label }}>
           Example:{' '}
           <select
+            // Driven by the URL, which loadPreset keeps current — so the
+            // picker names what you are actually looking at, whether you chose
+            // it here or arrived on a deep link. (It used to snap back to
+            // "choose…" every time, so it never told you anything.)
+            value={currentPresetName}
             onChange={(e) => {
               if (e.target.value) loadPreset(e.target.value);
-              e.target.selectedIndex = 0;
             }}
             style={{ background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, padding: '2px 6px' }}
           >

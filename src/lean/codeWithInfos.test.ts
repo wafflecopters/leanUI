@@ -605,3 +605,59 @@ describe('mathematician round 2', () => {
     expect(latex).toContain('\\htmlId');
   });
 });
+
+describe('vector-layer notation renders as operators, not calls', () => {
+  test('a scalar action is an OPERATOR: t • v is not the call t(•, v)', () => {
+    expect(mathTextToLatex('t • v')).toBe('t \\cdot v');
+    // and inside a larger expression, the surrounding application still works
+    expect(mathTextToLatex('f (x + t • v)')).toContain('\\cdot');
+    expect(mathTextToLatex('t • v')).not.toContain('(');
+  });
+
+  test('matrix application ⬝ is an operator too', () => {
+    expect(mathTextToLatex('A ⬝ h')).toBe('A \\cdot h');
+  });
+
+  test('a name ending in _ takes the next atom as its SUBSCRIPT', () => {
+    // The preset spells the j-th basis vector `e_ j`; that means e_j, not e_(j).
+    // (the base is brace-wrapped by the renderer; identical output in KaTeX)
+    expect(mathTextToLatex('e_ j')).toBe('{e}_{j}');
+    expect(mathTextToLatex('t • e_ j')).toBe('t \\cdot {e}_{j}');
+  });
+
+  test('an underscore in the MIDDLE of a name is untouched', () => {
+    expect(mathTextToLatex('eps_delta')).not.toContain('_{');
+  });
+});
+
+describe('call arguments do not get doubled parentheses', () => {
+  test('a multi-arg call strips each argument\'s own parens', () => {
+    // Lean prints `det n (vandermonde x)`; the call form supplies its own.
+    const app: TaggedJson = {
+      t: 'append',
+      kids: [
+        { t: 'text', s: 'det ' },
+        { t: 'tag', pos: '/0', child: { t: 'text', s: 'n' } },
+        { t: 'text', s: ' ' },
+        { t: 'tag', pos: '/1', child: { t: 'text', s: '(vandermonde x)' } },
+      ],
+    };
+    const latex = stripIds(renderStaticLatex(codeWithInfosToMathRow(app)));
+    expect(latex).not.toContain('((');
+    expect(latex.replace(/\\operatorname|\\,|\s/g, '')).toBe('det(n,vandermonde(x))');
+  });
+
+  test('an argument whose parens are NOT outermost keeps them', () => {
+    const app: TaggedJson = {
+      t: 'append',
+      kids: [
+        { t: 'text', s: 'f ' },
+        { t: 'tag', pos: '/0', child: { t: 'text', s: '(a) + (b)' } },
+      ],
+    };
+    const latex = stripIds(renderStaticLatex(codeWithInfosToMathRow(app)));
+    expect(latex).toContain('(a)');
+    expect(latex).toContain('(b)');
+  });
+});
+

@@ -2642,6 +2642,40 @@ def vnorm {R : Real} {m : Nat} (v : Vec R m) : Carrier R :=
 def mulVec {R : Real} {n m : Nat} (A : Mat R n m) (v : Vec R m) : Vec R n :=
   fun i => finSum m (fun j => rmul (A i j) (v j))
 
+-- Prose notation for the vector layer: goals read as mathematics (u + v,
+-- t • v, ‖v‖, A ⬝ v, ℝ^m) instead of as calls. The tower already claims
+-- + - * for the CARRIER at high priority; these are overloads, and Lean
+-- picks whichever elaborates. Display comes from the unexpanders.
+infixl:65 " + " => vadd
+infixl:65 " - " => vsub
+infixr:73 " • " => smulV
+infixl:74 " ⬝ " => mulVec
+notation:max "‖" v "‖" => vnorm v
+notation:max "e_" j:max => basis j
+notation:max "ℝ^" m:max => Vec _ m
+
+@[app_unexpander vadd] def unexpVadd : Lean.PrettyPrinter.Unexpander
+  | \`($_ $u $v) => \`($u + $v)
+  | _ => throw ()
+@[app_unexpander vsub] def unexpVsub : Lean.PrettyPrinter.Unexpander
+  | \`($_ $u $v) => \`($u - $v)
+  | _ => throw ()
+@[app_unexpander smulV] def unexpSmulV : Lean.PrettyPrinter.Unexpander
+  | \`($_ $t $v) => \`($t • $v)
+  | _ => throw ()
+@[app_unexpander mulVec] def unexpMulVec : Lean.PrettyPrinter.Unexpander
+  | \`($_ $A $v) => \`($A ⬝ $v)
+  | _ => throw ()
+@[app_unexpander vnorm] def unexpVnorm : Lean.PrettyPrinter.Unexpander
+  | \`($_ $v) => \`(‖$v‖)
+  | _ => throw ()
+@[app_unexpander basis] def unexpBasis : Lean.PrettyPrinter.Unexpander
+  | \`($_ $j) => \`(e_ $j)
+  | _ => throw ()
+@[app_unexpander Vec] def unexpVec : Lean.PrettyPrinter.Unexpander
+  | \`($_ $_R $m) => \`(ℝ^$m)
+  | _ => throw ()
+
 -- Matrix times a scaled basis vector picks out one column, scaled:
 -- (A · (t e_j))_i = t * A_ij.
 def mulVecBasis {R : Real} {n m : Nat} (A : Mat R n m) (t : Carrier R)

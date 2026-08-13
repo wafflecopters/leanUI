@@ -68,6 +68,13 @@ const UNICODE_TO_LATEX: Record<string, string> = {
   '∩': '\\cap',
   '×': '\\times',
   '·': '\\cdot',
+  // Scalar action and matrix application: Lean writes `t • v` / `A ⬝ v`, a
+  // paper writes a centred dot. Mapping them onto \cdot also makes them
+  // OPERATORS for the application rule (\cdot is in APP_STOP), which is what
+  // stopped `t • e_j` rendering as the call `t(•, e_j)`.
+  '•': '\\cdot',
+  '⬝': '\\cdot',
+  '‖': '\\|',
   '∘': '\\circ',
   '≡': '\\equiv',
   '≈': '\\approx',
@@ -572,6 +579,21 @@ function restructure(nodes: MathNode[]): MathNode[] {
     return restructure([...nodes.slice(0, i - 1), merged, ...nodes.slice(i + 1)]);
   }
 
+  // A name ENDING in an underscore takes the next atom as its SUBSCRIPT:
+  // a preset spelling notation `e_ j` for the j-th basis vector means e_j, and
+  // rendering it as the call `e_(j)` loses the convention. Generic — the
+  // trailing underscore is the signal, so `eps_delta` (underscore in the
+  // middle) is untouched.
+  for (let i = 0; i < nodes.length - 1; i++) {
+    const n = nodes[i];
+    if (n.tag !== 'Symbol') continue;
+    const v = (n as SymbolNode).value;
+    if (!/^[A-Za-z][A-Za-z0-9]*_$/.test(v)) continue;
+    if (!isAppAtom(nodes[i + 1])) continue;
+    const sub = mkSub(mkRow([mkSymbol(v.slice(0, -1))]), mkRow(restructure([nodes[i + 1]])));
+    return restructure([...nodes.slice(0, i), sub, ...nodes.slice(i + 2)]);
+  }
+
   // Function application on maximal atom RUNS: juxtaposition = application
   // even when the run sits between operators — `|f x - L|` must read
   // `|f(x) − L|`, not the product-looking `|fx − L|`. (The old rule fired
@@ -595,24 +617,17 @@ function restructure(nodes: MathNode[]): MathNode[] {
       const headIsFn = headId !== null && /^[A-Za-z_]/.test(headId) && !wordNotation;
       if (headIsFn) {
         const [head, ...args] = run;
-        // A single argument that already carries its own parens (a tagged
-        // Group around a parenthesized subterm — Lean printed `span (pre ++
-        // post)`) must not get a second pair: `span(pre ++ post)`, not
-        // `span((pre ++ post))`.
-        const alreadyParen =
-          args.length === 1 && args[0].tag === 'Group' &&
-          isOpSymbol((args[0] as GroupNode).children[0], '(') &&
-          isOpSymbol((args[0] as GroupNode).children[(args[0] as GroupNode).children.length - 1], ')');
-        if (alreadyParen) {
-          out.push(head, args[0]);
-        } else {
-          out.push(head, mkSymbol('('));
-          args.forEach((a, i) => {
-            if (i > 0) out.push(mkSymbol(','));
-            out.push(a);
-          });
-          out.push(mkSymbol(')'));
-        }
+        // Lean parenthesizes compound arguments in its own output, and the
+        // call form supplies its own — so an argument that already carries a
+        // matched pair gets it stripped rather than doubled:
+        // `det(n, (vandermonde(x)))` reads `det(n, vandermonde(x))`.
+        const stripped = args.map(unparenthesize);
+        out.push(head, mkSymbol('('));
+        stripped.forEach((a, i) => {
+          if (i > 0) out.push(mkSymbol(','));
+          out.push(a);
+        });
+        out.push(mkSymbol(')'));
         changed = true;
       } else {
         out.push(...run);
@@ -676,6 +691,26 @@ function operandStartingAt(nodes: MathNode[], start: number): { end: number; ope
   return isAppAtom(nodes[start]) ? { end: start, operand: [nodes[start]] } : null;
 }
 
+/** Drop ONE matched outer paren pair from a call argument, keeping the node's
+ *  click-target identity. Only when the pair really is outermost — `(a) + (b)`
+ *  keeps both. */
+function unparenthesize(n: MathNode): MathNode {
+  if (n.tag !== 'Group') return n;
+  const kids = (n as GroupNode).children;
+  if (kids.length < 2) return n;
+  if (!isOpSymbol(kids[0], '(') || !isOpSymbol(kids[kids.length - 1], ')')) return n;
+  let depth = 0;
+  for (let i = 0; i < kids.length; i++) {
+    if (isOpSymbol(kids[i], '(')) depth++;
+    else if (isOpSymbol(kids[i], ')')) {
+      depth--;
+      // the opening paren closes before the end: not an outer pair
+      if (depth === 0 && i < kids.length - 1) return n;
+    }
+  }
+  return mkGroup((n as GroupNode).htmlId, kids.slice(1, -1));
+}
+
 /** The identifier a run head displays, seen through click-target Group
  *  wrappers. A Group with several children (a parenthesized expression like
  *  `(pre ++ post)`) is NOT an identifier — juxtaposition stays as-is. */
@@ -690,7 +725,7 @@ function headIdentifier(n: MathNode): string | null {
 /** Symbols that are operators/punctuation (NOT application operands). */
 const APP_STOP = new Set([
   '+', '+\\!\\!+', '-', '=', '<', '>', '/', '*', ':', '|', ',', '(', ')', '[', ']', '{', '}', '^', '_', "'",
-  '\\to', '\\cdot', '\\leq', '\\geq', '\\neq', '\\in', '\\notin', '\\wedge', '\\vee',
+  '\\to', '\\cdot', '\\leq', '\\geq', '\\neq', '\\in', '\\notin', '\\wedge', '\\vee', '\\|',
   '\\forall', '\\exists', '\\neg', '\\mapsto', '\\iff', '\\times', '\\circ', '\\equiv',
   '\\approx', '\\sim', '\\subseteq', '\\subset', '\\cup', '\\cap', '\\vdash', '\\longrightarrow',
 ]);
@@ -910,7 +945,10 @@ export function mathTextToLatex(text: string, fallback = ''): string {
     // name; one parenthesized argument broke its call-detection and the rest
     // concatenated with NO separators at all (`…(ε/2)h₂`, `)δ_Fδ_Gh₁a`).
     const parts = splitTopLevelApplication(text.trim());
-    if (parts && parts.length >= 2 && /^[A-Za-z_][A-Za-z0-9_'.]*$/.test(parts[0])) {
+    // A head ending in `_` is SUBSCRIPT notation (`e_ j` means e_j), not a
+    // function — let the restructure path build the subscript.
+    if (parts && parts.length >= 2 && !parts[0].endsWith('_')
+        && /^[A-Za-z_][A-Za-z0-9_'.]*$/.test(parts[0])) {
       const args = parts.slice(1).map((a) => mathTextToLatex(stripOuterParens(a), a));
       const head = renderStaticLatex(mkRow(restructure(tokenizeText(parts[0]))));
       return `${head}(${args.join(', ')})`;
@@ -928,23 +966,28 @@ function splitTopLevelApplication(text: string): string[] | null {
   const parts: string[] = [];
   let depth = 0;
   let inBar = false;
+  let inNorm = false;
   let cur = '';
   for (const ch of text) {
     if (ch === '(' || ch === '[' || ch === '⟨' || ch === '{') depth++;
     else if (ch === ')' || ch === ']' || ch === '⟩' || ch === '}') depth--;
     else if (ch === '|') inBar = !inBar;
-    if (depth === 0 && !inBar) {
+    else if (ch === '‖') inNorm = !inNorm;
+    if (depth === 0 && !inBar && !inNorm) {
       if (ch === ' ') {
         if (cur) parts.push(cur);
         cur = '';
         continue;
       }
-      // An operator at top level means this is not a bare application.
-      if ('+-*/=<>≤≥≠∧∨→↔,:λ'.includes(ch)) return null;
+      // An operator at top level means this is not a bare application. This
+      // list must stay in step with the ones the renderer treats as operators
+      // (APP_STOP): `t • v` was read as the CALL t(•, v) purely because the
+      // scalar action was missing here.
+      if ('+-*/=<>≤≥≠∧∨→↔,:λ•⬝·×∘∈∉⊆⊂∪∩≡≈∼↦⊢∀∃¬'.includes(ch)) return null;
     }
     cur += ch;
   }
-  if (depth !== 0 || inBar) return null;
+  if (depth !== 0 || inBar || inNorm) return null;
   if (cur) parts.push(cur);
   return parts;
 }
