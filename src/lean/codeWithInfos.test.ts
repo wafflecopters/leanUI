@@ -661,3 +661,21 @@ describe('call arguments do not get doubled parentheses', () => {
   });
 });
 
+describe('preset word-notation renders as prose', () => {
+  test('a NBSP-joined phrase is spaced text, not an identifier jammed on', () => {
+    // The preset spells multi-word notation with non-breaking spaces so the
+    // phrase stays ONE token (its words must not become keywords). It is
+    // prose, and rendered "rhas distinct elements" before this.
+    const latex = mathTextToLatex('r has\u00a0distinct\u00a0elements');
+    expect(latex).toContain('\\text{has distinct elements}');
+    expect(latex).not.toContain('\u00a0');
+  });
+
+  test('the phrase separates BOTH operands of an infix spelling', () => {
+    const latex = mathTextToLatex('r saturated\u00a0for H');
+    expect(latex).toContain('\\text{saturated for}');
+    // r and H must not touch the phrase
+    expect(latex).not.toMatch(/r\\text/);
+  });
+});
+

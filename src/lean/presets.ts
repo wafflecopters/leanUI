@@ -3819,6 +3819,42 @@ structure Subgroup (G : FiniteGroup) where
 /-- the order of a subgroup -/
 def Subgroup.order {G : FiniteGroup} (H : Subgroup G) : Nat := H.members.length
 
+-- Prose notation for the COUNTING layer. \`r.Nodup\` and \`r.length\` are how
+-- Lean spells "a set, not a multiset" and "how many" — implementation
+-- vocabulary that a paper never prints. The NBSP keeps each multi-word
+-- phrase a SINGLE token, so its words are not reserved as keywords (a
+-- chained spelling would make \`for\` unusable as a binder name).
+notation:50 r:51 " has distinct elements" => List.Nodup r
+
+-- |G|, |H|, |r| — the order of a group, of a subgroup, and the size of a
+-- finite set, all written the way mathematics writes them. Overloaded on
+-- the three types; Lean picks by elaboration.
+macro:max atomic("|" noWs) g:term noWs "|" : term => \`(FiniteGroup.order $g)
+macro:max atomic("|" noWs) h:term noWs "|" : term => \`(Subgroup.order $h)
+macro:max atomic("|" noWs) l:term noWs "|" : term => \`(List.length $l)
+
+@[app_unexpander FiniteGroup.order] def unexpGOrder : Lean.PrettyPrinter.Unexpander
+  | \`($_ $g) => \`(|$g|)
+  | _ => throw ()
+@[app_unexpander Subgroup.order] def unexpHOrder : Lean.PrettyPrinter.Unexpander
+  | \`($_ $h) => \`(|$h|)
+  | _ => throw ()
+@[app_unexpander List.length] def unexpLen : Lean.PrettyPrinter.Unexpander
+  | \`($_ $l) => \`(|$l|)
+  | _ => throw ()
+@[app_unexpander List.Nodup] def unexpNodup : Lean.PrettyPrinter.Unexpander
+  | \`($_ $r) => \`($r has distinct elements)
+  | _ => throw ()
+-- A group displays as its own carrier — the abuse of notation every paper
+-- uses. FiniteGroup EXTENDS MyGroup, so the projection to the parent
+-- structure has to disappear too, or \`G.carrier\` reads \`G.toMyGroup\`.
+@[app_unexpander MyGroup.carrier] def unexpCarrier : Lean.PrettyPrinter.Unexpander
+  | \`($_ $G) => \`($G)
+  | _ => throw ()
+@[app_unexpander FiniteGroup.toMyGroup] def unexpToMyGroup : Lean.PrettyPrinter.Unexpander
+  | \`($_ $G) => \`($G)
+  | _ => throw ()
+
 -- every element of H translated by g
 /-- the left coset gH -/
 def coset {G : FiniteGroup} (g : G.carrier) (H : Subgroup G) : List G.carrier :=
@@ -3855,6 +3891,11 @@ theorem memCoset {G : FiniteGroup} {g x : G.carrier} {H : Subgroup G} :
 -- Lagrange's theorem.
 def Saturated {G : FiniteGroup} (H : Subgroup G) (r : List G.carrier) : Prop :=
   ∀ x, x ∈ r → ∀ y, G.mul (G.inv x) y ∈ H.members → y ∈ r
+
+notation:50 r:51 " saturated for " H:51 => Saturated H r
+@[app_unexpander Saturated] def unexpSaturated : Lean.PrettyPrinter.Unexpander
+  | \`($_ $H $r) => \`($r saturated for $H)
+  | _ => throw ()
 
 /-- the part of r lying in the coset gH -/
 def cosetPart {G : FiniteGroup} (H : Subgroup G) (g : G.carrier) (r : List G.carrier) : List G.carrier :=

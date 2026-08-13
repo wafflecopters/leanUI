@@ -579,6 +579,21 @@ function restructure(nodes: MathNode[]): MathNode[] {
     return restructure([...nodes.slice(0, i - 1), merged, ...nodes.slice(i + 1)]);
   }
 
+  // A symbol containing a NON-BREAKING SPACE is preset word-notation — the
+  // documented trick for multi-word phrases ("has distinct elements",
+  // "is a basis of"), which keeps the phrase ONE token so its words are not
+  // reserved as keywords. It is prose, so it renders as prose: spaced text,
+  // not an identifier jammed against its operands ("rhas distinct elements").
+  {
+    const i = nodes.findIndex(
+      (n) => n.tag === 'Symbol' && (n as SymbolNode).value.includes(' '),
+    );
+    if (i !== -1) {
+      const words = (nodes[i] as SymbolNode).value.replace(/ /g, ' ').trim();
+      return restructure([...nodes.slice(0, i), mkText(words), ...nodes.slice(i + 1)]);
+    }
+  }
+
   // A name ENDING in an underscore takes the next atom as its SUBSCRIPT:
   // a preset spelling notation `e_ j` for the j-th basis vector means e_j, and
   // rendering it as the call `e_(j)` loses the convention. Generic — the
@@ -963,6 +978,9 @@ export function mathTextToLatex(text: string, fallback = ''): string {
  *  text is an EXPRESSION rather than an application (any top-level operator:
  *  `0 < ε / 2`, `|a| + |b|`, `fun x => …` all keep the expression path). */
 function splitTopLevelApplication(text: string): string[] | null {
+  // A non-breaking space marks preset WORD NOTATION ("r has distinct
+  // elements"), which is prose around its operands — never a call.
+  if (text.includes(' ')) return null;
   const parts: string[] = [];
   let depth = 0;
   let inBar = false;
