@@ -105,3 +105,37 @@ export function buildProseGoalLead(
     inline: !expand && visibleLatexLength(goalLatex) <= inlineThreshold,
   };
 }
+
+/**
+ * Where to put a hover tooltip so it stays on screen.
+ *
+ * Centring the tooltip on its anchor is right until the content is a long
+ * formula and the anchor sits near an edge: the induction hypothesis' type is
+ * wider than the window, so half of it — including the whole `∀ ws ∈ List(G),
+ * |ws|` prefix — was clipped away, and the tooltip appeared to START at `< |r|`.
+ * Clamp the ideal centred position into the viewport instead.
+ */
+export function clampTooltipLeft(
+  anchorCenter: number,
+  tooltipWidth: number,
+  viewportWidth: number,
+  margin = 8,
+): number {
+  const ideal = anchorCenter - tooltipWidth / 2;
+  // When the tooltip is wider than the viewport there is no non-negative
+  // placement; pin it to the left margin so the START of the formula is what
+  // survives, which is the part that says what the statement is about.
+  const rightMost = Math.max(margin, viewportWidth - tooltipWidth - margin);
+  return Math.min(Math.max(ideal, margin), rightMost);
+}
+
+/** Above the anchor when it fits, otherwise below it. */
+export function tooltipTop(
+  anchorTop: number,
+  anchorBottom: number,
+  tooltipHeight: number,
+  gap = 6,
+): number {
+  const above = anchorTop - tooltipHeight - gap;
+  return above >= gap ? above : anchorBottom + gap;
+}

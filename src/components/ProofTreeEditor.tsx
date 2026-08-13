@@ -10,7 +10,7 @@
  * - Goal panel showing context + goal at cursor position
  */
 
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import katex from 'katex';
 import { SyntaxRegistry } from '../math-editor/syntax-registry';
 import {
@@ -33,6 +33,8 @@ import {
   findNextHoleNodeId,
   proseItemShowsVisibleGoal,
   visibleLatexLength,
+  clampTooltipLeft,
+  tooltipTop,
 } from '../proof-tree/prose-view-helpers';
 import { splitAnonTuple, existsBinderFromLatex, firstExplicitArg, primitiveClosingPhrase,
   describeApplyProse,
@@ -2854,30 +2856,53 @@ function HaveExprBlock({
  */
 function HoverType({ typeLatex, children }: { typeLatex?: string; children: React.ReactNode }) {
   const [shown, setShown] = useState(false);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  const anchorRef = useRef<HTMLSpanElement>(null);
+  const tipRef = useRef<HTMLSpanElement>(null);
+
+  // Measure, then clamp into the viewport. A hypothesis type can be a formula
+  // wider than the window (the induction hypothesis is), and the old centred
+  // absolute placement clipped its START — the tooltip appeared to begin
+  // mid-expression. `fixed` also escapes the scrolling proof pane, which was
+  // cutting it off independently.
+  useLayoutEffect(() => {
+    if (!shown) { setPos(null); return; }
+    const a = anchorRef.current?.getBoundingClientRect();
+    const t = tipRef.current?.getBoundingClientRect();
+    if (!a || !t) return;
+    setPos({
+      left: clampTooltipLeft(a.left + a.width / 2, t.width, window.innerWidth),
+      top: tooltipTop(a.top, a.bottom, t.height),
+    });
+  }, [shown, typeLatex]);
+
   if (!typeLatex) return <>{children}</>;
   return (
     <span
-      style={{ position: 'relative' }}
+      ref={anchorRef}
       onMouseEnter={() => setShown(true)}
       onMouseLeave={() => setShown(false)}
     >
       {children}
       {shown && (
         <span
+          ref={tipRef}
           style={{
-            position: 'absolute',
-            bottom: '100%',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            marginBottom: '4px',
-            padding: '3px 7px',
+            position: 'fixed',
+            left: pos ? `${pos.left}px` : 0,
+            top: pos ? `${pos.top}px` : 0,
+            // Until measured, keep it out of the reader's way rather than
+            // flashing at the origin.
+            visibility: pos ? 'visible' : 'hidden',
+            maxWidth: 'min(96vw, 1200px)',
+            padding: '4px 8px',
             background: '#161b22',
             border: '1px solid #30363d',
             borderRadius: '4px',
             boxShadow: '0 2px 8px rgba(0, 0, 0, 0.5)',
-            whiteSpace: 'nowrap',
-            zIndex: 20,
+            zIndex: 50,
             pointerEvents: 'none',
+            overflowX: 'auto',
           }}
         >
           <InlineKaTeX latex={typeLatex} style={{ fontSize: '12px' }} />

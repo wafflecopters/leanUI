@@ -91,3 +91,32 @@ describe('prose-view-helpers', () => {
     expect(buildProseGoalLead('\\mathbb{R}', false, 30, true)!.inline).toBe(false);
   });
 });
+
+import { clampTooltipLeft, tooltipTop } from './prose-view-helpers';
+
+describe('hover tooltips stay on screen', () => {
+  test('a tooltip that fits is centred on its anchor', () => {
+    expect(clampTooltipLeft(500, 200, 1400)).toBe(400);
+  });
+
+  test('an anchor near the LEFT edge does not clip the start of the formula', () => {
+    // The bug: the IH type is a wide formula on a token near the left, so the
+    // centred position was negative and the prefix was cut off.
+    expect(clampTooltipLeft(120, 900, 1400)).toBe(8);
+  });
+
+  test('an anchor near the RIGHT edge is pulled back inside', () => {
+    expect(clampTooltipLeft(1350, 400, 1400)).toBe(992);
+  });
+
+  test('a tooltip WIDER than the viewport pins to the left margin', () => {
+    // Nothing fits; keep the beginning, which says what the statement is about.
+    expect(clampTooltipLeft(700, 2000, 1400)).toBe(8);
+  });
+
+  test('it goes below the anchor only when it would not fit above', () => {
+    expect(tooltipTop(300, 320, 40)).toBe(254);
+    expect(tooltipTop(10, 30, 40)).toBe(36);
+  });
+});
+
