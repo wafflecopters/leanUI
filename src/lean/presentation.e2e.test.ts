@@ -120,6 +120,30 @@ describe('limitAdd reads like mathematics', () => {
   });
 });
 
+describe('limitAddMin — the textbook proof, no case split', () => {
+  let items: ProseItem[];
+  beforeAll(async () => {
+    items = await proseFor('Real Analysis (chain rule)', 'limitAddMin');
+  }, 10 * MIN);
+
+  test('taking the smaller delta removes the case analysis entirely', () => {
+    // The seeded limitAdd splits on which delta is smaller and repeats the
+    // estimate in each branch; min gives both bounds at once.
+    expect(items.some((i) => i.kind.tag === 'inductionHeader')).toBe(false);
+  });
+
+  test('min displays as min(...), not as the internal rmin — and not daggered', () => {
+    const all = items.map(latexOf).join(' ');
+    // Lean renders the notation as \operatorname{min}( … ); the point is that
+    // the INTERNAL spelling never reaches the reader — in goals OR in the
+    // proof terms, which come from source text and so must be WRITTEN in the
+    // notation to benefit from it.
+    expect(all).toContain('min}(');
+    expect(all).not.toContain('rmin');
+    expectNoDaggers(items);
+  });
+});
+
 describe('triangleSum reads like mathematics', () => {
   let items: ProseItem[];
   beforeAll(async () => {

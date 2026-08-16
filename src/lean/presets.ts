@@ -934,6 +934,14 @@ def absElim {R : Real} (a : Carrier R) (C : Carrier R → Sort w)
 def rmin {R : Real} (a b : Carrier R) : Carrier R :=
   eitherElim (fun _ => a) (fun _ => b) ((fieldOf R).leTotal a b)
 
+-- min is what a paper writes; rmin is our internal spelling. The display is
+-- NOTATION rather than the identifier min, which resolves to Lean's own and
+-- came back hygiene-daggered as min-dagger.
+notation:max "min(" a ", " b ")" => rmin a b
+@[app_unexpander rmin] def unexpRmin : Lean.PrettyPrinter.Unexpander
+  | \`($_ $a $b) => \`(min($a, $b))
+  | _ => throw ()
+
 def minElim {R : Real} (a b : Carrier R) (C : Carrier R → Sort w)
     (left : rle a b → C a) (right : rle b a → C b) : C (rmin a b) :=
   eitherElimDep (fun e => C (eitherElim (fun _ => a) (fun _ => b) e))
@@ -1756,6 +1764,45 @@ def limitAdd {R : Real} (f g : Carrier R → Carrier R) (x0 L M : Carrier R)
           exact addLtBoth |f x - L| (ε / 2) |g x - M| (ε / 2) fHalfEps gHalfEps
   | right a =>
     sorry
+
+-- The SAME theorem, the way a textbook writes it: take δ to be the smaller of
+-- the two deltas. min gives both bounds at once, so there is nothing to split
+-- on — compare with limitAdd above, which case-splits on which delta is
+-- smaller and has to repeat the estimate in each branch.
+def limitAddMin {R : Real} (f g : Carrier R → Carrier R) (x0 L M : Carrier R)
+    (limF : Limit f x0 L) (limG : Limit g x0 M) :
+    Limit (fun x => radd (f x) (g x)) x0 (radd L M) := by
+  constructor
+  intro ε epsPos
+  have h2 : 0 < ε / 2 := divTwoPos ε epsPos
+  have hF := limF.eps_delta (ε / 2) h2
+  obtain ⟨deltaF, fProof⟩ := hF
+  have hG := limG.eps_delta (ε / 2) h2
+  obtain ⟨deltaG, gProof⟩ := hG
+  obtain ⟨dfPos, fFn⟩ := fProof
+  obtain ⟨dgPos, gFn⟩ := gProof
+  constructor
+  case eps_delta.fst =>
+    exact min(deltaF, deltaG)
+  case eps_delta.snd =>
+    constructor
+    case fst =>
+      exact minPos deltaF deltaG dfPos dgPos
+    case snd =>
+      intro x h h1
+      have hxF := ltLeTrans |x - x0| min(deltaF, deltaG) deltaF h1 (minLeLeft deltaF deltaG)
+      have hxG := ltLeTrans |x - x0| min(deltaF, deltaG) deltaG h1 (minLeRight deltaF deltaG)
+      have fHalfEps := fFn x h hxF
+      have gHalfEps := gFn x h hxG
+      apply leLtTrans
+      case b =>
+        exact |f x - L| + |g x - M|
+      case hab =>
+        rw [subAddSub]
+        exact absTriangle (f x - L) (g x - M)
+      case hbc =>
+        apply convertEps
+        exact addLtBoth |f x - L| (ε / 2) |g x - M| (ε / 2) fHalfEps gHalfEps
 
 -- The same exercise with nothing filled in — for building the whole thing from
 -- the first click (and for the tests that check each of those clicks works).
