@@ -948,6 +948,14 @@ def minElim {R : Real} (a b : Carrier R) (C : Carrier R → Sort w)
     (fun h => left h) (fun h => right h)
     ((fieldOf R).leTotal a b)
 
+-- The minimum IS one of its two arguments — the fact a reader quotes, and
+-- the elementary reason anything true of both is true of it. (Mathlib spells
+-- this min_choice.)
+/-- the minimum being one of its two arguments -/
+def minChoice {R : Real} (a b : Carrier R) :
+    Either ((rmin a b) = a) ((rmin a b) = b) :=
+  minElim a b (fun z => Either (z = a) (z = b)) (fun _ => .left rfl) (fun _ => .right rfl)
+
 /-- min bounding its left argument -/
 def minLeLeft {R : Real} (a b : Carrier R) : rle (rmin a b) a :=
   minElim a b (fun z => rle z a) (fun _ => (fieldOf R).leRefl a) (fun h => h)
@@ -960,10 +968,15 @@ def ltMin {R : Real} (c a b : Carrier R) (ha : rlt c a) (hb : rlt c b) :
     rlt c (rmin a b) :=
   minElim a b (fun z => rlt c z) (fun _ => ha) (fun _ => hb)
 
+-- Positivity is not a special property of min: the minimum is one of the two
+-- arguments, and BOTH are positive, so whichever it is, it is positive. The
+-- case split lives here, in the two-line lemma, rather than in the ε-δ proof.
 /-- positivity of the minimum -/
 def minPos {R : Real} (a b : Carrier R) (ha : rlt (rzero R) a) (hb : rlt (rzero R) b) :
-    rlt (rzero R) (rmin a b) :=
-  ltMin (rzero R) a b ha hb
+    rlt (rzero R) (rmin a b) := by
+  cases minChoice a b with
+  | left h => rw [h]; exact ha
+  | right h => rw [h]; exact hb
 
 def realOfRat (R : Real) : MyRat → Carrier R
   | .mkRat n (.succ .zero) _ => realOfInt R n
