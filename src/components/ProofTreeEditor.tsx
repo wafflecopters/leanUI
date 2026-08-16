@@ -1081,11 +1081,12 @@ function HaveProseItem({
           first and the name it is being given trailed behind in parentheses,
           which is the shape of an aside, not of a definition. */}
       {/* A `let` NAMES an expression rather than asserting a fact, so it reads
-          the way a paper introduces notation — "Write δ for min(δ_F, δ_G)" —
-          not "Observe that δ …", which would claim something was proved. */}
-      <span style={{ ...prose, ...errorStyle }}>{kind.isLet ? 'Write' : 'Observe that'}{' '}</span>
+          the way a paper introduces notation — "Let δ = min(δ_F, δ_G)" — not
+          "Observe that δ …", which would claim something was proved. Same
+          opening word as an intro row, because both introduce a name. */}
+      <span style={{ ...prose, ...errorStyle }}>{kind.isLet ? 'Let' : 'Observe that'}{' '}</span>
       {nameEditor}
-      {kind.isLet && <span style={prose}>{' for'}</span>}
+      {kind.isLet && <span style={prose}>{' ='}</span>}
       {!kind.isLet && displayType && (
         <>
           <span style={prose}>{' : '}</span>
