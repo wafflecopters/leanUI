@@ -1722,7 +1722,8 @@ const REAL_ANALYSIS = RA_TOWER + `-- THE milestone: lim f + lim g = lim (f + g),
 -- earlier seeding of this proof, which split on which delta was smaller and
 -- then repeated the whole ε/2 + ε/2 argument in each branch.
 --
--- minPos gives 0 < min(δF, δG); minLeLeft/minLeRight carry |x − x₀| < δ down
+-- Write δ for that minimum; minPos gives 0 < δ, and minLeLeft/minLeRight
+-- carry |x − x₀| < δ down
 -- to each delta; then subAddSub → absTriangle → convertEps → addLtBoth.
 -- limitAddFromScratch below is the blank slate to build it in yourself.
 def limitAdd {R : Real} (f g : Carrier R → Carrier R) (x0 L M : Carrier R)
@@ -1737,17 +1738,18 @@ def limitAdd {R : Real} (f g : Carrier R → Carrier R) (x0 L M : Carrier R)
   obtain ⟨deltaG, gProof⟩ := hG
   obtain ⟨dfPos, fFn⟩ := fProof
   obtain ⟨dgPos, gFn⟩ := gProof
+  let delta := min(deltaF, deltaG)
   constructor
   case eps_delta.fst =>
-    exact min(deltaF, deltaG)
+    exact delta
   case eps_delta.snd =>
     constructor
     case fst =>
       exact minPos deltaF deltaG dfPos dgPos
     case snd =>
       intro x h h1
-      have hxF := ltLeTrans |x - x0| min(deltaF, deltaG) deltaF h1 (minLeLeft deltaF deltaG)
-      have hxG := ltLeTrans |x - x0| min(deltaF, deltaG) deltaG h1 (minLeRight deltaF deltaG)
+      have hxF := ltLeTrans |x - x0| delta deltaF h1 (minLeLeft deltaF deltaG)
+      have hxG := ltLeTrans |x - x0| delta deltaG h1 (minLeRight deltaF deltaG)
       have fHalfEps := fFn x h hxF
       have gHalfEps := gFn x h hxG
       apply leLtTrans

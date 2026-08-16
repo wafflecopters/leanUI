@@ -186,6 +186,11 @@ export interface HaveNode {
    *  When present, this subtree proves the have's type interactively via
    *  tactics; the subtree's goal is the have's type (`typeExpr`). */
   readonly proofTree?: ProofNode;
+  /** A `let` rather than a `have`: the binding is TRANSPARENT, so the name
+   *  still unfolds to its definition. Mathematically it is "write δ for
+   *  min(δ_F, δ_G)" — naming an expression, not asserting a fact. Same node
+   *  shape (name, expr, child), so every walker already handles it. */
+  readonly isLet?: boolean;
   /** The continuation proof after have introduces the binding. */
   readonly child: ProofNode;
 }
@@ -289,6 +294,11 @@ export function mkExact(expr: string, raw = false): ExactNode {
 
 export function mkHave(name: string, expr: string, child: ProofNode, typeExpr?: string, proofTree?: ProofNode): HaveNode {
   return { tag: 'have', id: freshProofId(), name, expr, child, typeExpr, proofTree };
+}
+
+/** `let name := expr` — naming an expression rather than asserting a fact. */
+export function mkLet(name: string, expr: string, child: ProofNode, typeExpr?: string): HaveNode {
+  return { tag: 'have', id: freshProofId(), name, expr, child, typeExpr, isLet: true };
 }
 
 export function mkSuffices(name: string, typeExpr: string, child: ProofNode, byProof?: ProofNode): SufficesNode {

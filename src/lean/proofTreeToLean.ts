@@ -218,7 +218,8 @@ function emitNode(em: Emitter, node: ProofNode, depth: number): void {
         // the weaker inferred form on the first round-trip.
         const expr = node.expr.trim() || 'sorry';
         const type = node.typeExpr?.trim();
-        em.emit(depth, type ? `have ${node.name} : ${type} := ${expr}` : `have ${node.name} := ${expr}`, node.id);
+        const kw = node.isLet ? 'let' : 'have';
+        em.emit(depth, type ? `${kw} ${node.name} : ${type} := ${expr}` : `${kw} ${node.name} := ${expr}`, node.id);
       }
       emitChild(em, node.child, depth);
       return;

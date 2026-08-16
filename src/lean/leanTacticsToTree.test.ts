@@ -402,3 +402,27 @@ describe('comments are not tactics', () => {
   });
 });
 
+describe('let names an expression', () => {
+  test('a let round-trips as a let, not as a have', () => {
+    // `have` is opaque; `let` keeps the body, which is what makes the name
+    // usable with lemmas about the expression it abbreviates.
+    const tree = leanTacticsToTree(['let delta := min(a, b)', 'exact delta'].join('\n'));
+    const printed = proofTreeToSource(tree);
+    expect(printed).toContain('let delta := min(a, b)');
+    expect(printed).not.toContain('have delta');
+    expect(printed).toContain('exact delta');
+  });
+
+  test('a typed let keeps its annotation', () => {
+    const tree = leanTacticsToTree('let d : Real := min(a, b)\nexact d');
+    expect(proofTreeToSource(tree)).toContain('let d : Real := min(a, b)');
+  });
+
+  test('a have is still a have', () => {
+    const tree = leanTacticsToTree('have h : 0 < e := pos\nexact h');
+    const printed = proofTreeToSource(tree);
+    expect(printed).toContain('have h : 0 < e := pos');
+    expect(printed).not.toContain('let ');
+  });
+});
+

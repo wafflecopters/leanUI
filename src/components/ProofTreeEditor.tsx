@@ -1080,9 +1080,13 @@ function HaveProseItem({
           says. This read backwards ("Observe that 0 < ε/2 (h₂)"): the fact came
           first and the name it is being given trailed behind in parentheses,
           which is the shape of an aside, not of a definition. */}
-      <span style={{ ...prose, ...errorStyle }}>Observe that{' '}</span>
+      {/* A `let` NAMES an expression rather than asserting a fact, so it reads
+          the way a paper introduces notation — "Write δ for min(δ_F, δ_G)" —
+          not "Observe that δ …", which would claim something was proved. */}
+      <span style={{ ...prose, ...errorStyle }}>{kind.isLet ? 'Write' : 'Observe that'}{' '}</span>
       {nameEditor}
-      {displayType && (
+      {kind.isLet && <span style={prose}>{' for'}</span>}
+      {!kind.isLet && displayType && (
         <>
           <span style={prose}>{' : '}</span>
           <InlineKaTeX latex={displayType} style={{ fontSize: '13px' }} />
@@ -1097,6 +1101,7 @@ function HaveProseItem({
           exprEditor={exprEditor}
           isHole={isHole}
           proofLatex={proofLatex}
+          isLet={kind.isLet}
           expr={kind.expr}
           prose={prose}
           onStartEditing={(e) => {
@@ -2766,6 +2771,7 @@ function HaveExprBlock({
   prose,
   onStartEditing,
   onOpenBuilder,
+  isLet,
 }: {
 
   editingExpr: boolean;
@@ -2776,8 +2782,11 @@ function HaveExprBlock({
   prose: React.CSSProperties;
   onStartEditing: (e: React.MouseEvent) => void;
   onOpenBuilder: (e: React.MouseEvent) => void;
+  /** A `let` names an expression — no "by", and no doc citation: there is
+   *  nothing being justified, only something being called δ. */
+  isLet?: boolean;
 }) {
-  const docText = lemmaDocOf(exprHeadName(expr));
+  const docText = isLet ? undefined : lemmaDocOf(exprHeadName(expr));
   if (isHole) {
     return editingExpr ? (
       <div style={{ paddingLeft: '20px' }}>{exprEditor}</div>
@@ -2802,8 +2811,9 @@ function HaveExprBlock({
     return (
       <span style={{ opacity: 0.75 }}>
         {/* "by ⟨reason⟩" — every citation voice in the document says "by";
-            docs are written as noun phrases so they read after it. */}
-        <span style={prose}>{' '}by{' '}</span>
+            docs are written as noun phrases so they read after it. A `let` is
+            not a justification, so it gets no "by". */}
+        <span style={prose}>{isLet ? ' ' : ' by '}</span>
         {docText ? (
           /* The reason reads as prose; the term is one hover away and the
              click still opens the builder — display changed, model untouched. */

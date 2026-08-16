@@ -22,6 +22,7 @@ import {
   mkSimp,
   mkApply,
   mkHave,
+  mkLet,
   mkSuffices,
   mkInduction,
   mkCase,
@@ -292,6 +293,16 @@ function parseTactic(lines: Line[], pos: { i: number }, level: number, text: str
     if (branches.length > 0) return mkApply(name, branches, false);
     // The common case: one continuation chain proves the single subgoal.
     return mkApply(name, [continuation(lines, pos, level)]);
+  }
+
+  // let x := expr   |   let x : T := expr
+  //
+  // NAMING an expression, not asserting a fact — "write δ for min(δF, δG)".
+  // Same node shape as a have (name, expr, child), so it rides the existing
+  // walkers; only the keyword and the prose differ.
+  m = text.match(/^let\s+(\S+)\s*(?::\s*(.*?))?\s*:=\s*(.*)$/);
+  if (m) {
+    return mkLet(m[1], (m[3] ?? '').trim(), continuation(lines, pos, level), m[2]?.trim());
   }
 
   // have h : T := by   |   have h := expr   |   have h : T := expr

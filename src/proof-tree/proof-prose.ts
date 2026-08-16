@@ -122,7 +122,7 @@ export type ProseItemKind =
     }
   | { tag: 'hole'; goalLatex?: string; isValueType?: boolean; solved?: boolean; repeatedGoal?: boolean }
   | { tag: 'simp'; lemmas: readonly string[]; stepCount: number; preGoalLatex?: string; goalLatex?: string; error?: string }
-  | { tag: 'have'; name: string; expr: string; typeLatex?: string; proofExprLatex?: string; preGoalLatex?: string; goalLatex?: string; error?: string; hasProofTree?: boolean }
+  | { tag: 'have'; name: string; expr: string; typeLatex?: string; proofExprLatex?: string; preGoalLatex?: string; goalLatex?: string; error?: string; hasProofTree?: boolean; isLet?: boolean }
   | { tag: 'suffices'; name: string; goalLatex?: string; byExprLatex?: string }
   | {
       tag: 'subgoalHeader';
@@ -731,6 +731,7 @@ export function generateProofProse(
         }
         emit(node.id, depth, {
           tag: 'have',
+          ...(node.isLet ? { isLet: true } : {}),
           name: node.name,
           expr: node.expr,
           typeLatex: hypType,
