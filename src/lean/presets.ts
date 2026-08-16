@@ -1129,6 +1129,17 @@ def ltLeTransNe {R : Real} (a b c : Carrier R) (hab : rle a b) (neab : a = b →
 def ltLeTrans {R : Real} (a b c : Carrier R) (hab : rlt a b) (hbc : rle b c) : rlt a c :=
   Pair.mk (ltLeTransLe a b c (Pair.fst hab) hbc) (ltLeTransNe a b c (Pair.fst hab) (Pair.snd hab) hbc)
 
+-- calc chains need Trans instances to link mixed relations — the transitivity
+-- lemmas above are exactly the content, these just register them so a reader
+-- can write  a = b ... _ <= c ... _ < d  as one derivation.
+instance {R : Real} : Trans (α := Carrier R) (β := Carrier R) (γ := Carrier R) rle rle rle where
+  trans h1 h2 := (fieldOf R).leTrans _ _ _ h1 h2
+instance {R : Real} : Trans (α := Carrier R) (β := Carrier R) (γ := Carrier R) rle rlt rlt where
+  trans h1 h2 := leLtTrans _ _ _ h1 h2
+instance {R : Real} : Trans (α := Carrier R) (β := Carrier R) (γ := Carrier R) rlt rle rlt where
+  trans h1 h2 := ltLeTrans _ _ _ h1 h2
+
+
 -- TACTIC-MODE in source (erw).
 def addCancelRightHelper {R : Real} (x c : Carrier R) :
     (radd (radd x c) (rneg c)) = x :=
