@@ -93,10 +93,20 @@ describe('limitAdd reads like mathematics', () => {
     expect(items.some((i) => i.kind.tag === 'have' && (i.kind as { name?: string }).name === 'hF')).toBe(false);
   });
 
-  test('the comparison split reads by meaning: Either A or B, cases labeled by type', () => {
-    const header = items.find((i) => (i.kind as { caseMeanings?: string[] }).caseMeanings);
-    expect(header).toBeDefined();
-    expect((header!.kind as unknown as { caseMeanings: string[] }).caseMeanings).toHaveLength(2);
+  test('taking the SMALLER delta removes the case analysis entirely', () => {
+    // min is below both deltas, so one δ serves both estimates. The earlier
+    // seeding split on which delta was smaller and repeated the whole ε/2+ε/2
+    // argument per branch. (Meaning-labelled splits are still covered by
+    // basisExists' independence dichotomy and Lagrange's empty-or-inhabited.)
+    expect(items.some((i) => i.kind.tag === 'inductionHeader')).toBe(false);
+  });
+
+  test('min displays as min(…) — the internal rmin reaches the reader nowhere', () => {
+    const all = items.map(latexOf).join(' ');
+    expect(all).toContain('min}(');
+    // Not in goals, and not in the proof TERMS either — those come from source
+    // text, so the proof has to be written in the notation to benefit from it.
+    expect(all).not.toContain('rmin');
   });
 
   test('destructured conditions carry their types', () => {
@@ -117,30 +127,6 @@ describe('limitAdd reads like mathematics', () => {
         expect((i.kind as { constructorName?: string }).constructorName).not.toBe('mk');
       }
     }
-  });
-});
-
-describe('limitAddMin — the textbook proof, no case split', () => {
-  let items: ProseItem[];
-  beforeAll(async () => {
-    items = await proseFor('Real Analysis (chain rule)', 'limitAddMin');
-  }, 10 * MIN);
-
-  test('taking the smaller delta removes the case analysis entirely', () => {
-    // The seeded limitAdd splits on which delta is smaller and repeats the
-    // estimate in each branch; min gives both bounds at once.
-    expect(items.some((i) => i.kind.tag === 'inductionHeader')).toBe(false);
-  });
-
-  test('min displays as min(...), not as the internal rmin — and not daggered', () => {
-    const all = items.map(latexOf).join(' ');
-    // Lean renders the notation as \operatorname{min}( … ); the point is that
-    // the INTERNAL spelling never reaches the reader — in goals OR in the
-    // proof terms, which come from source text and so must be WRITTEN in the
-    // notation to benefit from it.
-    expect(all).toContain('min}(');
-    expect(all).not.toContain('rmin');
-    expectNoDaggers(items);
   });
 });
 

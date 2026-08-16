@@ -1715,61 +1715,17 @@ def convertEps {R : Real} (epsilon v : Carrier R)
 
 `;
 
-const REAL_ANALYSIS = RA_TOWER + `-- THE demo exercise: limitAdd, deliberately unfinished.
+const REAL_ANALYSIS = RA_TOWER + `-- THE milestone: lim f + lim g = lim (f + g), the way a textbook writes it.
 --
--- Seeded with the proof as built IN the editor (2026-08): the ε split, a δ from
--- each hypothesis, both witnesses destructured, and — after comparing δF and
--- δG — the full left case: witness δF, positivity, and the ε/2 + ε/2 estimate
--- via subAddSub → absTriangle → convertEps → addLtBoth.
+-- Take δ to be the SMALLER of the two deltas. min is below both, so one δ
+-- serves both estimates and there is nothing to case-split on — compare the
+-- earlier seeding of this proof, which split on which delta was smaller and
+-- then repeated the whole ε/2 + ε/2 argument in each branch.
 --
--- The RIGHT case (δG ≤ δF) is deliberately open: it is the same argument with
--- the roles of f and g swapped, and it is the current exercise. (An
--- alternative closing both at once: witness rmin deltaF deltaG, minPos,
--- minLeLeft/minLeRight — see src/lean/realAnalysisPositivity.e2e.test.ts for
--- the sorry-free ground truth.)
+-- minPos gives 0 < min(δF, δG); minLeLeft/minLeRight carry |x − x₀| < δ down
+-- to each delta; then subAddSub → absTriangle → convertEps → addLtBoth.
+-- limitAddFromScratch below is the blank slate to build it in yourself.
 def limitAdd {R : Real} (f g : Carrier R → Carrier R) (x0 L M : Carrier R)
-    (limF : Limit f x0 L) (limG : Limit g x0 M) :
-    Limit (fun x => radd (f x) (g x)) x0 (radd L M) := by
-  constructor
-  intro ε epsPos
-  have h2 : 0 < ε / 2 := divTwoPos ε epsPos
-  have hF := limF.eps_delta (ε / 2) h2
-  obtain ⟨deltaF, fProof⟩ := hF
-  have hG := limG.eps_delta (ε / 2) h2
-  obtain ⟨deltaG, gProof⟩ := hG
-  obtain ⟨dfPos, fFn⟩ := fProof
-  obtain ⟨dgPos, gFn⟩ := gProof
-  cases leTotal deltaF deltaG with
-  | left a =>
-    constructor
-    case eps_delta.left.fst =>
-      exact deltaF
-    case eps_delta.left.snd =>
-      constructor
-      case fst =>
-        exact dfPos
-      case snd =>
-        intro x h h1
-        have fHalfEps := fFn x h h1
-        have h3 := ltLeTrans |x - x0| deltaF deltaG h1 a
-        have gHalfEps := gFn x h h3
-        apply leLtTrans
-        case b =>
-          exact |f x - L| + |g x - M|
-        case hab =>
-          rw [subAddSub]
-          exact absTriangle (f x - L) (g x - M)
-        case hbc =>
-          apply convertEps
-          exact addLtBoth |f x - L| (ε / 2) |g x - M| (ε / 2) fHalfEps gHalfEps
-  | right a =>
-    sorry
-
--- The SAME theorem, the way a textbook writes it: take δ to be the smaller of
--- the two deltas. min gives both bounds at once, so there is nothing to split
--- on — compare with limitAdd above, which case-splits on which delta is
--- smaller and has to repeat the estimate in each branch.
-def limitAddMin {R : Real} (f g : Carrier R → Carrier R) (x0 L M : Carrier R)
     (limF : Limit f x0 L) (limG : Limit g x0 M) :
     Limit (fun x => radd (f x) (g x)) x0 (radd L M) := by
   constructor
@@ -1806,6 +1762,7 @@ def limitAddMin {R : Real} (f g : Carrier R → Carrier R) (x0 L M : Carrier R)
 
 -- The same exercise with nothing filled in — for building the whole thing from
 -- the first click (and for the tests that check each of those clicks works).
+
 def limitAddFromScratch {R : Real} (f g : Carrier R → Carrier R) (x0 L M : Carrier R)
     (limF : Limit f x0 L) (limG : Limit g x0 M) :
     Limit (fun x => radd (f x) (g x)) x0 (radd L M) := sorry
